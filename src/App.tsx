@@ -90,6 +90,7 @@ import {
   type Run,
   type RunRequest,
   type ChapterCandidate,
+  type WorkflowGraph,
 } from '../shared/types';
 type Page = 'workflow' | 'assets' | 'chapters' | 'platforms' | 'settings';
 type PendingRunSubmission = { key: string; request: RunRequest; requestHash: string };
@@ -1384,30 +1385,19 @@ export default function App() {
                     <div>
                       <span className="panel-dot" />
                       <strong>{project.workflow?.name || '小说创作工作流'}</strong>
-                      <select
-                        className="workflow-switch"
-                        aria-label="切换工作流"
-                        value={project.activeWorkflowId || project.workflows?.[0]?.id || ''}
+                      <WorkflowSwitcher
+                        graphs={project.workflows || []}
+                        activeId={project.activeWorkflowId || project.workflows?.[0]?.id || ''}
                         disabled={running || busy}
-                        onChange={(e) =>
+                        onSelect={(id) =>
                           void task(async () => {
                             acceptProject(
-                              await projectRequest(
-                                `/projects/${project.id}/workflows/${e.target.value}/select`,
-                                { method: 'POST' },
-                                true,
-                              ),
+                              await projectRequest(`/projects/${project.id}/workflows/${id}/select`, { method: 'POST' }, true),
                             );
                             showToast('已切换工作流');
                           })
                         }
-                      >
-                        {(project.workflows || []).map((graph) => (
-                          <option key={graph.id} value={graph.id}>
-                            {graph.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </div>
                     <div className="panel-actions">
                       <button
@@ -2879,6 +2869,71 @@ const themes = [
   ['dark', '深色'],
   ['mtf', '蓝粉白'],
 ] as const;
+function WorkflowSwitcher({
+  graphs,
+  activeId,
+  disabled,
+  onSelect,
+}: {
+  graphs: WorkflowGraph[];
+  activeId: string;
+  disabled: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const active = graphs.find((graph) => graph.id === activeId);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <div className="workflow-switch" ref={rootRef}>
+      <button
+        type="button"
+        aria-label="切换工作流"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{active?.name || '选择工作流'}</span>
+        <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div className="workflow-switch-menu" role="menu">
+          {graphs.map((graph) => (
+            <button
+              key={graph.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={graph.id === activeId}
+              className={graph.id === activeId ? 'active' : ''}
+              onClick={() => {
+                setOpen(false);
+                if (graph.id !== activeId) onSelect(graph.id);
+              }}
+            >
+              <span>{graph.name}</span>
+              <small>{graph.steps.length} 个节点</small>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 function ThemeSwitcher() {
   const [theme, setTheme] = useState<(typeof themes)[number][0]>(() => {
     const saved = localStorage.getItem('novel-theme');

@@ -53,46 +53,61 @@ process.once('exit', releaseDataLock);
 const store = new Store(dir);
 const platformRuntime = new PlatformRuntime(store);
 const runner = new Runner(store);
-const settings: RuntimeSettings = {
-  baseUrl: process.env.MODEL_BASE_URL || 'https://api.openai.com/v1',
-  model: process.env.MODEL_NAME || 'gpt-4.1-mini',
-  apiKey: process.env.MODEL_API_KEY || '',
-  hasKey: !!process.env.MODEL_API_KEY,
-  mode: process.env.MODEL_API_KEY ? 'live' : 'demo',
-  activeModelId: 'default',
-  protocol: normalizeProtocol(process.env.MODEL_PROTOCOL),
-};
 const models = new Map<string, RuntimeSettings>();
 const modelSecrets = new ModelSecretStore(dir);
 const defaultModelId = 'default';
-models.set(defaultModelId, { ...settings, id: defaultModelId, name: '默认模型' });
 const modelsFile = path.join(dir, 'models.json');
-if (fs.existsSync(modelsFile)) {
+const savedModelState = (() => {
+  if (!fs.existsSync(modelsFile)) return { models: [] as RuntimeSettings[], activeModelId: '' };
   try {
-    const saved = JSON.parse(fs.readFileSync(modelsFile, 'utf8')) as RuntimeSettings[];
-    for (const model of saved) {
-      const migrated = { ...model, protocol: normalizeProtocol(model.protocol) };
-      const restoredKey =
-        modelSecrets.get(model.id || defaultModelId) || (model.id === defaultModelId ? settings.apiKey : '');
-      models.set(model.id || defaultModelId, {
-        ...migrated,
-        apiKey: restoredKey,
-        hasKey: !!restoredKey,
-      });
-    }
-    const active = models.get(settings.activeModelId || '') || models.values().next().value;
-    if (active)
-      Object.assign(settings, active, {
-        apiKey: active.apiKey,
-        hasKey: !!active.apiKey,
-        activeModelId: active.id,
-      });
+    const parsed = JSON.parse(fs.readFileSync(modelsFile, 'utf8')) as
+      | RuntimeSettings[]
+      | { models?: RuntimeSettings[]; activeModelId?: string };
+    if (Array.isArray(parsed)) return { models: parsed, activeModelId: '' };
+    return { models: Array.isArray(parsed.models) ? parsed.models : [], activeModelId: parsed.activeModelId || '' };
   } catch {
-    /* Ignore a corrupt optional model catalog and keep the default profile. */
+    return { models: [] as RuntimeSettings[], activeModelId: '' };
   }
+})();
+const savedModels = savedModelState.models;
+const savedDefault = savedModels.find((model) => (model.id || defaultModelId) === defaultModelId);
+const settings: RuntimeSettings = {
+  baseUrl: savedDefault?.baseUrl || process.env.MODEL_BASE_URL || 'https://api.openai.com/v1',
+  model: savedDefault?.model || process.env.MODEL_NAME || 'gpt-4.1-mini',
+  apiKey: '',
+  hasKey: false,
+  mode: savedDefault?.mode || (process.env.MODEL_API_KEY ? 'live' : 'demo'),
+  activeModelId: savedModelState.activeModelId || savedDefault?.id || defaultModelId,
+  protocol: normalizeProtocol(savedDefault?.protocol || process.env.MODEL_PROTOCOL),
+};
+if (!savedModels.length)
+  models.set(defaultModelId, { ...settings, id: defaultModelId, name: '默认模型' });
+for (const model of savedModels) {
+  const id = model.id || defaultModelId;
+  const restoredKey = modelSecrets.get(id) || (id === defaultModelId ? process.env.MODEL_API_KEY || '' : '');
+  models.set(id, {
+    ...model,
+    id,
+    protocol: normalizeProtocol(model.protocol),
+    apiKey: restoredKey,
+    hasKey: !!restoredKey,
+    mode: model.mode || settings.mode,
+  });
+}
+{
+  const active = models.get(settings.activeModelId || '') || models.values().next().value;
+  if (active)
+    Object.assign(settings, active, {
+      apiKey: active.apiKey,
+      hasKey: !!active.apiKey,
+      activeModelId: active.id,
+    });
 }
 const saveModels = () => {
-  const safe = Array.from(models.values()).map(({ apiKey: _apiKey, ...model }) => model);
+  const safe = {
+    activeModelId: settings.activeModelId,
+    models: Array.from(models.values()).map(({ apiKey: _apiKey, ...model }) => model),
+  };
   fs.writeFileSync(modelsFile + '.tmp', JSON.stringify(safe, null, 2));
   fs.renameSync(modelsFile + '.tmp', modelsFile);
 };

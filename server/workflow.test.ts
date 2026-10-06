@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { createProject, starterProject } from './defaults.js';
+import { createProject, createWorldWorkflowGraph, starterProject } from './defaults.js';
 import {
   buildContext,
   buildProtocolRequest,
@@ -16,6 +16,7 @@ import {
   parseProtocolResponse,
   Runner,
   SYSTEM_PROMPT,
+  worldSettingContent,
 } from './engine.js';
 import { Store } from './store.js';
 import type { Project } from '../shared/types.js';
@@ -514,3 +515,26 @@ test(
     }
   },
 );
+
+test('world workflow context excludes chapter drafting and strips review content', () => {
+  const p = starterProject();
+  const world = createWorldWorkflowGraph();
+  p.steps = world.steps;
+  p.workflow = world.workflow;
+  p.chapters = [
+    { id: 'c1', number: 1, revision: 1, title: '正文', content: 'CHAPTER_PROSE', mode: 'demo', updatedAt: '' },
+  ];
+  const draft = world.steps.find((step) => step.kind === 'world')!;
+  const context = buildContext(p, draft.id, {
+    runId: 'world-run',
+    workflowId: world.id,
+    number: 9,
+    mode: 'create',
+    requirements: { instructions: '必须出现审查', requiredText: ['审查'], forbiddenText: [] },
+    graphRevision: 0,
+  });
+  assert.match(context, /独立的世界观编写/);
+  assert.doesNotMatch(context, /当前目标章节|CHAPTER_PROSE|有效创作要求/);
+  const cleaned = worldSettingContent(`# 龙京\n\n地理坐标：夏国。\n\n## 【设定审查与假设标注】\n\n1. 假设正文。\n\n### 第4章\n\n窗外的血月。`);
+  assert.equal(cleaned, '# 龙京\n\n地理坐标：夏国。');
+});
