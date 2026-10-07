@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { Check, Play } from 'lucide-react';
-import type { GenerationMode, Project, Requirements, RunRequest } from '../../shared/types';
+import type { GenerationMode, Project, Requirements, RunRequest, WorkflowRunMode } from '../../shared/types';
 import {
   chapterNumberSchema,
   chapterRequirementsSchema,
@@ -43,6 +43,14 @@ export default function GenerationModal({
     String(entry.stepId ? 1 : project.workflow?.autoGenerate ? project.workflow.chapterCount : 1),
   );
   const [writer, setWriter] = useState(project.workflow?.outputWriterNodeId || '');
+  const [settingTarget, setSettingTarget] = useState<'world' | 'character' | 'plot'>('world');
+  const [settingName, setSettingName] = useState('');
+  const [settingExtra, setSettingExtra] = useState('');
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [workflowMode, setWorkflowMode] = useState<WorkflowRunMode>(
+    project.steps.some((step) => step.kind === 'writer' || step.id === 'draft') ? 'chapter' : 'world',
+  );
+  const [overwrite, setOverwrite] = useState(false);
   const [global, setGlobal] = useState<Requirements>(() =>
     structuredClone(project.requirements || emptyRequirements()),
   );
@@ -73,7 +81,10 @@ export default function GenerationModal({
         : kind === 'single'
           ? { kind, number: Number(number) }
           : { kind, from: Number(number), to: Number(to) },
-    mode: modeRef.current,
+    mode: workflowMode === 'world' ? 'create' : modeRef.current,
+    workflowMode,
+    overwrite,
+    ...(workflowMode === 'world' ? { settingTarget, outputName: settingName.trim(), instructions: settingExtra.trim() } : {}),
     ...(writers.length === 1
       ? { outputWriterNodeId: writers[0].id }
       : writer
@@ -149,6 +160,57 @@ export default function GenerationModal({
       error={error}
       className="generation-modal"
     >
+      <section className="run-controls">
+        <div className="run-mode-menu">
+          <span>运行模式</span>
+          <button type="button" aria-expanded={modeMenuOpen} disabled={locked} onClick={() => setModeMenuOpen((value) => !value)}>
+            {workflowMode === 'world' ? '世界观模式' : '正文模式'}
+          </button>
+          {modeMenuOpen && <div className="workflow-run-modes" role="menu" aria-label="运行模式">
+            {(
+              [
+                ['chapter', '正文模式'],
+                ['world', '世界观模式'],
+              ] as const
+            ).map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={workflowMode === value} disabled={locked} onClick={() => { setWorkflowMode(value); setModeMenuOpen(false); }}>
+                {label}
+              </button>
+            ))}
+          </div>}
+        </div>
+      </section>
+      <div className="run-options">
+        <label className={`overwrite-option${overwrite ? ' checked' : ''}`}>
+          <input type="checkbox" checked={overwrite} disabled={locked} onChange={(event) => setOverwrite(event.target.checked)} />
+          <span>
+            <strong>覆盖原文</strong>
+            <small>{workflowMode === 'world' ? '替换同名设定' : '替换同章正文，并保留旧版本'}</small>
+          </span>
+        </label>
+        {workflowMode === 'world' && (
+          <>
+            <label>
+              名字
+              <input value={settingName} disabled={locked} maxLength={120} placeholder="留空则根据内容生成" onChange={(event) => setSettingName(event.target.value)} />
+            </label>
+            <label>
+              额外信息
+              <textarea value={settingExtra} disabled={locked} maxLength={2000} rows={3} placeholder="补充必须遵守的设定、边界或禁忌" onChange={(event) => setSettingExtra(event.target.value)} />
+            </label>
+          </>
+        )}
+      </div>
+      {workflowMode === 'world' ? (
+        <label>
+          本次目标
+          <select aria-label="本次目标" value={settingTarget} disabled={locked} onChange={(event) => setSettingTarget(event.target.value as typeof settingTarget)}>
+            <option value="world">世界观编写</option>
+            <option value="character">人物编写</option>
+            <option value="plot">剧情编排</option>
+          </select>
+        </label>
+      ) : (
       <div className="generation-target">
         <label>
           本次目标
@@ -165,7 +227,7 @@ export default function GenerationModal({
             </option>
           </select>
         </label>
-        <div className="generation-mode-options" role="radiogroup" aria-label="生成方式">
+        {workflowMode === 'chapter' && <div className="generation-mode-options" role="radiogroup" aria-label="生成方式">
           {(
             [
               ['create', '新建正文'],
@@ -183,7 +245,7 @@ export default function GenerationModal({
               {label}
             </button>
           ))}
-        </div>
+        </div>}
         {kind === 'next' ? (
           <label>
             续写章数
@@ -226,7 +288,8 @@ export default function GenerationModal({
           </label>
         )}
       </div>
-      {writers.length > 1 && (
+      )}
+      {workflowMode === 'chapter' && writers.length > 1 && (
         <label>
           最终正文输出节点
           <select value={writer} disabled={locked} onChange={(event) => setWriter(event.target.value)}>
@@ -240,6 +303,7 @@ export default function GenerationModal({
           <small>只有该节点提交章节，其余正文节点作为中间结果。</small>
         </label>
       )}
+      {workflowMode === 'chapter' && (<>
       <p className="info-note">
         {demo
           ? '演示模式：固定模板，不调用模型，也不保证遵循文学语义。'
@@ -333,6 +397,7 @@ export default function GenerationModal({
           第 {literalConflicts.join('、')} 章的必须出现文本包含禁止文本，请先解决冲突。
         </div>
       )}
+      </>)}
       {message && (
         <p className="info-note" role="status">
           {message}

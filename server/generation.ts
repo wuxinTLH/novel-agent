@@ -119,10 +119,12 @@ export function resolveRequirements(
   const project = validateRequirements(p.requirements || emptyRequirements());
   const chapter = validateRequirements(p.chapterRequirements?.[String(number)] || emptyRequirements());
   // Individual scopes are bounded; their effective union may legitimately contain twice as many items.
+  const wordCount = { ...project.wordCount, ...Object.fromEntries(Object.entries(chapter.wordCount || {}).filter(([, value]) => value !== undefined)) };
   const combined = {
     instructions: [project.instructions, chapter.instructions].filter(Boolean).join('\n\n'),
     requiredText: [...new Set([...project.requiredText, ...chapter.requiredText])],
     forbiddenText: [...new Set([...project.forbiddenText, ...chapter.forbiddenText])],
+    ...(Object.keys(wordCount).length ? { wordCount } : {}),
   };
   for (const required of combined.requiredText) {
     const forbidden = combined.forbiddenText.find((text) => required.includes(text));
@@ -199,11 +201,12 @@ export function prepareRun(
   const mode = parsed.mode || 'create';
   const defaultCount = !parsed.stepId && p.workflow?.autoGenerate ? p.workflow.chapterCount : 1;
   const target = parsed.target || { kind: 'next' as const, count: defaultCount };
-  const highWatermark = Math.max(
-    p.chapterNumberHighWatermark || 0,
-    ...p.chapters.map((chapter) => chapter.number),
-    ...(p.candidates || []).map((candidate) => candidate.number),
-  );
+  const savedNumbers = new Set(p.chapters.map((chapter) => chapter.number));
+  const nextAvailable = () => {
+    let number = 1;
+    while (savedNumbers.has(number)) number += 1;
+    return number;
+  };
   const count =
     target.kind === 'range'
       ? target.to - target.from + 1
@@ -214,15 +217,17 @@ export function prepareRun(
     throw new GenerationError(`每批只能生成 1–${MAX_BATCH_SIZE} 章，请缩小章节范围。`);
   if (parsed.stepId && count !== 1) throw new GenerationError('单节点运行只能指定一章。');
   const start =
-    target.kind === 'single' ? target.number : target.kind === 'range' ? target.from : highWatermark + 1;
+    target.kind === 'single' ? target.number : target.kind === 'range' ? target.from : nextAvailable();
   if (!Number.isSafeInteger(start) || start < 1 || start + count - 1 > MAX_CHAPTER_NUMBER)
     throw new GenerationError('目标章节号超出范围。');
   const numbers = Array.from({ length: count }, (_, index) => start + index);
   const existing = new Map(p.chapters.map((chapter) => [chapter.number, chapter]));
   if (existing.size !== p.chapters.length) throw new GenerationError('作品包含重复章号，请先修复存储数据。');
-  const conflicts = numbers.filter((number) =>
-    mode === 'create' ? existing.has(number) : !existing.has(number),
-  );
+  const conflicts = parsed.workflowMode === 'world'
+    ? []
+    : numbers.filter((number) =>
+        mode === 'create' && !parsed.overwrite ? existing.has(number) : mode === 'regenerate' && !existing.has(number),
+      );
   if (conflicts.length)
     throw new GenerationError(
       mode === 'create'
@@ -252,7 +257,7 @@ export function prepareRun(
   if (!writerId && writers.length === 1) writerId = writers[0].id;
   const writingWorkflow = selected.some(isWriter);
   const resultWithoutWriter = (): PreparedRun => ({
-    request: structuredClone({ ...parsed, workflowId, target, mode }),
+    request: structuredClone({ ...parsed, workflowId, target, mode, workflowMode: parsed.workflowMode || 'chapter', overwrite: !!parsed.overwrite }),
     workflowId,
     mode,
     targets: structuredClone(targets),
@@ -302,6 +307,8 @@ export function prepareRun(
       target,
       mode,
       ...(writerId ? { outputWriterNodeId: writerId } : {}),
+      workflowMode: parsed.workflowMode || 'chapter',
+      overwrite: !!parsed.overwrite,
     }),
     workflowId,
     mode,

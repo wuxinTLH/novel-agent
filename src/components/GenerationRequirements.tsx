@@ -30,6 +30,39 @@ export default function GenerationRequirements({
           语义符合程度由作者确认
         </small>
       </label>
+      <div className="word-count-settings">
+        <strong>章节字数</strong>
+        <div>
+          {(
+            [
+              ['min', '最少'],
+              ['target', '预计'],
+              ['max', '最多'],
+            ] as const
+          ).map(([field, label]) => (
+            <label key={field}>
+              {label}
+              <input
+                type="number"
+                min={1}
+                max={200000}
+                value={value.wordCount?.[field] || ''}
+                placeholder="不限"
+                onChange={(event) =>
+                  onChange({
+                    ...value,
+                    wordCount: {
+                      ...value.wordCount,
+                      [field]: event.target.value ? Number(event.target.value) : undefined,
+                    },
+                  })
+                }
+              />
+            </label>
+          ))}
+        </div>
+        <small>单位为中文字符。预计值应落在最少与最多之间。</small>
+      </div>
       {(['requiredText', 'forbiddenText'] as const).map((field) => (
         <div key={field} className="literal-requirements">
           <div className="literal-heading">

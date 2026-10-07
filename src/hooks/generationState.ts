@@ -20,13 +20,10 @@ export function sortedChapters(chapters: Chapter[]) {
   return [...chapters].sort((a, b) => a.number - b.number || a.id.localeCompare(b.id));
 }
 export function nextChapterNumber(project: Project) {
-  return (
-    Math.max(
-      project.chapterNumberHighWatermark || 0,
-      ...project.chapters.map((chapter) => chapter.number),
-      0,
-    ) + 1
-  );
+  const saved = new Set(project.chapters.map((chapter) => chapter.number));
+  let number = 1;
+  while (saved.has(number)) number += 1;
+  return number;
 }
 const assetSearchCache = new WeakMap<Asset[], Map<string, Asset[]>>();
 export function filterAssets(assets: Asset[], category: Category | 'all', query: string) {

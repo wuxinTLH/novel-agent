@@ -114,13 +114,7 @@ const projectSchema = z
             graphRevision: z.number().int().nonnegative().optional(),
             errorCode: z.string().optional(),
             error: z.string().optional(),
-            requirements: z
-              .object({
-                instructions: z.string(),
-                requiredText: z.array(z.string()),
-                forbiddenText: z.array(z.string()),
-              })
-              .strict(),
+            requirements: requirementsSchema,
           })
           .passthrough(),
       )

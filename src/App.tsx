@@ -1758,6 +1758,11 @@ export default function App() {
                               </button>
                               <pre>{step.output}</pre>
                             </>
+                          ) : step.status === 'error' || step.lastError ? (
+                            <div className="empty-result">
+                              <h4>上次运行失败</h4>
+                              <p>{step.lastError || project.run?.error || '模型没有返回可保存的结果。'}</p>
+                            </div>
                           ) : (
                             <div className="empty-result">
                               {step.status === 'running' ? (

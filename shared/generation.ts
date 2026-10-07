@@ -24,6 +24,15 @@ export const requirementsSchema = z
     instructions: z.string().max(GENERATION_LIMITS.maxInstructionsLength),
     requiredText: z.array(literalSchema).max(GENERATION_LIMITS.maxLiteralItems),
     forbiddenText: z.array(literalSchema).max(GENERATION_LIMITS.maxLiteralItems),
+    wordCount: z
+      .object({
+        min: z.number().int().min(1).max(200000).optional(),
+        max: z.number().int().min(1).max(200000).optional(),
+        target: z.number().int().min(1).max(200000).optional(),
+      })
+      .strict()
+      .refine((value) => value.min === undefined || value.max === undefined || value.min <= value.max, '最少字数不能大于最多字数。')
+      .optional(),
   })
   .strict();
 
@@ -59,6 +68,10 @@ export const runRequestSchema = z
     mode: z.enum(['create', 'regenerate']).optional(),
     outputWriterNodeId: z.string().min(1).max(200).optional(),
     outputName: z.string().trim().max(120).optional(),
+    workflowMode: z.enum(['chapter', 'world']).optional(),
+    overwrite: z.boolean().optional(),
+    settingTarget: z.enum(['world', 'character', 'plot']).optional(),
+    instructions: z.string().trim().max(2000).optional(),
   })
   .strict()
   .refine(
@@ -83,5 +96,5 @@ export const acceptCandidateSchema = z
   .strict();
 
 export function emptyRequirements() {
-  return { instructions: '', requiredText: [] as string[], forbiddenText: [] as string[] };
+  return { instructions: '', requiredText: [] as string[], forbiddenText: [] as string[], wordCount: {} };
 }

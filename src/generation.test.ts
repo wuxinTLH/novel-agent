@@ -200,7 +200,7 @@ test('stable chapter ordering and high-watermark continuation never reuse delete
     p.chapters.map((c) => c.number),
     [5, 2],
   );
-  assert.equal(nextChapterNumber(p), 9);
+  assert.equal(nextChapterNumber(p), 1);
   assert.deepEqual(targetNumbers(p, { target: { kind: 'next', count: 2 } }), [9, 10]);
   assert.deepEqual(targetNumbers(p, { target: { kind: 'single', number: 5 } }), [5]);
   assert.deepEqual(targetNumbers(p, { target: { kind: 'range', from: 3, to: 5 } }), [3, 4, 5]);

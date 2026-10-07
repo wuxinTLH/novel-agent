@@ -54,17 +54,25 @@ export interface Step {
   enabled?: boolean;
   /** Identifies the target/snapshot that produced output; old unscoped output is never reused. */
   generationContext?: StepGenerationContext;
+  /** Preserved diagnostic from the latest failed attempt. */
+  lastError?: string;
 }
 export interface Requirements {
   instructions: string;
   requiredText: string[];
   forbiddenText: string[];
+  wordCount?: {
+    min?: number;
+    max?: number;
+    target?: number;
+  };
 }
 export type GenerationTarget =
   | { kind: 'next'; count?: number }
   | { kind: 'single'; number: number }
   | { kind: 'range'; from: number; to: number };
 export type GenerationMode = 'create' | 'regenerate';
+export type WorkflowRunMode = 'chapter' | 'world';
 export interface RunRequest {
   workflowId?: string;
   stepId?: StepId;
@@ -73,6 +81,12 @@ export interface RunRequest {
   outputWriterNodeId?: string;
   /** Optional world-setting name used when this workflow saves setting assets. */
   outputName?: string;
+  /** chapter saves prose; world saves only setting content. */
+  workflowMode?: WorkflowRunMode;
+  /** Explicitly replace an existing chapter or same-named world asset. */
+  overwrite?: boolean;
+  settingTarget?: 'world' | 'character' | 'plot';
+  instructions?: string;
 }
 export interface StepGenerationContext {
   runId: string;
