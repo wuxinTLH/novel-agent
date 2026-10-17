@@ -52,7 +52,7 @@ export type GraphSnapshot = {
   >[];
   workflow: Pick<
     WorkflowSettings,
-    'name' | 'edges' | 'auditNodeId' | 'chapterCount' | 'autoGenerate' | 'outputWriterNodeId'
+    'name' | 'edges' | 'auditNodeId' | 'chapterCount' | 'autoGenerate' | 'automationMode' | 'publication' | 'outputWriterNodeId'
   >;
 };
 export function graphSnapshot(project: Project): GraphSnapshot {
@@ -78,6 +78,8 @@ export function graphSnapshot(project: Project): GraphSnapshot {
       auditNodeId: project.workflow?.auditNodeId || '',
       chapterCount: project.workflow?.chapterCount || 1,
       autoGenerate: project.workflow?.autoGenerate || false,
+      automationMode: project.workflow?.automationMode || 'manual',
+      publication: project.workflow?.publication,
       outputWriterNodeId: project.workflow?.outputWriterNodeId || '',
     },
   });
@@ -109,7 +111,7 @@ export function targetNumbers(project: Project, request: RunRequest) {
   const target = parsed.data.target || { kind: 'next' as const, count: 1 };
   const first =
     target.kind === 'next'
-      ? nextChapterNumber(project)
+      ? Math.max(nextChapterNumber(project), (project.chapterNumberHighWatermark || 0) + 1)
       : target.kind === 'single'
         ? target.number
         : target.from;

@@ -199,11 +199,15 @@ export function prepareRun(
   )
     throw new GenerationError('系统边界或禁用节点不能单独调用模型。');
   const mode = parsed.mode || 'create';
-  const defaultCount = !parsed.stepId && p.workflow?.autoGenerate ? p.workflow.chapterCount : 1;
+  const defaultCount = !parsed.stepId && (p.workflow?.autoGenerate || p.workflow?.automationMode === 'automatic') ? p.workflow.chapterCount : 1;
   const target = parsed.target || { kind: 'next' as const, count: defaultCount };
   const savedNumbers = new Set(p.chapters.map((chapter) => chapter.number));
   const nextAvailable = () => {
-    let number = 1;
+    let number = Math.max(
+      1,
+      (p.chapterNumberHighWatermark || 0) + 1,
+      ...p.chapters.map((chapter) => chapter.number + 1),
+    );
     while (savedNumbers.has(number)) number += 1;
     return number;
   };
@@ -263,6 +267,18 @@ export function prepareRun(
     targets: structuredClone(targets),
     orderedStepIds: selected.map((step) => step.id),
   });
+  const missingReusableOutputs = selected.filter(
+    (step) =>
+      step.reusePreviousOutput &&
+      !isWriter(step) &&
+      !step.output.trim(),
+  );
+  if (missingReusableOutputs.length)
+    throw new GenerationError(
+      `节点「${missingReusableOutputs.map((step) => step.title).join('、')}」尚无可复用的前次 AI 解析，请先关闭复用并运行节点。`,
+      409,
+      'REUSE_OUTPUT_UNAVAILABLE',
+    );
   if (!writingWorkflow && !selectedStep) return resultWithoutWriter();
   if (!selectedStep) {
     if (!writerId) throw new GenerationError('有多个正文节点，请明确选择一个最终正文输出节点。');
@@ -287,7 +303,7 @@ export function prepareRun(
         dependency.enabled === false ||
         dependency.status !== 'done' ||
         !dependency.output.trim() ||
-        !matchesContext(dependency.generationContext, targetContext, p, mode)
+        (!dependency.reusePreviousOutput && !matchesContext(dependency.generationContext, targetContext, p, mode))
       )
         throw new GenerationError(
           `请先在同一目标章节和要求下运行上游节点「${dependency.title}」，或运行完整工作流。`,
@@ -327,6 +343,30 @@ export function acceptCandidate(
 ): Chapter {
   if (p.run?.status === 'running')
     throw new GenerationError('生成运行中，暂不能采用候选。', 409, 'RUN_CONFLICT');
+  return adoptCandidate(p, id, expectedRevision, acknowledgeReviewFailure);
+}
+
+/** Runner-only adoption: completed review, same running job, and regeneration only. */
+export function automaticallyAcceptCandidate(p: Project, id: string): Chapter {
+  const candidate = p.candidates?.find((item) => item.id === id);
+  if (
+    p.workflow?.automationMode !== 'automatic' ||
+    p.run?.status !== 'running' ||
+    !candidate || candidate.runId !== p.run.id ||
+    candidate.workflowId !== p.activeWorkflowId ||
+    candidate.generationMode !== 'regenerate' ||
+    candidate.recoveryStatus !== 'ready'
+  )
+    throw new GenerationError('自动采用条件不满足，已保留候选且停止运行。', 409, 'AUTO_ADOPTION_UNSAFE');
+  return adoptCandidate(p, id, candidate.baseRevision);
+}
+
+function adoptCandidate(
+  p: Project,
+  id: string,
+  expectedRevision?: number,
+  acknowledgeReviewFailure = false,
+): Chapter {
   const candidate = p.candidates?.find((item) => item.id === id);
   if (!candidate) throw new GenerationError('候选版本不存在。', 404, 'CANDIDATE_NOT_FOUND');
   if (candidate.recoveryStatus === 'pending-review')

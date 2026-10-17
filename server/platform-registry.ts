@@ -18,7 +18,7 @@ export function createPlatformRegistry(store: PlatformStore | undefined, browser
     'tomato',
     '番茄小说',
     true,
-    '第三方本机辅助工具；仅人工登录与显式选章草稿流程，绝不正式发布。真实作者页尚待用户参与核验。',
+    '第三方本机辅助工具；人工登录并显式选择作品后，可保存和删除已核验草稿，不正式发布。页面结构变化时失败关闭。',
     {
       manualLogin: true,
       listWorks: true,
@@ -26,6 +26,7 @@ export function createPlatformRegistry(store: PlatformStore | undefined, browser
       syncWork: browser.readiness === 'ready',
       saveDraft: browser.readiness === 'ready',
       readDraft: browser.readiness === 'ready',
+      deleteDraft: browser.readiness === 'ready',
     },
     browser.readiness,
   );

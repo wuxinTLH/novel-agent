@@ -1,3 +1,6 @@
+import path from 'node:path';
+import { PublicationQueue } from './publication-queue.js';
+import type { PublicationPreview, PublicationBatch, PublicationChapterRemotePlan } from '../shared/publication.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Chapter } from '../shared/types.js';
 import type {
@@ -14,7 +17,7 @@ import type { Store } from './store.js';
 import { PlatformStore, type ConnectionRecord, type DraftOperationRecord } from './platform-store.js';
 import { SecretStore } from './secrets.js';
 import { createPlatformRegistry } from './platform-registry.js';
-import { FanqieBrowser } from './fanqie-browser.js';
+import { FanqieBrowser, fanqieTitlesEquivalent } from './fanqie-browser.js';
 import { ExtensionBridge } from './extension-bridge.js';
 import { literalIssues, resolveRequirements } from './generation.js';
 import {
@@ -61,6 +64,12 @@ export class PlatformRuntime {
   private tasks = new Set<Promise<void>>();
   private loginStarting = false;
   private closing = false;
+  private publicationQueue?: PublicationQueue;
+
+  get publications() {
+    if (!this.publicationQueue) throw new PlatformError(503, 'PUBLICATION_STORAGE_UNAVAILABLE', '发布队列存储不可用。');
+    return this.publicationQueue;
+  }
 
   constructor(
     readonly store: Store,
@@ -71,6 +80,12 @@ export class PlatformRuntime {
       // Validate encryption before doing any platform migration; wrong keys preserve both files.
       this.secretStore = new SecretStore(store.dir);
       this.platformStore = new PlatformStore(store.dir);
+      this.publicationQueue = new PublicationQueue(path.join(store.dir, 'publication-queue.json'), {
+        validate: (preview, items) => this.validatePublication(preview, items),
+        acquire: async (preview) => this.acquire(preview.target.projectId, this.connection(preview.target.projectId, preview.target.connectionId)),
+        execute: (preview, item, context) => this.runPublicationItem(preview, item, context),
+        reconcile: (preview, item) => this.reconcilePublicationItem(preview, item),
+      });
     } catch {
       this.unavailableReason =
         '平台存储或密钥不可用，请检查 PLATFORM_SECRETS_KEY 与数据文件；原文件不会被覆盖。写作功能仍可使用。';
@@ -241,6 +256,21 @@ export class PlatformRuntime {
     if (this.browser.readiness !== 'ready')
       throw new PlatformError(503, 'PLATFORM_DOM_VERIFICATION_REQUIRED', this.browser.reason);
   }
+  /** Save browser-managed cookie/localStorage rotation, never fabricate a refresh-token flow. */
+  async persistBrowserSession(record: ConnectionRecord) {
+    if (record.providerId !== 'tomato' || !this.browser.sessionState) return;
+    const current = this.platforms.connection(record.projectId, record.id);
+    // An old operation must never overwrite a replacement login or revive an expired identity.
+    if (!current || current.needsReauth || current.accountId !== record.accountId ||
+        current.credentialRef !== record.credentialRef) return;
+    const state = await this.browser.sessionState(record.id);
+    if (!state) return;
+    if (!Array.isArray(state.cookies) || !Array.isArray(state.origins))
+      throw new PlatformError(502, 'PLATFORM_SESSION_INVALID', '浏览器会话快照无效，原凭据未修改。');
+    const serialized = JSON.stringify({ version: 1, state });
+    if (serialized !== this.secrets.get(current.credentialRef))
+      this.secrets.set(current.credentialRef, serialized);
+  }
   private async verify(record: ConnectionRecord, state: BrowserSessionState) {
     try {
       const account = await this.browser.verifyAccount(record.id, state);
@@ -250,6 +280,7 @@ export class PlatformRuntime {
           'PLATFORM_ACCOUNT_MISMATCH',
           '浏览器账号与绑定账号不同。请关闭窗口，以原账号重新登录；若需更换账号，请新建连接并显式重新绑定。',
         );
+      await this.persistBrowserSession(record);
     } catch (error) {
       if (
         error instanceof PlatformError &&
@@ -276,6 +307,7 @@ export class PlatformRuntime {
         'PLATFORM_DOM_MISMATCH',
         '作品页身份或条目不唯一，请停止操作并重新核验页面。',
       );
+    await this.persistBrowserSession(record);
     return works;
   }
   async work(record: ConnectionRecord, workId: string) {
@@ -405,7 +437,7 @@ export class PlatformRuntime {
           projectId,
           providerId: 'tomato',
           ...result.account,
-          capabilities: { paired: true, accountVerified: true, listWorks: true, saveDraft: false },
+          capabilities: { paired: true, accountVerified: true, listWorks: true, saveDraft: true },
           createdAt: previous?.createdAt ?? now(),
           lastCheckedAt: now(),
           authKind: 'manual_browser',
@@ -420,7 +452,11 @@ export class PlatformRuntime {
           this.secrets.delete(record.credentialRef);
           throw error;
         }
-        if (previous) this.secrets.delete(previous.credentialRef);
+        if (previous) {
+          // The old context contains the previous cookies; never reuse it after a successful relogin.
+          await this.browser.closeConnection(previous.id);
+          this.secrets.delete(previous.credentialRef);
+        }
         this.logins.set(loginId, { ...login, status: 'completed', message: '账号身份已核验，会话已保存。' });
         clearTimeout(this.loginTimers.get(loginId));
         this.loginTimers.delete(loginId);
@@ -485,6 +521,221 @@ export class PlatformRuntime {
       contentHash: draftHash(chapter.title, chapter.content),
     };
   }
+  async publicationVolumes(projectId: string, linkId: string) {
+    this.assertWritable(projectId);
+    const link = this.platforms.links(projectId).find(item => item.id === linkId);
+    if (!link) throw new PlatformError(404, 'PLATFORM_LINK_NOT_FOUND', '请选择已绑定作品。');
+    const record = this.connection(projectId, link.connectionId);
+    if (!this.browser.listVolumes) return [];
+    return this.withLock(projectId, record, async () => {
+      await this.work(record, link.remoteWorkId);
+      return this.browser.listVolumes!(record.id, this.state(record), link.remoteWorkId);
+    });
+  }
+  private remoteFingerprint(actual: VerifiedDraft) {
+    return businessHash([actual.id, actual.accountId, actual.workId, actual.volumeId ?? null,
+      actual.publishStatus ?? null, actual.title, actual.content, actual.paragraphs]);
+  }
+  private publicationMatches(snapshot: DraftSnapshot, actual: VerifiedDraft) {
+    return fanqieTitlesEquivalent(actual.title, snapshot.title) && actual.content === snapshot.content &&
+      JSON.stringify(actual.paragraphs) === JSON.stringify(snapshot.paragraphs);
+  }
+  private assertRemoteDraft(actual: VerifiedDraft, accountId: string, workId: string, draftId: string, volumeId: string) {
+    if (actual.id !== draftId || actual.accountId !== accountId || actual.workId !== workId || actual.volumeId !== volumeId)
+      throw new PlatformError(409, 'PUBLICATION_REMOTE_CHANGED', '目标草稿账号、作品、分卷或身份已改变，请重新预览。');
+    if (actual.publishStatus !== 0)
+      throw new PlatformError(409, 'PUBLICATION_REMOTE_NOT_DRAFT', '同章已发布、审核中或状态不明；不支持通过草稿保存覆盖，请在番茄作者后台处理。');
+  }
+  private async publicationPlan(record: ConnectionRecord, workId: string, chapters: DraftSnapshot[], requestedVolumeId?: string): Promise<PublicationChapterRemotePlan[]> {
+    const state = this.state(record);
+    const volumes = await this.browser.listVolumes!(record.id, state, workId);
+    const remote = await this.browser.listChapters!(record.id, state, workId);
+    const known = chapters.map(snapshot => {
+      const queued = this.queuedPublications(record.accountId, workId, snapshot.chapterId).at(-1);
+      const prior = this.priorDraft(record.accountId, workId, snapshot.chapterId).at(-1);
+      if (queued && !(queued.item.state === 'failed' && !queued.item.mutationStarted)) {
+        if (queued.item.state !== 'draft_verified' || !queued.item.remoteDraftId)
+          throw new PlatformError(409, 'PLATFORM_OPERATION_UNKNOWN', '章节有未完成、未知或已提交记录；请到番茄作者后台核对，不会自动重发。');
+        return { id: queued.item.remoteDraftId, predecessor: { source: 'publication' as const, operationId: queued.item.id } };
+      }
+      if (prior) {
+        if (prior.state !== 'verified' || !prior.remoteDraftId)
+          throw new PlatformError(409, 'PLATFORM_OPERATION_UNKNOWN', '历史草稿结果未知。请检查番茄所有分卷（包括空白草稿），取得准确草稿 ID 后只读核对；不会盲目重发。');
+        return { id: prior.remoteDraftId, predecessor: { source: 'draft' as const, operationId: prior.id } };
+      }
+      return undefined;
+    });
+    const knownVolumes = new Set(known.filter(Boolean).map(value => remote.find(chapter => chapter.id === value!.id)?.volumeId).filter((id): id is string => !!id));
+    const volumeId = requestedVolumeId ?? (volumes.length === 1 ? volumes[0].id : knownVolumes.size === 1 && known.every(Boolean) ? [...knownVolumes][0] : undefined);
+    const volume = volumes.find(item => item.id === volumeId);
+    if (!volume) throw new PlatformError(409, 'PUBLICATION_VOLUME_REQUIRED', '请选择有效目标分卷；多个分卷不能自动猜测。');
+    return Promise.all(chapters.map(async (snapshot, index) => {
+      const previous = known[index];
+      const matches = previous ? remote.filter(item => item.id === previous.id) : remote.filter(item =>
+        item.volumeId === volume.id && Number(/^第\s*(\d+)\s*章/u.exec(item.title)?.[1]) === snapshot.number);
+      if (matches.length > 1) throw new PlatformError(409, 'PUBLICATION_REMOTE_CONFLICT', '同一分卷存在多个同章目标，请在番茄后台消除歧义。');
+      if (!matches.length) {
+        if (previous) throw new PlatformError(409, 'PUBLICATION_REMOTE_CHANGED', '已知草稿 ID 不在完整列表中，不会按标题另找或新建。');
+        return { chapterId: snapshot.chapterId, volumeId: volume.id, volumeName: volume.name, mode: 'create' as const };
+      }
+      const chapter = matches[0];
+      if (chapter.volumeId !== volume.id || chapter.kind !== 'draft' || chapter.status !== 0)
+        throw new PlatformError(409, 'PUBLICATION_REMOTE_NOT_DRAFT', '同章不在所选分卷、已发布或审核中，不支持通过草稿保存覆盖。');
+      const actual = await this.browser.readDraft(record.id, state, workId, chapter.id);
+      this.assertRemoteDraft(actual, record.accountId, workId, chapter.id, volume.id);
+      return { chapterId: snapshot.chapterId, volumeId: volume.id, volumeName: volume.name,
+        mode: this.publicationMatches(snapshot, actual) ? 'reuse' as const : 'overwrite' as const,
+        remoteDraftId: chapter.id, expectedRemoteFingerprint: this.remoteFingerprint(actual),
+        ...(previous ? { predecessor: previous.predecessor } : {}) };
+    }));
+  }
+  async preparePublication(projectId: string, linkId: string, chapterIds: string[], action: 'save_draft' | 'submit_review', useAi?: 1 | 2, volumeId?: string, autoApprove = false) {
+    this.assertWritable(projectId);
+    if (!chapterIds.length || chapterIds.length > 50 || new Set(chapterIds).size !== chapterIds.length)
+      throw new PlatformError(400, 'PUBLICATION_CHAPTERS_INVALID', '请选择 1–50 个不重复的已保存章节。');
+    const link = this.platforms.links(projectId).find((item) => item.id === linkId);
+    if (!link) throw new PlatformError(404, 'PLATFORM_LINK_NOT_FOUND', '请选择已绑定作品。');
+    const record = this.connection(projectId, link.connectionId);
+    if (record.providerId !== 'tomato') throw new PlatformError(400, 'PUBLICATION_PROVIDER_INVALID', '批量上传仅支持真实番茄作品。');
+    if (action === 'submit_review' && !this.browser.submitReview)
+      throw new PlatformError(501, 'PUBLICATION_REVIEW_UNVERIFIED', '当前番茄提交审核流程尚未核验；可先保存草稿。');
+    const batch = await this.withLock(projectId, record, async () => {
+      const work = await this.work(record, link.remoteWorkId);
+      const chapters = chapterIds.map((id) => this.snapshot(projectId, id)).sort((a, b) => a.number - b.number);
+      const remotePlan = this.browser.listVolumes && this.browser.listChapters ? await this.publicationPlan(record, work.id, chapters, volumeId) : undefined;
+      const preview = this.publications.preview({
+        target: { projectId, connectionId: record.id, providerId: record.providerId, accountId: record.accountId,
+          accountName: record.accountName, linkId, remoteWorkId: work.id, workTitle: work.title, workRevision: work.revision },
+        action, chapters, useAi, autoApprove, ...(remotePlan ? { remotePlan } : {}),
+      });
+      return preview;
+    });
+    if (!autoApprove) return batch;
+    this.publications.approve(batch.id, batch.preview.hash, { mode: 'automatic', source: 'prepare' });
+    return this.publications.start(batch.id, { approvalHash: batch.preview.hash, requestId: `auto-prepare:${batch.id}` });
+  }
+  async reconcilePublication(projectId: string, batchId: string) {
+    this.assertWritable(projectId);
+    if (this.publications.get(batchId).preview.target.projectId !== projectId)
+      throw new PlatformError(404, 'PUBLICATION_NOT_FOUND', '发布队列不存在。');
+    return this.publications.reconcile(batchId);
+  }
+  private async reconcilePublicationItem(preview: PublicationPreview, item: PublicationBatch['items'][number]) {
+    const { target } = preview;
+    this.assertWritable(target.projectId);
+    const record = this.connection(target.projectId, target.connectionId);
+    const link = this.platforms.links(target.projectId).find(value => value.id === target.linkId);
+    if (!link || link.connectionId !== record.id || link.providerId !== target.providerId || record.providerId !== target.providerId ||
+      record.accountId !== target.accountId || record.accountName !== target.accountName || link.accountId !== target.accountId || link.remoteWorkId !== target.remoteWorkId)
+      throw new PlatformError(409, 'PLATFORM_BINDING_CHANGED', '核对目标账号或作品绑定已改变。');
+    const state = this.state(record);
+    await this.verify(record, state);
+    const work = await this.work(record, target.remoteWorkId);
+    if (work.title !== target.workTitle || work.revision !== target.workRevision) return undefined;
+    const plan = preview.remotePlan?.find(value => value.chapterId === item.snapshot.chapterId);
+    const draftId = item.remoteDraftId ?? (plan && plan.mode !== 'create' ? plan.remoteDraftId : undefined);
+    if (!draftId || (plan && plan.mode !== 'create' && plan.remoteDraftId !== draftId)) return undefined;
+    if (plan) {
+      if (!this.browser.listVolumes) return undefined;
+      const volumes = await this.browser.listVolumes(record.id, state, target.remoteWorkId);
+      if (!volumes.some(value => value.id === plan.volumeId && value.name === plan.volumeName)) return undefined;
+    }
+    const actual = await this.browser.readDraft(record.id, state, target.remoteWorkId, draftId);
+    if (actual.id !== draftId || actual.accountId !== target.accountId || actual.workId !== target.remoteWorkId ||
+      (plan && actual.volumeId !== plan.volumeId) || !this.publicationMatches(item.snapshot, actual)) return undefined;
+    if (preview.action === 'submit_review') {
+      if (!this.browser.verifyReviewReceipt || !await this.browser.verifyReviewReceipt(record.id, state, target.accountId, target.remoteWorkId, draftId, item.snapshot)) return undefined;
+      return { state: 'submitted' as const, remoteDraftId: draftId, remoteFingerprint: this.remoteFingerprint(actual) };
+    }
+    if (actual.publishStatus !== 0) return undefined;
+    return { state: 'draft_verified' as const, remoteDraftId: draftId, remoteFingerprint: this.remoteFingerprint(actual) };
+  }
+  private async validatePublication(preview: PublicationPreview, items?: readonly PublicationBatch['items'][number][]) {
+    const target = preview.target;
+    this.assertWritable(target.projectId);
+    const record = this.connection(target.projectId, target.connectionId);
+    const link = this.platforms.links(target.projectId).find((item) => item.id === target.linkId);
+    if (!link || link.connectionId !== target.connectionId || link.providerId !== target.providerId || record.providerId !== target.providerId || record.accountName !== target.accountName || record.accountId !== target.accountId || link.accountId !== target.accountId || link.remoteWorkId !== target.remoteWorkId)
+      throw new PlatformError(409, 'PLATFORM_BINDING_CHANGED', '批量预览后的账号或作品绑定已改变。');
+    for (const snapshot of preview.chapters) {
+      if (items?.some(item => item.snapshot.chapterId === snapshot.chapterId && ['draft_verified', 'submitted'].includes(item.state))) continue;
+      const current = this.snapshot(target.projectId, snapshot.chapterId);
+      if (current.revision !== snapshot.revision || current.contentHash !== snapshot.contentHash || current.number !== snapshot.number)
+        throw new PlatformError(409, 'PLATFORM_PREVIEW_CHANGED', '批准的章节已变化，请重新预览。');
+      const plan = preview.remotePlan?.find(item => item.chapterId === snapshot.chapterId);
+      if (plan) {
+        if (!this.browser.listVolumes || !this.browser.listChapters) throw new PlatformError(409, 'PUBLICATION_ADAPTER_CHANGED', '分卷读取能力不可用，请重新预览。');
+        const state = this.state(record);
+        const volumes = await this.browser.listVolumes(record.id, state, target.remoteWorkId);
+        if (!volumes.some(volume => volume.id === plan.volumeId && volume.name === plan.volumeName))
+          throw new PlatformError(409, 'PUBLICATION_REMOTE_CHANGED', '批准的分卷已改变，请重新预览。');
+        if (plan.mode === 'create') {
+          const remote = await this.browser.listChapters(record.id, state, target.remoteWorkId, plan.volumeId);
+          if (remote.some(chapter => chapter.volumeId === plan.volumeId && Number(/^第\s*(\d+)\s*章/u.exec(chapter.title)?.[1]) === snapshot.number))
+            throw new PlatformError(409, 'PUBLICATION_REMOTE_CHANGED', '预览后出现同章目标，请重新预览。');
+        } else {
+          const actual = await this.browser.readDraft(record.id, state, target.remoteWorkId, plan.remoteDraftId);
+          this.assertRemoteDraft(actual, target.accountId, target.remoteWorkId, plan.remoteDraftId, plan.volumeId);
+          if (this.remoteFingerprint(actual) !== plan.expectedRemoteFingerprint)
+            throw new PlatformError(409, 'PUBLICATION_REMOTE_CHANGED', '目标草稿在预览后已变化，未覆盖；请重新预览。');
+        }
+      } else {
+        const prior = this.priorDraft(target.accountId, target.remoteWorkId, snapshot.chapterId);
+        if (prior.some((operation) => operation.state !== 'verified' || operation.contentHash !== snapshot.contentHash || operation.revision !== snapshot.revision))
+          throw new PlatformError(409, 'PLATFORM_DRAFT_UPDATE_BLOCKED', '章节存在不同版本或结果未知的草稿，请先核对。');
+      }
+    }
+    const work = await this.work(record, target.remoteWorkId);
+    if (work.title !== target.workTitle || work.revision !== target.workRevision)
+      throw new PlatformError(409, 'PLATFORM_PREVIEW_CHANGED', '远端作品资料已变化，请重新预览。');
+  }
+  private async runPublicationItem(preview: PublicationPreview, item: PublicationBatch['items'][number], context: {
+    beforeMutation(): void; identified(remoteDraftId: string): void;
+  }) {
+    const { target } = preview;
+    const record = this.connection(target.projectId, target.connectionId);
+    const state = this.state(record);
+    await this.verify(record, state);
+    const plan = preview.remotePlan?.find(value => value.chapterId === item.snapshot.chapterId);
+    let draftId: string | undefined;
+    if (plan && plan.mode !== 'create') {
+      draftId = plan.remoteDraftId;
+      const baseline = await this.browser.readDraft(record.id, state, target.remoteWorkId, draftId);
+      this.assertRemoteDraft(baseline, target.accountId, target.remoteWorkId, draftId, plan.volumeId);
+      if (this.remoteFingerprint(baseline) !== plan.expectedRemoteFingerprint)
+        throw new PlatformError(409, 'PUBLICATION_REMOTE_CHANGED', '执行前目标草稿已变化，未覆盖；请重新预览。');
+      if (plan.mode === 'overwrite' && !this.browser.overwriteDraft)
+        throw new PlatformError(501, 'PUBLICATION_OVERWRITE_UNVERIFIED', '草稿覆盖能力尚未核验，未执行任何写入。');
+      context.beforeMutation();
+      context.identified(draftId);
+      if (plan.mode === 'overwrite') await this.browser.overwriteDraft!(record.id, state, target.accountId, target.remoteWorkId, draftId, item.snapshot, plan.volumeId);
+    } else {
+      if (!plan) {
+        const prior = this.priorDraft(target.accountId, target.remoteWorkId, item.snapshot.chapterId);
+        draftId = this.publications.findVerifiedDraft(preview, item.snapshot)?.remoteDraftId ?? prior.find(operation => operation.state === 'verified' && operation.contentHash === item.snapshot.contentHash)?.remoteDraftId;
+      }
+      context.beforeMutation();
+      if (!draftId) {
+        const result = await this.browser.createDraft(record.id, state, target.accountId, target.remoteWorkId, item.snapshot, context.identified, plan?.volumeId);
+        draftId = result.draftId;
+      }
+      context.identified(draftId);
+    }
+    const actual = await this.browser.readDraft(record.id, state, target.remoteWorkId, draftId);
+    if (plan) this.assertRemoteDraft(actual, target.accountId, target.remoteWorkId, draftId, plan.volumeId);
+    if (actual.accountId !== target.accountId || actual.workId !== target.remoteWorkId || actual.id !== draftId || !this.publicationMatches(item.snapshot, actual))
+      throw new PlatformError(409, 'PLATFORM_DRAFT_VERIFICATION_FAILED', '远端草稿与批准标题、正文或段落不一致，队列停止。');
+    const remoteFingerprint = this.remoteFingerprint(actual);
+    await this.persistBrowserSession(record);
+    if (preview.action === 'submit_review') {
+      if (!this.browser.submitReview) throw new PlatformError(501, 'PUBLICATION_REVIEW_UNVERIFIED', '提交审核能力尚未核验。');
+      context.beforeMutation();
+      await this.browser.submitReview(record.id, state, target.accountId, target.remoteWorkId, draftId, item.snapshot, preview.useAi);
+      await this.persistBrowserSession(record);
+      return { state: 'submitted' as const, remoteDraftId: draftId, remoteFingerprint };
+    }
+    return { state: 'draft_verified' as const, remoteDraftId: draftId, remoteFingerprint };
+  }
   chapterChoices(projectId: string) {
     return (this.store.get(projectId)?.chapters ?? []).map((chapter: Chapter) => ({
       id: chapter.id,
@@ -495,6 +746,10 @@ export class PlatformRuntime {
       contentHash: draftHash(chapter.title, chapter.content),
     }));
   }
+  private queuedPublications(accountId: string, workId: string, chapterId: string) {
+    return this.publications.list().filter((batch) => batch.approvalHash && batch.preview.target.accountId === accountId && batch.preview.target.remoteWorkId === workId)
+      .flatMap((batch) => batch.items.filter((item) => item.snapshot.chapterId === chapterId).map((item) => ({ batch, item })));
+  }
   private priorDraft(accountId: string, workId: string, chapterId: string) {
     return this.platforms
       .draftOperations()
@@ -504,6 +759,7 @@ export class PlatformRuntime {
           operation.accountId === accountId &&
           operation.remoteWorkId === workId &&
           operation.chapterId === chapterId &&
+          operation.state !== 'deleted' &&
           (operation.mutationStarted ||
             ['queued', 'running', 'unknown', 'verified'].includes(operation.state)),
       );
@@ -587,6 +843,7 @@ export class PlatformRuntime {
       replay ??
       [...operations].reverse().find(
         (operation) =>
+          operation.state !== 'deleted' &&
           operation.businessKey === businessKey &&
           // A known pre-write failure may be retried only through a freshly approved preview.
           !(
@@ -622,7 +879,7 @@ export class PlatformRuntime {
       record.accountId !== preparation.accountId
     )
       throw new PlatformError(409, 'PLATFORM_BINDING_CHANGED', '账号或作品绑定已改变，请重新选择。');
-    if (this.priorDraft(record.accountId, preparation.remoteWorkId, current.chapterId).length)
+    if (this.priorDraft(record.accountId, preparation.remoteWorkId, current.chapterId).length || this.queuedPublications(record.accountId, preparation.remoteWorkId, current.chapterId).length)
       throw new PlatformError(
         409,
         'PLATFORM_DRAFT_UPDATE_BLOCKED',
@@ -759,6 +1016,47 @@ export class PlatformRuntime {
     };
     this.platforms.verifyDraft(operation, receipt);
   }
+  async deleteDraft(projectId: string, operationId: string) {
+    this.assertWritable(projectId);
+    this.requireBrowser();
+    const operation = this.platforms.draftOperation(projectId, operationId);
+    if (!operation) throw new PlatformError(404, 'PLATFORM_OPERATION_NOT_FOUND', '草稿操作不存在。');
+    if (this.queuedPublications(operation.accountId, operation.remoteWorkId, operation.chapterId).length)
+      throw new PlatformError(409, 'PUBLICATION_PENDING', '该章节已有发布队列记录，不能通过旧草稿入口删除；请在番茄后台核对当前状态。');
+    if (operation.state === 'deleted') return publicOperation(operation);
+    if (operation.state !== 'verified' || !operation.remoteDraftId)
+      throw new PlatformError(409, 'PLATFORM_DRAFT_DELETE_INVALID', '只有已核实且有稳定远端 ID 的草稿才能删除。');
+    const record = this.connection(projectId, operation.connectionId);
+    return this.withLock(projectId, record, async () => {
+      const state = this.state(record);
+      await this.verify(record, state);
+      await this.work(record, operation.remoteWorkId);
+      const actual = await this.browser.readDraft(record.id, state, operation.remoteWorkId, operation.remoteDraftId!);
+      if (!this.matches(operation, actual))
+        throw new PlatformError(
+          409,
+          'PLATFORM_DRAFT_VERIFICATION_FAILED',
+          '删除前回读的草稿与已核实版本不一致，未执行删除。',
+        );
+      try {
+        await this.browser.deleteDraft(record.id, state, operation.remoteWorkId, operation.remoteDraftId!);
+      } catch (error) {
+        operation.state = 'unknown';
+        operation.errorCode = error instanceof PlatformError ? error.code : 'PLATFORM_DRAFT_DELETE_UNKNOWN';
+        operation.error = error instanceof PlatformError ? error.message : '删除请求结果未知，请先到作者页核对。';
+        operation.updatedAt = now();
+        this.platforms.putDraftOperation(operation);
+        throw error;
+      }
+      operation.state = 'deleted';
+      operation.updatedAt = now();
+      delete operation.error;
+      delete operation.errorCode;
+      this.platforms.putDraftOperation(operation);
+      this.platforms.removeDraftReceipt(operation.id);
+      return publicOperation(operation);
+    });
+  }
   async reconcile(projectId: string, operationId: string) {
     const operation = this.platforms.draftOperation(projectId, operationId);
     if (!operation) throw new PlatformError(404, 'PLATFORM_OPERATION_NOT_FOUND', '草稿操作不存在。');
@@ -800,6 +1098,7 @@ export class PlatformRuntime {
     });
   }
   async removeConnection(projectId: string, connectionId: string) {
+    this.assertPublicationRemovable(projectId, connectionId);
     const record = this.connection(projectId, connectionId);
     this.assertProjectIdle(projectId);
     if (this.platforms.links(projectId).some((link) => link.connectionId === connectionId))
@@ -828,8 +1127,14 @@ export class PlatformRuntime {
       this.secrets.delete(record.credentialRef);
     });
   }
+  assertPublicationRemovable(projectId: string, connectionId?: string, workId?: string) {
+    if (this.publications.list(projectId).some((batch) => (!connectionId || batch.preview.target.connectionId === connectionId) && (!workId || batch.preview.target.remoteWorkId === workId) &&
+      (['queued', 'running', 'paused', 'unknown'].includes(batch.state) || batch.items.some((item) => item.state === 'unknown'))))
+      throw new PlatformError(409, 'PUBLICATION_PENDING', '存在未完成或结果未知的发布队列，禁止删除恢复所需的项目或连接。');
+  }
   async removeProject(projectId: string) {
     if (!this.platformStore) return;
+    this.assertPublicationRemovable(projectId);
     this.assertProjectIdle(projectId);
     if (
       this.platforms
@@ -852,13 +1157,17 @@ export class PlatformRuntime {
   }
   async waitForIdle() {
     await Promise.all([...this.tasks]);
+    await this.publicationQueue?.waitForIdle();
   }
   async close() {
     this.closing = true;
+    for (const batch of this.publicationQueue?.list() ?? []) {
+      if (['queued', 'running'].includes(batch.state)) this.publicationQueue!.pause(batch.id);
+    }
     for (const timer of this.loginTimers.values()) clearTimeout(timer);
     this.loginTimers.clear();
-    await this.browser.close();
     await this.waitForIdle();
+    await this.browser.close();
     this.secretStore?.clearMemory();
     this.logins.clear();
   }

@@ -6,6 +6,26 @@ export const categoryLabels: Record<Category, string> = {
   plot: '剧情走向',
   chapters: '章节设定',
 };
+export const DEFAULT_CHARACTER_TEMPLATE = `# 简述
+
+姓名:
+性别:
+年龄:
+职业:
+
+## 属性
+
+力量:
+精力:
+san值:
+
+## 经历
+
+>
+
+## 特性
+
+## 事件`;
 export const stepIds = ['lore', 'outline', 'plan', 'draft', 'review'] as const;
 export type BuiltinStepId = (typeof stepIds)[number];
 export const SYSTEM_START_NODE_ID = 'system-start';
@@ -56,6 +76,13 @@ export interface Step {
   generationContext?: StepGenerationContext;
   /** Preserved diagnostic from the latest failed attempt. */
   lastError?: string;
+  reusePreviousOutput?: boolean;
+  characterName?: string;
+  characterGender?: string;
+  characterPersonality?: string;
+  characterExperience?: string;
+  characterCount?: number;
+  characterTemplate?: string;
 }
 export interface Requirements {
   instructions: string;
@@ -87,6 +114,14 @@ export interface RunRequest {
   overwrite?: boolean;
   settingTarget?: 'world' | 'character' | 'plot';
   instructions?: string;
+  characterCount?: number;
+  characterProfile?: {
+    name?: string;
+    gender?: string;
+    personality?: string;
+    experience?: string;
+    template?: string;
+  };
 }
 export interface StepGenerationContext {
   runId: string;
@@ -100,6 +135,9 @@ export interface StepGenerationContext {
   outputWriterNodeId?: string;
   /** Optional name for a world-setting workflow result. Empty derives from content. */
   outputName?: string;
+  characterCount?: number;
+  characterProfile?: RunRequest['characterProfile'];
+  characterIndex?: number;
 }
 export interface WorkflowEdge {
   id: string;
@@ -116,6 +154,16 @@ export interface WorkflowSettings {
   auditNodeId?: StepId;
   chapterCount: number;
   autoGenerate: boolean;
+  /** Automatic execution adopts validated, completed regeneration at the original revision. */
+  automationMode?: 'manual' | 'automatic';
+  /** Explicit opt-in publication binding; never inferred from a connected account. */
+  publication?: {
+    enabled: boolean;
+    linkId: string;
+    volumeId?: string;
+    action: 'save_draft' | 'submit_review';
+    useAi?: 1 | 2;
+  };
   /** Legacy only. Always disabled; generation never writes to a platform. */
   autoPublish?: boolean;
   graphRevision?: number;
@@ -151,6 +199,10 @@ export interface Chapter {
   outputWriterNodeId?: string;
   requirements?: Requirements;
   revisions?: ChapterRevision[];
+  /** Durable identity of the JSON request that manually added this chapter. */
+  manualRequestId?: string;
+  /** Hash of the original payload, retained even after later chapter edits. */
+  manualRequestHash?: string;
   /** Archived legacy simulation marker; never evidence of real publication. */
   legacyPublishedAt?: string;
 }
@@ -213,12 +265,18 @@ export interface Run {
   generatedChapterIds?: string[];
   candidateIds?: string[];
   semanticStatus?: 'pending-author';
+  publication?: {
+    state: 'pending' | 'queued' | 'failed';
+    batchId?: string;
+    error?: string;
+  };
 }
 export interface Project {
   id: string;
   title: string;
   genre: string;
   description: string;
+  coverUrl?: string;
   createdAt: string;
   updatedAt: string;
   assets: Asset[];

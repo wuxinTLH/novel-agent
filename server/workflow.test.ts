@@ -8,7 +8,12 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { createProject, createWorldWorkflowGraph, starterProject } from './defaults.js';
+import {
+  createCharacterWorkflowGraph,
+  createProject,
+  createWorldWorkflowGraph,
+  starterProject,
+} from './defaults.js';
 import {
   buildContext,
   buildProtocolRequest,
@@ -522,7 +527,15 @@ test('world workflow context excludes chapter drafting and strips review content
   p.steps = world.steps;
   p.workflow = world.workflow;
   p.chapters = [
-    { id: 'c1', number: 1, revision: 1, title: '正文', content: 'CHAPTER_PROSE', mode: 'demo', updatedAt: '' },
+    {
+      id: 'c1',
+      number: 1,
+      revision: 1,
+      title: '正文',
+      content: 'CHAPTER_PROSE',
+      mode: 'demo',
+      updatedAt: '',
+    },
   ];
   const draft = world.steps.find((step) => step.kind === 'world')!;
   const context = buildContext(p, draft.id, {
@@ -535,6 +548,33 @@ test('world workflow context excludes chapter drafting and strips review content
   });
   assert.match(context, /独立的世界观编写/);
   assert.doesNotMatch(context, /当前目标章节|CHAPTER_PROSE|有效创作要求/);
-  const cleaned = worldSettingContent(`# 龙京\n\n地理坐标：夏国。\n\n## 【设定审查与假设标注】\n\n1. 假设正文。\n\n### 第4章\n\n窗外的血月。`);
+  const cleaned = worldSettingContent(
+    `# 龙京\n\n地理坐标：夏国。\n\n## 【设定审查与假设标注】\n\n1. 假设正文。\n\n### 第4章\n\n窗外的血月。`,
+  );
   assert.equal(cleaned, '# 龙京\n\n地理坐标：夏国。');
+});
+
+test('character workflow is independent and prompts for a reusable character profile', () => {
+  const p = starterProject();
+  const character = createCharacterWorkflowGraph();
+  p.steps = character.steps;
+  p.workflow = character.workflow;
+  const step = character.steps.find((item) => item.kind === 'character')!;
+  const context = buildContext(p, step.id, {
+    runId: 'character-run',
+    workflowId: character.id,
+    number: 1,
+    mode: 'create',
+    requirements: { instructions: '', requiredText: [], forbiddenText: [] },
+    graphRevision: 0,
+    settingTarget: 'character',
+  });
+  assert.deepEqual(
+    character.steps.map((item) => item.id),
+    ['system-start', 'character-draft', 'system-end'],
+  );
+  assert.match(context, /独立的人物编写/);
+  assert.match(context, /人物关系和成长弧光/);
+  assert.match(context, /本次设定目标：人物编写/);
+  assert.doesNotMatch(context, /当前目标章节：第/);
 });

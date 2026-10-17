@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Check, Play } from 'lucide-react';
 import type { GenerationMode, Project, Requirements, RunRequest, WorkflowRunMode } from '../../shared/types';
+import { DEFAULT_CHARACTER_TEMPLATE } from '../../shared/types';
 import {
   chapterNumberSchema,
   chapterRequirementsSchema,
@@ -40,12 +41,23 @@ export default function GenerationModal({
   const [number, setNumber] = useState(String(entry.number || nextChapterNumber(project)));
   const [to, setTo] = useState(String(entry.number || nextChapterNumber(project)));
   const [count, setCount] = useState(
-    String(entry.stepId ? 1 : project.workflow?.autoGenerate ? project.workflow.chapterCount : 1),
+    String(entry.stepId ? 1 : (project.workflow?.autoGenerate || project.workflow?.automationMode === 'automatic') ? project.workflow.chapterCount : 1),
   );
   const [writer, setWriter] = useState(project.workflow?.outputWriterNodeId || '');
-  const [settingTarget, setSettingTarget] = useState<'world' | 'character' | 'plot'>('world');
+  const [settingTarget, setSettingTarget] = useState<'world' | 'character' | 'plot'>(() =>
+    project.steps.some((step) => step.kind === 'character') ? 'character' : 'world',
+  );
   const [settingName, setSettingName] = useState('');
   const [settingExtra, setSettingExtra] = useState('');
+  const characterStep = project.steps.find((step) => step.kind === 'character' && (!entry.stepId || step.id === entry.stepId));
+  const [characterCount, setCharacterCount] = useState(String(characterStep?.characterCount || 1));
+  const [characterName, setCharacterName] = useState(characterStep?.characterName || '');
+  const [characterGender, setCharacterGender] = useState(characterStep?.characterGender || '');
+  const [characterPersonality, setCharacterPersonality] = useState(characterStep?.characterPersonality || '');
+  const [characterExperience, setCharacterExperience] = useState(characterStep?.characterExperience || '');
+  const [characterTemplate, setCharacterTemplate] = useState(
+    characterStep?.characterTemplate || DEFAULT_CHARACTER_TEMPLATE,
+  );
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [workflowMode, setWorkflowMode] = useState<WorkflowRunMode>(
     project.steps.some((step) => step.kind === 'writer' || step.id === 'draft') ? 'chapter' : 'world',
@@ -84,7 +96,21 @@ export default function GenerationModal({
     mode: workflowMode === 'world' ? 'create' : modeRef.current,
     workflowMode,
     overwrite,
-    ...(workflowMode === 'world' ? { settingTarget, outputName: settingName.trim(), instructions: settingExtra.trim() } : {}),
+    ...(workflowMode === 'world'
+      ? { settingTarget, outputName: settingName.trim(), instructions: settingExtra.trim() }
+      : {}),
+    ...(workflowMode === 'world' && settingTarget === 'character'
+      ? {
+          characterCount: Math.max(1, Math.min(100, Number(characterCount) || 1)),
+          characterProfile: {
+            name: characterName.trim(),
+            gender: characterGender.trim(),
+            personality: characterPersonality.trim(),
+            experience: characterExperience.trim(),
+            template: characterTemplate,
+          },
+        }
+      : {}),
     ...(writers.length === 1
       ? { outputWriterNodeId: writers[0].id }
       : writer
@@ -163,26 +189,47 @@ export default function GenerationModal({
       <section className="run-controls">
         <div className="run-mode-menu">
           <span>运行模式</span>
-          <button type="button" aria-expanded={modeMenuOpen} disabled={locked} onClick={() => setModeMenuOpen((value) => !value)}>
+          <button
+            type="button"
+            aria-expanded={modeMenuOpen}
+            disabled={locked}
+            onClick={() => setModeMenuOpen((value) => !value)}
+          >
             {workflowMode === 'world' ? '世界观模式' : '正文模式'}
           </button>
-          {modeMenuOpen && <div className="workflow-run-modes" role="menu" aria-label="运行模式">
-            {(
-              [
-                ['chapter', '正文模式'],
-                ['world', '世界观模式'],
-              ] as const
-            ).map(([value, label]) => (
-              <button key={value} type="button" aria-pressed={workflowMode === value} disabled={locked} onClick={() => { setWorkflowMode(value); setModeMenuOpen(false); }}>
-                {label}
-              </button>
-            ))}
-          </div>}
+          {modeMenuOpen && (
+            <div className="workflow-run-modes" role="menu" aria-label="运行模式">
+              {(
+                [
+                  ['chapter', '正文模式'],
+                  ['world', '世界观模式'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={workflowMode === value}
+                  disabled={locked}
+                  onClick={() => {
+                    setWorkflowMode(value);
+                    setModeMenuOpen(false);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </section>
       <div className="run-options">
         <label className={`overwrite-option${overwrite ? ' checked' : ''}`}>
-          <input type="checkbox" checked={overwrite} disabled={locked} onChange={(event) => setOverwrite(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={overwrite}
+            disabled={locked}
+            onChange={(event) => setOverwrite(event.target.checked)}
+          />
           <span>
             <strong>覆盖原文</strong>
             <small>{workflowMode === 'world' ? '替换同名设定' : '替换同章正文，并保留旧版本'}</small>
@@ -192,102 +239,156 @@ export default function GenerationModal({
           <>
             <label>
               名字
-              <input value={settingName} disabled={locked} maxLength={120} placeholder="留空则根据内容生成" onChange={(event) => setSettingName(event.target.value)} />
+              <input
+                value={settingName}
+                disabled={locked}
+                maxLength={120}
+                placeholder="留空则根据内容生成"
+                onChange={(event) => setSettingName(event.target.value)}
+              />
             </label>
             <label>
               额外信息
-              <textarea value={settingExtra} disabled={locked} maxLength={2000} rows={3} placeholder="补充必须遵守的设定、边界或禁忌" onChange={(event) => setSettingExtra(event.target.value)} />
+              <textarea
+                value={settingExtra}
+                disabled={locked}
+                maxLength={2000}
+                rows={3}
+                placeholder="补充必须遵守的设定、边界或禁忌"
+                onChange={(event) => setSettingExtra(event.target.value)}
+              />
             </label>
           </>
         )}
       </div>
       {workflowMode === 'world' ? (
-        <label>
-          本次目标
-          <select aria-label="本次目标" value={settingTarget} disabled={locked} onChange={(event) => setSettingTarget(event.target.value as typeof settingTarget)}>
-            <option value="world">世界观编写</option>
-            <option value="character">人物编写</option>
-            <option value="plot">剧情编排</option>
-          </select>
-        </label>
-      ) : (
-      <div className="generation-target">
-        <label>
-          本次目标
-          <select
-            aria-label="本次目标"
-            value={kind}
-            disabled={locked}
-            onChange={(event) => setKind(event.target.value as typeof kind)}
-          >
-            <option value="next">续写新章</option>
-            <option value="single">指定单章</option>
-            <option value="range" disabled={!!entry.stepId}>
-              指定区间
-            </option>
-          </select>
-        </label>
-        {workflowMode === 'chapter' && <div className="generation-mode-options" role="radiogroup" aria-label="生成方式">
-          {(
-            [
-              ['create', '新建正文'],
-              ['regenerate', '重生成候选'],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              data-generation-mode={value}
-              aria-pressed={mode === value}
+        <>
+          <label>
+            本次目标
+            <select
+              aria-label="本次目标"
+              value={settingTarget}
               disabled={locked}
-              onClick={(event) => setMode(event.currentTarget.dataset.generationMode as GenerationMode)}
+              onChange={(event) => setSettingTarget(event.target.value as typeof settingTarget)}
             >
-              {label}
-            </button>
-          ))}
-        </div>}
-        {kind === 'next' ? (
-          <label>
-            续写章数
-            <input
-              type="number"
-              min={1}
-              max={entry.stepId ? 1 : GENERATION_LIMITS.maxBatchSize}
-              step={1}
-              value={count}
-              disabled={locked || !!entry.stepId}
-              onChange={(event) => setCount(event.target.value)}
-            />
+              <option value="world">世界观编写</option>
+              <option value="character">人物编写</option>
+              <option value="plot">剧情编排</option>
+            </select>
           </label>
-        ) : (
+          {settingTarget === 'character' && (
+            <section className="character-generation-settings">
+              <div className="character-generation-heading">
+                <strong>人物参数</strong>
+                <span>留空项按世界设定随机补全</span>
+              </div>
+              <label>
+                生成人物数量
+                <input type="number" min={1} max={100} value={characterCount} disabled={locked} onChange={(event) => setCharacterCount(event.target.value)} />
+              </label>
+              <label>
+                名字
+                <input value={characterName} disabled={locked} placeholder="不填则随机" onChange={(event) => setCharacterName(event.target.value)} />
+              </label>
+              <label>
+                性别
+                <input value={characterGender} disabled={locked} placeholder="不填则随机男女" onChange={(event) => setCharacterGender(event.target.value)} />
+              </label>
+              <label>
+                性格
+                <textarea rows={2} value={characterPersonality} disabled={locked} placeholder="不填则随机" onChange={(event) => setCharacterPersonality(event.target.value)} />
+              </label>
+              <label>
+                经历
+                <textarea rows={3} value={characterExperience} disabled={locked} placeholder="填写部分内容，Agent 会根据世界设定补全" onChange={(event) => setCharacterExperience(event.target.value)} />
+              </label>
+              <label>
+                人物模板
+                <textarea rows={12} value={characterTemplate} disabled={locked} placeholder="粘贴 Markdown 模板，留空使用节点模板" onChange={(event) => setCharacterTemplate(event.target.value)} />
+              </label>
+            </section>
+          )}
+        </>
+      ) : (
+        <div className="generation-target">
           <label>
-            {kind === 'range' ? '开始章号' : '章号'}
-            <input
-              type="number"
-              min={1}
-              max={GENERATION_LIMITS.maxChapterNumber}
-              step={1}
-              value={number}
+            本次目标
+            <select
+              aria-label="本次目标"
+              value={kind}
               disabled={locked}
-              onChange={(event) => setNumber(event.target.value)}
-            />
+              onChange={(event) => setKind(event.target.value as typeof kind)}
+            >
+              <option value="next">续写新章</option>
+              <option value="single">指定单章</option>
+              <option value="range" disabled={!!entry.stepId}>
+                指定区间
+              </option>
+            </select>
           </label>
-        )}
-        {kind === 'range' && (
-          <label>
-            结束章号
-            <input
-              type="number"
-              min={1}
-              max={GENERATION_LIMITS.maxChapterNumber}
-              step={1}
-              value={to}
-              disabled={locked}
-              onChange={(event) => setTo(event.target.value)}
-            />
-          </label>
-        )}
-      </div>
+          {workflowMode === 'chapter' && (
+            <div className="generation-mode-options" role="radiogroup" aria-label="生成方式">
+              {(
+                [
+                  ['create', '新建正文'],
+                  ['regenerate', '重生成候选'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  data-generation-mode={value}
+                  aria-pressed={mode === value}
+                  disabled={locked}
+                  onClick={(event) => setMode(event.currentTarget.dataset.generationMode as GenerationMode)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {kind === 'next' ? (
+            <label>
+              续写章数
+              <input
+                type="number"
+                min={1}
+                max={entry.stepId ? 1 : GENERATION_LIMITS.maxBatchSize}
+                step={1}
+                value={count}
+                disabled={locked || !!entry.stepId}
+                onChange={(event) => setCount(event.target.value)}
+              />
+            </label>
+          ) : (
+            <label>
+              {kind === 'range' ? '开始章号' : '章号'}
+              <input
+                type="number"
+                min={1}
+                max={GENERATION_LIMITS.maxChapterNumber}
+                step={1}
+                value={number}
+                disabled={locked}
+                onChange={(event) => setNumber(event.target.value)}
+              />
+            </label>
+          )}
+          {kind === 'range' && (
+            <label>
+              结束章号
+              <input
+                type="number"
+                min={1}
+                max={GENERATION_LIMITS.maxChapterNumber}
+                step={1}
+                value={to}
+                disabled={locked}
+                onChange={(event) => setTo(event.target.value)}
+              />
+            </label>
+          )}
+        </div>
       )}
       {workflowMode === 'chapter' && writers.length > 1 && (
         <label>
@@ -303,101 +404,104 @@ export default function GenerationModal({
           <small>只有该节点提交章节，其余正文节点作为中间结果。</small>
         </label>
       )}
-      {workflowMode === 'chapter' && (<>
-      <p className="info-note">
-        {demo
-          ? '演示模式：固定模板，不调用模型，也不保证遵循文学语义。'
-          : '语义和风格要求需作者确认；硬性原文规则将逐字校验。'}{' '}
-        单批最多 {GENERATION_LIMITS.maxBatchSize} 章。不会自动同步或发布。
-      </p>
-      {targets.length > 0 && (
-        <p className="generation-target-summary">
-          本次目标：第 {targets[0]} 章
-          {targets.length > 1 ? ` — 第 ${targets.at(-1)} 章（共 ${targets.length} 章）` : ''}
-          。目标仅用于本次运行，不沿用到下次续写。
-        </p>
-      )}
-      {targetError && (
-        <p className="generation-warning" role="alert">
-          {targetError}
-        </p>
-      )}
-      <GenerationRequirements
-        label="作品级正文要求（每章累加）"
-        value={global}
-        disabled={locked}
-        onChange={(value) => {
-          setGlobal(value);
-          setRequirementsDirty(true);
-        }}
-      />
-      <div className="generation-chapter-choice">
-        <label>
-          按章保存额外要求
-          <input
-            type="number"
-            min={1}
-            max={GENERATION_LIMITS.maxChapterNumber}
-            step={1}
-            value={requirementNumber}
+      {workflowMode === 'chapter' && (
+        <>
+          <p className="info-note">
+            {demo
+              ? '演示模式：固定模板，不调用模型，也不保证遵循文学语义。'
+              : '语义和风格要求需作者确认；硬性原文规则将逐字校验。'}{' '}
+            单批最多 {GENERATION_LIMITS.maxBatchSize} 章。不会自动同步或发布。
+          </p>
+          {targets.length > 0 && (
+            <p className="generation-target-summary">
+              本次目标：第 {targets[0]} 章
+              {targets.length > 1 ? ` — 第 ${targets.at(-1)} 章（共 ${targets.length} 章）` : ''}
+              。目标仅用于本次运行，不沿用到下次续写。
+            </p>
+          )}
+          {targetError && (
+            <p className="generation-warning" role="alert">
+              {targetError}
+            </p>
+          )}
+          <GenerationRequirements
+            label="作品级正文要求（每章累加）"
+            value={global}
             disabled={locked}
-            onChange={(event) => setRequirementNumber(event.target.value)}
+            onChange={(value) => {
+              setGlobal(value);
+              setRequirementsDirty(true);
+            }}
           />
-        </label>
-        <p>可提前设置尚未生成的章号，不会创建占位章节。这里切换章号不会改变本次生成目标。</p>
-      </div>
-      {validRequirementNumber ? (
-        <GenerationRequirements
-          label={`第 ${chapterKey} 章专属要求（与作品要求累加）`}
-          value={chapterRequirement}
-          disabled={locked}
-          onChange={(value) => {
-            setChapters((current) => ({ ...current, [chapterKey]: value }));
-            setRequirementsDirty(true);
-          }}
-        />
-      ) : (
-        <p role="alert" className="generation-warning">
-          请输入有效的正整数章号。
-        </p>
-      )}
-      <details className="generation-effective">
-        <summary>查看本次合并要求</summary>
-        {targets.map((target) => {
-          const local = chapters[String(target)] || emptyRequirements();
-          return (
-            <div key={target}>
-              <strong>第 {target} 章</strong>
-              <p>
-                {[global.instructions, local.instructions].filter(Boolean).join('\n') || '未设置自然语言要求'}
-              </p>
-              <p>
-                必须出现：
-                {[...global.requiredText, ...local.requiredText]
-                  .map((text) => JSON.stringify(text))
-                  .join('、') || '无'}
-              </p>
-              <p>
-                禁止出现：
-                {[...global.forbiddenText, ...local.forbiddenText]
-                  .map((text) => JSON.stringify(text))
-                  .join('、') || '无'}
-              </p>
+          <div className="generation-chapter-choice">
+            <label>
+              按章保存额外要求
+              <input
+                type="number"
+                min={1}
+                max={GENERATION_LIMITS.maxChapterNumber}
+                step={1}
+                value={requirementNumber}
+                disabled={locked}
+                onChange={(event) => setRequirementNumber(event.target.value)}
+              />
+            </label>
+            <p>可提前设置尚未生成的章号，不会创建占位章节。这里切换章号不会改变本次生成目标。</p>
+          </div>
+          {validRequirementNumber ? (
+            <GenerationRequirements
+              label={`第 ${chapterKey} 章专属要求（与作品要求累加）`}
+              value={chapterRequirement}
+              disabled={locked}
+              onChange={(value) => {
+                setChapters((current) => ({ ...current, [chapterKey]: value }));
+                setRequirementsDirty(true);
+              }}
+            />
+          ) : (
+            <p role="alert" className="generation-warning">
+              请输入有效的正整数章号。
+            </p>
+          )}
+          <details className="generation-effective">
+            <summary>查看本次合并要求</summary>
+            {targets.map((target) => {
+              const local = chapters[String(target)] || emptyRequirements();
+              return (
+                <div key={target}>
+                  <strong>第 {target} 章</strong>
+                  <p>
+                    {[global.instructions, local.instructions].filter(Boolean).join('\n') ||
+                      '未设置自然语言要求'}
+                  </p>
+                  <p>
+                    必须出现：
+                    {[...global.requiredText, ...local.requiredText]
+                      .map((text) => JSON.stringify(text))
+                      .join('、') || '无'}
+                  </p>
+                  <p>
+                    禁止出现：
+                    {[...global.forbiddenText, ...local.forbiddenText]
+                      .map((text) => JSON.stringify(text))
+                      .join('、') || '无'}
+                  </p>
+                </div>
+              );
+            })}
+          </details>
+          {requirementErrors.length > 0 && (
+            <div className="generation-warning" role="alert">
+              要求格式或长度不合法：{requirementErrors.join('；')}
             </div>
-          );
-        })}
-      </details>
-      {requirementErrors.length > 0 && (
-        <div className="generation-warning" role="alert">
-          要求格式或长度不合法：{requirementErrors.join('；')}
-        </div>
+          )}
+          {literalConflicts.length > 0 && (
+            <div className="generation-warning" role="alert">
+              第 {literalConflicts.join('、')} 章的必须出现文本包含禁止文本，请先解决冲突。
+            </div>
+          )}
+        </>
       )}
-      {literalConflicts.length > 0 && (
-        <div className="generation-warning" role="alert">
-          第 {literalConflicts.join('、')} 章的必须出现文本包含禁止文本，请先解决冲突。
-        </div>
-      )}
-      </>)}
       {message && (
         <p className="info-note" role="status">
           {message}

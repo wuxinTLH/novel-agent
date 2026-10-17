@@ -1,6 +1,8 @@
+import type { Project, WorkflowSettings } from '../shared/types';
+import PublicationPanel from './components/PublicationPanel';
 import { useConfirm } from './components/AppDialog';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Check, Link2, LoaderCircle, RefreshCw, ShieldCheck, Unlink, X } from 'lucide-react';
+import { Check, Link2, LoaderCircle, RefreshCw, ShieldCheck, Trash2, Unlink, X } from 'lucide-react';
 import { api } from './api';
 import type {
   DraftOperation,
@@ -23,16 +25,21 @@ const stateLabels: Record<DraftOperation['state'], string> = {
   verified: '已重新打开核实保存',
   failed: '写入前失败',
   unknown: '结果未知，禁止重发',
+  deleted: '远端草稿已删除',
 };
 
 export default function PlatformPanel({
   projectId,
   running,
   selectedChapterId,
+  workflow,
+  onProjectChange,
 }: {
   projectId: string;
   running: boolean;
   selectedChapterId?: string;
+  workflow?: WorkflowSettings;
+  onProjectChange?: (project: Project) => void;
 }) {
   const confirmDialog = useConfirm();
   const base = `/projects/${encodeURIComponent(projectId)}`;
@@ -50,6 +57,14 @@ export default function PlatformPanel({
   const [login, setLogin] = useState<PlatformLogin | null>(null);
   const [preview, setPreview] = useState<DraftPreparation | null>(null);
   const [approved, setApproved] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(() => {
+    try { return localStorage.getItem(`publication-auto-approve:${projectId}`) === 'true'; } catch { return false; }
+  });
+  const changeAutoApprove = (enabled: boolean) => {
+    setAutoApprove(enabled);
+    setApproved(false);
+    try { localStorage.setItem(`publication-auto-approve:${projectId}`, String(enabled)); } catch { /* In-memory selection remains usable. */ }
+  };
   const [mockToken, setMockToken] = useState('');
   const [mockTitle, setMockTitle] = useState('');
   const [loading, setLoading] = useState(true);
@@ -256,6 +271,15 @@ export default function PlatformPanel({
   const prepare = () => {
     if (!selectedLink || !selectedChapter) return;
     const version = selectionVersion.current;
+    if (autoApprove) {
+      void action<import('../shared/publication').PublicationBatch>(
+        '/platform-publication-batches/prepare', 'POST',
+        { linkId: selectedLink.id, chapterIds: [selectedChapter.id], action: 'save_draft', autoApprove: true },
+        () => setRefresh((value) => value + 1),
+        '已自动批准单章上传，请在远端上传队列中查看执行结果。',
+      );
+      return;
+    }
     void action<DraftPreparation>(
       '/platform-drafts/prepare',
       'POST',
@@ -270,7 +294,7 @@ export default function PlatformPanel({
     );
   };
   const execute = () => {
-    if (!preview || !approved) return;
+    if (!preview || (!approved && !autoApprove)) return;
     let key = executeKeys.current.get(preview.id);
     if (!key) {
       key = crypto.randomUUID();
@@ -308,13 +332,13 @@ export default function PlatformPanel({
         <ShieldCheck size={18} />
         <p>
           第三方本机辅助工具，不是番茄官方 API
-          或客户端。仅允许人工登录、选择一个已保存章节、完整预览并确认后保存草稿；绝不自动上传或正式发布。
+          或客户端。仅允许人工登录、完整预览并确认后保存或覆盖草稿及提交审核；支持回读核验，送审不等于已发布，不支持无人值守定时发布。
         </p>
       </div>
       {session && (
         <p className="platform-help">
           {session.persistentCredentials
-            ? '会话通过本机 PLATFORM_SECRETS_KEY 加密保存。网站会话能否跨重启恢复仍须真实验收，过期后请重新人工登录。'
+            ? '会话通过本机 PLATFORM_SECRETS_KEY 加密保存；身份核验和读取成功后同步浏览器更新的 Cookie。网站真正撤销或过期的会话仍需人工登录，不会绕过验证码。'
             : '未配置持久加密密钥，会话仅保存在进程内存；重启后须在原连接下重新人工登录，绑定仍保留。'}
         </p>
       )}
@@ -405,6 +429,11 @@ export default function PlatformPanel({
         <section className="platform-card">
           <h3>本次人工登录</h3>
           <p>{login.message}</p>
+          {activeLogin && (
+            <p className="platform-help">
+              点击核验后，已打开的隔离浏览器会自动进入番茄作者后台首页并读取登录身份；无需粘贴 Cookie、session 或 token。
+            </p>
+          )}
           <p className="platform-help">
             登录状态：{login.status} · 有效至 {dateLabel(login.expiresAt)}
           </p>
@@ -747,7 +776,7 @@ export default function PlatformPanel({
             }
             onClick={prepare}
           >
-            准备完整预览（不会打开编辑器）
+            {autoApprove ? '自动批准并上传单章草稿' : '准备完整预览（不会打开编辑器）'}
           </button>
         </div>
         {preview && (
@@ -781,7 +810,7 @@ export default function PlatformPanel({
               />
               我已核对账号、作品、标题和完整正文，批准进入可能自动存稿的编辑器，仅保存本章草稿。
             </label>
-            <button className="button primary" disabled={mutateDisabled || !approved} onClick={execute}>
+            <button className="button primary" disabled={mutateDisabled || (!approved && !autoApprove)} onClick={execute}>
               批准并保存这一章草稿（不发布）
             </button>
           </div>
@@ -790,7 +819,7 @@ export default function PlatformPanel({
       <section className="platform-card">
         <h2>草稿操作与核实回执</h2>
         <p className="platform-help">
-          操作记录独立于本地正文和正式发布状态。结果未知时仅允许只读核对；不自动续传、不批量补发。离开页面不等于撤销写入。
+          操作记录独立于本地正文和正式发布状态。保存后会回读核验；结果未知时仅允许只读核对。已核实草稿可在确认后从番茄作者页删除，删除后再次读取列表确认，不自动发布或批量补发。
         </p>
         {!operations.length && <p className="platform-empty">还没有草稿操作。</p>}
         <div className="platform-list">
@@ -808,6 +837,9 @@ export default function PlatformPanel({
                 {operation.remoteDraftId && (
                   <p className="platform-help">远端草稿 ID：{operation.remoteDraftId}</p>
                 )}
+                {operation.state === 'deleted' && (
+                  <p className="platform-help">已在番茄作者页确认该草稿已删除；本地操作记录保留用于审计。</p>
+                )}
                 {receipts
                   .filter((item) => item.operationId === operation.id)
                   .map((receipt) => (
@@ -823,6 +855,34 @@ export default function PlatformPanel({
                     </p>
                   ))}
               </div>
+              {operation.state === 'verified' && operation.remoteDraftId && (
+                <button
+                  className="button secondary"
+                  disabled={mutateDisabled}
+                  onClick={async () => {
+                    if (
+                      !(await confirmDialog(
+                        `将从番茄作者页永久删除草稿“${operation.title}”（远端 ID：${operation.remoteDraftId}）。此操作不可撤销，是否继续？`,
+                      ))
+                    )
+                      return;
+                    void action<DraftOperation>(
+                      `/platform-operations/${encodeURIComponent(operation.id)}/draft`,
+                      'DELETE',
+                      { approved: true },
+                      (next) => {
+                        setOperations((items) => items.map((item) => (item.id === next.id ? next : item)));
+                        setReceipts((items) => items.filter((item) => item.operationId !== next.id));
+                        setRefresh((value) => value + 1);
+                      },
+                      '已在番茄作者页删除并确认该草稿不再出现在草稿列表。',
+                    );
+                  }}
+                >
+                  <Trash2 size={14} />
+                  删除远端草稿
+                </button>
+              )}
               {operation.state === 'unknown' && (
                 <button
                   className="button secondary"
@@ -847,6 +907,7 @@ export default function PlatformPanel({
           ))}
         </div>
       </section>
+      <PublicationPanel projectId={projectId} csrfToken={session?.csrfToken ?? ''} links={links} chapters={chapters} disabled={mutateDisabled} reviewAvailable={true} autoApprove={autoApprove} onAutoApproveChange={changeAutoApprove} workflow={workflow} onProjectChange={onProjectChange} />
       {busy && (
         <p className="platform-loading" role="status">
           <LoaderCircle className="spin" size={16} />

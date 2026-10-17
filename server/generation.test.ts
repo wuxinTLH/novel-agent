@@ -425,6 +425,105 @@ test('regeneration creates candidate, adoption is explicit/version checked and p
   );
 });
 
+test('automatic mode adopts a regeneration batch without author decisions and persists revisions', async () => {
+  await withModel(async (settings) => withStore(async (store, p) => {
+    writerOnly(p);
+    p.workflow!.automationMode = 'automatic';
+    p.chapters = [chapter(5), chapter(6)];
+    await new Runner(store).run(p, settings, { mode: 'regenerate', target: { kind: 'range', from: 5, to: 6 } });
+    assert.equal(p.run!.status, 'done');
+    assert.deepEqual(p.run!.chapters!.map((item) => item.status), ['done', 'done']);
+    assert.equal(p.candidates!.length, 0);
+    assert.equal(p.run!.generatedChapterIds!.length, 2);
+    assert.ok(p.chapters.every((item) => item.revision === 2));
+    assert.equal(p.chapters[0].revisions![0].content, 'UNIQUE_CHAPTER_5');
+    const reloaded = new Store(store.dir).projects.find((item) => item.id === p.id)!;
+    assert.equal(reloaded.workflow!.automationMode, 'automatic');
+    assert.equal(reloaded.chapters[0].revision, 2);
+  }));
+});
+
+test('automatic batch stops on literal failure or stale revision and keeps original prose', async () => {
+  await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    writerOnly(p);
+    p.workflow!.automationMode = 'automatic';
+    p.chapters = [chapter(5), chapter(6)];
+    p.requirements = { instructions: '', requiredText: ['missing phrase'], forbiddenText: [] };
+    await new Runner(store).run(p, settings, { mode: 'regenerate', target: { kind: 'range', from: 5, to: 6 } });
+    assert.equal(p.run!.errorCode, 'LITERAL_VALIDATION_FAILED');
+    assert.equal(requests.length, 1);
+    assert.equal(p.run!.chapters![1].status, 'cancelled');
+    assert.equal(p.chapters[0].content, 'UNIQUE_CHAPTER_5');
+    assert.equal(p.candidates![0].recoveryStatus, 'ready');
+    p.requirements = emptyRequirements();
+    control.onRequest = () => { p.chapters[0].revision = 2; };
+    await new Runner(store).run(p, settings, { mode: 'regenerate', target: { kind: 'single', number: 5 } });
+    assert.equal(p.run!.errorCode, 'REVISION_CONFLICT');
+    assert.equal(p.chapters[0].content, 'UNIQUE_CHAPTER_5');
+    assert.equal(p.candidates!.length, 2);
+  }));
+});
+
+test('automatic regeneration never adopts when a downstream review request fails', async () => {
+  await withModel(async (settings, _requests, control) => withStore(async (store, p) => {
+    p.steps = p.steps.filter((step) => [SYSTEM_START_NODE_ID, 'draft', 'review', SYSTEM_END_NODE_ID].includes(step.id));
+    p.workflows![0].steps = p.steps;
+    p.workflow!.edges = [
+      { id: 'sd', source: SYSTEM_START_NODE_ID, target: 'draft' },
+      { id: 'dr', source: 'draft', target: 'review' },
+      { id: 're', source: 'review', target: SYSTEM_END_NODE_ID },
+    ];
+    p.workflow!.automationMode = 'automatic';
+    p.chapters = [chapter(5)];
+    control.onRequest = (index) => { if (index === 2) control.status = 503; };
+    await new Runner(store).run(p, settings, { mode: 'regenerate', target: { kind: 'single', number: 5 } });
+    assert.equal(p.run!.status, 'error');
+    assert.equal(p.chapters[0].revision, 1);
+    assert.equal(p.candidates![0].recoveryStatus, 'review-failed');
+  }));
+});
+
+test('automatic mode uses configured batch defaults but single-node runs remain single-target', () => {
+  const p = createProject('automatic defaults');
+  p.workflow!.automationMode = 'automatic';
+  p.workflow!.chapterCount = 3;
+  p.workflow!.autoGenerate = false;
+  assert.equal(prepareRun(p).targets.length, 3);
+  assert.equal(prepareRun(p, { stepId: 'lore' }).targets.length, 1);
+  const migrated = migrateProjects([p])[0];
+  assert.equal(migrated.workflow!.automationMode, 'automatic');
+  const legacy = createProject('manual migration');
+  delete legacy.workflow!.automationMode;
+  assert.equal(migrateProjects([legacy])[0].workflow!.automationMode, 'manual');
+});
+
+test('completion hook receives admitted workflow after durable success and lock release only', async () => {
+  await withModel(async (settings) => withStore(async (store, p) => {
+    writerOnly(p);
+    p.workflow!.automationMode = 'automatic';
+    p.chapters = [chapter(5)];
+    let callbacks = 0;
+    const runner: Runner = new Runner(store, async (project, run, workflow): Promise<void> => {
+      callbacks++;
+      assert.equal(runner.controllers.size, 0);
+      assert.equal(run.status, 'done');
+      assert.equal(workflow?.automationMode, 'automatic');
+      assert.equal(project.chapters[0].revision, 2);
+      const disk = new Store(store.dir).projects.find((item) => item.id === p.id)!;
+      assert.equal(disk.run!.status, 'done');
+      assert.equal(disk.chapters[0].revision, 2);
+    });
+    await runner.run(p, settings, { mode: 'regenerate', target: { kind: 'single', number: 5 } });
+    assert.equal(callbacks, 1);
+    p.requirements = { instructions: '', requiredText: ['NOT_IN_MODEL_RESULT'], forbiddenText: [] };
+    await runner.run(p, settings, { target: { kind: 'single', number: 6 } });
+    assert.equal(callbacks, 1);
+    p.requirements = emptyRequirements();
+    await runner.run(p, settings, { stepId: 'draft', target: { kind: 'single', number: 6 } });
+    assert.equal(callbacks, 1);
+  }));
+});
+
 test('literal failure preserves unapproved candidate and blocks adoption; truncation saves no chapter', async () => {
   await withModel(async (settings, _requests, control) =>
     withStore(async (store, p) => {
@@ -671,6 +770,40 @@ test('storage failure at promotion rolls back chapter and preserves writer check
       assert.equal(disk.candidates!.length, 1);
     }),
   );
+});
+
+test('automatic adoption and explicit overwrite roll back on storage failure and expose successful chapter ids', async () => {
+  await withModel(async (settings) => {
+    for (const overwrite of [false, true]) {
+      await withStore(async (store, p) => {
+        writerOnly(p);
+        p.workflow!.automationMode = 'automatic';
+        p.chapters = [chapter(5)];
+        const original = structuredClone(p.chapters[0]);
+        const touch = store.touch.bind(store);
+        let failed = false;
+        store.touch = (project) => {
+          if (!failed && project.chapters[0].revision === 2) {
+            failed = true;
+            throw new Error('ENOSPC');
+          }
+          touch(project);
+        };
+        const request = { mode: overwrite ? 'create' as const : 'regenerate' as const, overwrite,
+          target: { kind: 'single' as const, number: 5 } };
+        await assert.rejects(new Runner(store).run(p, settings, request), { code: 'PERSISTENCE_FAILED' });
+        assert.deepEqual(p.chapters[0], original);
+        assert.equal(p.candidates!.length, 1);
+        assert.equal(p.run!.generatedChapterIds!.length, 0);
+        store.touch = touch;
+        await new Runner(store).run(p, settings, request);
+        assert.equal(p.run!.status, 'done');
+        assert.deepEqual(p.run!.generatedChapterIds, [original.id]);
+        assert.equal(p.chapters[0].revision, 2);
+        assert.equal(p.run!.candidateIds!.length, 0);
+      });
+    }
+  });
 });
 
 test('world workflow runs without reserving chapter numbers or creating prose', async () => {

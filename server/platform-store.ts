@@ -147,7 +147,7 @@ const draftSchema = z.object({
   revision: z.number().int().positive(),
   contentHash: z.string().regex(/^[a-f0-9]{64}$/),
   title: z.string(),
-  state: z.enum(['queued', 'running', 'verified', 'failed', 'unknown']),
+  state: z.enum(['queued', 'running', 'verified', 'failed', 'unknown', 'deleted']),
   mutationStarted: z.boolean(),
   remoteDraftId: id.optional(),
   createdAt: z.string(),
@@ -428,6 +428,11 @@ export class PlatformStore {
     this.change((data) => {
       data.draftOperations = [...data.draftOperations.filter((o) => o.id !== operation.id), operation];
       data.receipts = [...data.receipts.filter((r) => r.operationId !== operation.id), receipt];
+    });
+  }
+  removeDraftReceipt(operationId: string) {
+    this.change((data) => {
+      data.receipts = data.receipts.filter((receipt) => receipt.operationId !== operationId);
     });
   }
   removeProject(projectId: string) {

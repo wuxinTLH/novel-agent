@@ -8,6 +8,7 @@ import {
   type WorkflowEdge,
   type WorkflowGraph,
   type WorkflowSettings,
+  DEFAULT_CHARACTER_TEMPLATE,
 } from '../shared/types.js';
 const LEGACY_PROMPTS = {
   plan: '结合整体大纲、章节设定和已有章节，为下一章生成详细写作计划：章节标题、视角人物、场景、事件节拍、冲突、情绪变化、结尾悬念。避免重复已写的剧情。',
@@ -125,6 +126,33 @@ export function createWorldWorkflowGraph(name = '世界观编写'): WorkflowGrap
   workflow.outputName = '';
   return { id: workflow.id!, name, steps, workflow, createdAt: now, updatedAt: now };
 }
+export function createCharacterWorkflowGraph(name = '人物编写'): WorkflowGraph {
+  const now = new Date().toISOString();
+  const steps: Step[] = [
+    createSystemStep('start'),
+    {
+      id: 'character-draft',
+      title: '人物编写',
+      subtitle: '建立鲜活可信的人物档案',
+      prompt:
+        '根据作品简介、世界观和作者提供的资料，编写人物档案。姓名、性别、性格、经历等字段按节点配置执行，留空字段可以随机生成；有世界设定时必须遵守世界设定。若提供模板，保持模板标题和字段结构并补全内容。只输出可保存的人物档案，不生成章节正文。',
+      status: 'idle',
+      output: '',
+      position: { x: 250, y: 170 },
+      kind: 'character',
+      enabled: true,
+      characterTemplate: DEFAULT_CHARACTER_TEMPLATE,
+      characterCount: 1,
+    },
+    createSystemStep('end'),
+  ];
+  const workflow = createWorkflow([], name);
+  workflow.edges = linearEdges(steps.map((step) => step.id));
+  workflow.auditNodeId = undefined;
+  workflow.outputWriterNodeId = undefined;
+  workflow.autoGenerate = false;
+  return { id: workflow.id!, name, steps, workflow, createdAt: now, updatedAt: now };
+}
 export function createWorkflowGraph(name = '默认工作流', template = false): WorkflowGraph {
   const now = new Date().toISOString();
   const steps = template
@@ -230,6 +258,7 @@ export function normalizeWorkflow(p: Project) {
   }
   workflow.chapterCount ||= 1;
   workflow.autoGenerate ??= false;
+  workflow.automationMode ??= 'manual';
   workflow.autoPublish = false;
   workflow.graphRevision ??= 0;
   migrateDefaultPrompts(p.steps);

@@ -38,6 +38,20 @@ export interface VerifiedDraft extends PlatformChapterInput {
   workId: string;
   accountId: string;
   paragraphs: string[];
+  volumeId?: string;
+  publishStatus?: number;
+}
+export interface FanqieVolume {
+  id: string;
+  name: string;
+  itemCount?: number;
+}
+export interface FanqieChapter {
+  id: string;
+  title: string;
+  volumeId?: string;
+  status: number;
+  kind: 'draft' | 'chapter';
 }
 /** Sensitive browser state is an in-memory value, never a filename or an API response. */
 export interface BrowserSessionState {
@@ -52,7 +66,16 @@ export interface DraftBrowserAdapter {
   completeLogin(loginId: string): Promise<{ account: VerifiedAccount; state: BrowserSessionState }>;
   closeLogin(loginId: string): Promise<void>;
   verifyAccount(connectionId: string, state: BrowserSessionState): Promise<VerifiedAccount>;
+  /** Capture an existing context only; no navigation, login, or remote refresh request. */
+  sessionState?(connectionId: string): Promise<BrowserSessionState | undefined>;
   listWorks(connectionId: string, state: BrowserSessionState): Promise<PlatformWork[]>;
+  listVolumes?(connectionId: string, state: BrowserSessionState, workId: string): Promise<FanqieVolume[]>;
+  listChapters?(connectionId: string, state: BrowserSessionState, workId: string, volumeId?: string): Promise<FanqieChapter[]>;
+  /** Caller must checkpoint the remote mutation before invoking this method. Never delete/recreate. */
+  overwriteDraft?(
+    connectionId: string, state: BrowserSessionState, accountId: string, workId: string,
+    draftId: string, snapshot: DraftSnapshot, volumeId?: string,
+  ): Promise<VerifiedDraft>;
   /** Called only AFTER the runtime durably records mutationStarted and user approval. */
   createDraft(
     connectionId: string,
@@ -61,6 +84,7 @@ export interface DraftBrowserAdapter {
     workId: string,
     snapshot: DraftSnapshot,
     onIdentified: (draftId: string) => void,
+    volumeId?: string,
   ): Promise<{ draftId: string }>;
   /** Must reopen the exact known draft (not trust the editor just filled). Never mutate. */
   readDraft(
@@ -77,6 +101,23 @@ export interface DraftBrowserAdapter {
     workId: string,
     snapshot: DraftSnapshot,
   ): Promise<VerifiedDraft[]>;
+  /** Delete only an exact, previously identified draft; implementation must verify disappearance. */
+  deleteDraft(
+    connectionId: string,
+    state: BrowserSessionState,
+    workId: string,
+    draftId: string,
+  ): Promise<void>;
+  /** Submit only a known, read-back verified draft. Resolve only after read-only review receipt. */
+  submitReview?(
+    connectionId: string, state: BrowserSessionState, accountId: string,
+    workId: string, draftId: string, snapshot: DraftSnapshot, useAi?: 1 | 2,
+  ): Promise<void>;
+  /** Read-only reconciliation of a known submission; never publish or reopen the editor. */
+  verifyReviewReceipt?(
+    connectionId: string, state: BrowserSessionState, accountId: string,
+    workId: string, draftId: string, snapshot: DraftSnapshot,
+  ): Promise<boolean>;
   closeConnection(connectionId: string): Promise<void>;
   close(): Promise<void>;
 }

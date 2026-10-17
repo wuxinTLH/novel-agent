@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n api,web -c yellow,cyan \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
+    "dev": "concurrently -k -n api,web -c yellow,cyan \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "build": "tsc -b && vite build && tsc -p tsconfig.server.json",
     "start": "node build/server/index.js",
     "start:dev": "tsx server/index.ts",
     "browser:install": "playwright install chromium",
     "smoke": "node scripts/smoke.mjs",
-    "test": "tsx --test server/*.test.ts src/*.test.ts",
+    "test": "node scripts/test.mjs",
     "typecheck": "tsc -b",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

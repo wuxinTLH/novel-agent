@@ -12,6 +12,7 @@ export const platformCapabilities = [
   'syncWork',
   'saveDraft',
   'readDraft',
+  'deleteDraft',
   'publishChapter',
 ] as const;
 export type PlatformCapability = (typeof platformCapabilities)[number];
@@ -136,7 +137,7 @@ export interface DraftPreparation {
   expiresAt: string;
   warning: string;
 }
-export type DraftOperationState = 'queued' | 'running' | 'verified' | 'failed' | 'unknown';
+export type DraftOperationState = 'queued' | 'running' | 'verified' | 'failed' | 'unknown' | 'deleted';
 export interface DraftOperation {
   id: string;
   projectId: string;

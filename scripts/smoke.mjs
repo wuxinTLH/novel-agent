@@ -50,6 +50,13 @@ try {
     await delay(100);
   }
   assert.ok(ready, logs);
+  const htmlResponse = await fetch(base);
+  assert.match(htmlResponse.headers.get('cache-control') || '', /no-cache/);
+  const html = await htmlResponse.text();
+  const cssPath = html.match(/href="([^"]+\.css)"/)?.[1];
+  assert.ok(cssPath, 'production HTML should reference a CSS bundle');
+  const cssResponse = await fetch(new URL(cssPath, base));
+  assert.match(cssResponse.headers.get('cache-control') || '', /public, max-age=31536000, immutable/);
   assert.equal(
     (
       await fetch(`${base}/api/projects`, {
@@ -60,6 +67,44 @@ try {
     ).status,
     403,
   );
+  const isolationSession = await (await fetch(`${base}/api/platforms/session`)).json();
+  const isolationProjectResponse = await fetch(`${base}/api/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Platform-CSRF': isolationSession.csrfToken },
+    body: JSON.stringify({ title: '工作流隔离测试', genre: '奇幻小说', description: '' }),
+  });
+  assert.equal(isolationProjectResponse.status, 201);
+  let isolationProject = await isolationProjectResponse.json();
+  const chapterWorkflow = isolationProject.workflows.find(
+    (graph) => graph.id === isolationProject.activeWorkflowId,
+  );
+  const worldWorkflowResponse = await fetch(`${base}/api/projects/${isolationProject.id}/workflows`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Platform-CSRF': isolationSession.csrfToken },
+    body: JSON.stringify({ name: '独立世界观', preset: 'world' }),
+  });
+  assert.equal(worldWorkflowResponse.status, 201);
+  isolationProject = await worldWorkflowResponse.json();
+  const worldWorkflowId = isolationProject.activeWorkflowId;
+  const switchWorkflow = (workflowId) => fetch(
+    `${base}/api/projects/${isolationProject.id}/workflows/${workflowId}/select`,
+    { method: 'POST', headers: { 'X-Platform-CSRF': isolationSession.csrfToken } },
+  );
+  let switched = await switchWorkflow(chapterWorkflow.id);
+  assert.equal(switched.status, 200);
+  isolationProject = await switched.json();
+  assert.equal(isolationProject.workflow.name, chapterWorkflow.name);
+  assert.deepEqual(isolationProject.steps.map((step) => step.id), chapterWorkflow.steps.map((step) => step.id));
+  switched = await switchWorkflow(worldWorkflowId);
+  assert.equal(switched.status, 200);
+  isolationProject = await switched.json();
+  assert.equal(isolationProject.workflow.name, '独立世界观');
+  assert.deepEqual(isolationProject.steps.map((step) => step.id), [
+    'system-start',
+    'world-draft',
+    'world-expand',
+    'system-end',
+  ]);
   browser = await chromium.launch({
     headless: true,
     ...(process.env.SMOKE_BROWSER_CHANNEL ? { channel: process.env.SMOKE_BROWSER_CHANNEL } : {}),
@@ -154,6 +199,7 @@ try {
   await page.getByRole('button', { name: '对比原稿', exact: true }).click();
   await page.screenshot({ path: path.join(artifacts, 'candidate.png'), fullPage: true });
   await page.getByRole('button', { name: '采用新稿', exact: true }).click();
+  await page.getByRole('alertdialog', { name: '请确认' }).getByRole('button', { name: '确定', exact: true }).click();
   for (let i = 0; i < 50; i++) {
     project = await getProject();
     if (project.candidates.length === 0) break;
@@ -163,31 +209,35 @@ try {
   assert.equal(project.chapters[0].revision, 3);
   assert.equal(project.chapters[0].revisions.at(-1).content, '这是一份必须保留的本地原稿。');
   await page.getByRole('button', { name: /^创作工作流$/ }).click();
-  await page.getByRole('button', { name: '新建工作流', exact: true }).click();
-  const workflowDialog = page.getByRole('dialog', { name: '新建工作流' });
-  await workflowDialog.getByLabel('工作流名称', { exact: true }).fill('独立世界观');
-  await workflowDialog.getByRole('button', { name: '创建工作流', exact: true }).click();
-  await page.getByText('工作流已创建', { exact: true }).waitFor();
-  const worldSession = await (await fetch(`${base}/api/platforms/session`)).json();
-  const worldProject = await getProject();
+  const createdWorldWorkflow = await fetch(`${base}/api/projects/${projectId}/workflows`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Platform-CSRF': session.csrfToken,
+    },
+    body: JSON.stringify({ name: '独立世界观', preset: 'world' }),
+  });
+  assert.equal(createdWorldWorkflow.status, 201);
+  const worldProject = await createdWorldWorkflow.json();
+  const chapterIdsBeforeWorldRun = worldProject.chapters.map((chapter) => chapter.id);
   const worldRun = await fetch(`${base}/api/projects/${projectId}/run`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Platform-CSRF': worldSession.csrfToken,
+      'X-Platform-CSRF': session.csrfToken,
       'Idempotency-Key': crypto.randomUUID(),
     },
-    body: JSON.stringify({ workflowId: worldProject.activeWorkflowId, target: { kind: 'single', number: 6 } }),
+    body: JSON.stringify({ workflowId: worldProject.activeWorkflowId, workflowMode: 'world' }),
   });
   assert.equal(worldRun.status, 202);
   project = await waitRun();
   assert.equal(project.workflows.at(-1).name, '独立世界观');
   assert.equal(project.chapters.length, 1);
-  await page.screenshot({ path: path.join(artifacts, 'chapters.png'), fullPage: true });
+  assert.deepEqual(project.chapters.map((chapter) => chapter.id), chapterIdsBeforeWorldRun);({ path: path.join(artifacts, 'chapters.png'), fullPage: true });
   await page.getByRole('button', { name: /^章节书稿(?:\s*\d+)?$/ }).click();
   await page.getByRole('button', { name: '同步此章到草稿', exact: true }).click();
   await page
-    .getByText('真实页面适配尚未验收', { exact: false })
+    .getByText('番茄支持人工登录、作者与作品读取、单章草稿保存、回读核验和明确确认后的草稿删除', { exact: false })
     .first()
     .waitFor({ timeout: 3000 })
     .catch(() => {});
@@ -195,7 +245,9 @@ try {
   const providers = await (await fetch(`${base}/api/platforms/providers`)).json();
   const tomato = providers.find((provider) => provider.id === 'tomato');
   assert.equal(tomato.capabilities.publishChapter, false);
-  assert.equal(tomato.capabilities.saveDraft, false);
+  assert.equal(tomato.capabilities.saveDraft, true);
+  assert.equal(tomato.capabilities.readDraft, true);
+  assert.equal(tomato.capabilities.deleteDraft, true);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(badResponses, []);
   console.log(
@@ -205,7 +257,9 @@ try {
         browser: process.env.SMOKE_BROWSER_CHANNEL || 'chromium',
         checks: [
           'production server from alternate cwd',
+          'hashed static asset cache headers',
           'CSRF rejection',
+          'isolated multi-workflow switching',
           'workflow settings',
           'single chapter 5',
           'persisted global and chapter requirements',
@@ -213,7 +267,7 @@ try {
           'regeneration preserves original',
           'explicit candidate adoption',
           'reload',
-          'platform remains unverified',
+          'platform supports verified draft capabilities and keeps publication disabled',
         ],
         artifacts,
       },

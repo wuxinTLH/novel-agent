@@ -5,6 +5,7 @@ import type { ProjectPlatformWorkLink, PlatformWork } from '../shared/platforms.
 import type { Store } from './store.js';
 import type { ConnectionRecord } from './platform-store.js';
 import { PlatformRuntime, publicOperation } from './platform-runtime.js';
+import { PublicationQueueError } from './publication-queue.js';
 import { PlatformError, unsupported } from './platforms-types.js';
 
 export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
@@ -46,6 +47,7 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
   router.use('/platforms', guarded);
   const base = '/projects/:projectId';
   for (const suffix of [
+    'platform-publication-batches',
     'platform-connections',
     'platform-login',
     'platform-works',
@@ -359,6 +361,7 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
     `${base}/platform-links/:linkId`,
     mutation(async (req) => {
       const link = linkFor(pid(req), String(req.params.linkId));
+      runtime.assertPublicationRemovable(pid(req), link.connectionId, link.remoteWorkId);
       if (
         runtime.platforms
           .draftOperations(pid(req))
@@ -378,6 +381,39 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
       return { ok: true };
     }),
   );
+  const batchBase = `${base}/platform-publication-batches`;
+  const batchFor = (req: Request) => {
+    const batch = runtime.publications.get(String(req.params.batchId));
+    if (batch.preview.target.projectId !== pid(req)) throw new PlatformError(404, 'PUBLICATION_NOT_FOUND', '发布队列不存在。');
+    return batch;
+  };
+  router.get(batchBase, (req, res) => res.json(runtime.publications.list(pid(req))));
+  router.get(`${batchBase}/volumes`, async (req, res) => {
+    runtime.assertProjectIdle(pid(req));
+    res.json(await runtime.publicationVolumes(pid(req), identifier.parse(req.query.linkId)));
+  });
+  router.post(`${batchBase}/prepare`, async (req, res) => {
+    const input = z.object({ linkId: identifier, chapterIds: z.array(identifier).min(1).max(50), action: z.enum(['save_draft', 'submit_review']), useAi: z.union([z.literal(1), z.literal(2)]).optional(), volumeId: identifier.optional(), autoApprove: z.boolean().default(false) }).strict().parse(req.body);
+    runtime.assertProjectIdle(pid(req));
+    res.status(201).json(await runtime.preparePublication(pid(req), input.linkId, input.chapterIds, input.action, input.useAi, input.volumeId, input.autoApprove));
+  });
+  for (const verb of ['start', 'resume'] as const) router.post(`${batchBase}/:batchId/${verb}`, (req, res) => {
+    const input = z.object({ approvalHash: z.string().regex(/^[a-f0-9]{64}$/), approved: z.literal(true).optional(), autoApprove: z.literal(true).optional() }).strict().refine(value => value.approved === true || value.autoApprove === true).parse(req.body);
+    const batch = batchFor(req);
+    if (!['queued', 'running', 'completed'].includes(batch.state)) runtime.assertProjectIdle(pid(req));
+    const requestId = `${pid(req)}:${operationKey(req)}`;
+    if (batch.state === 'preview') runtime.publications.approve(batch.id, input.approvalHash, { mode: input.autoApprove ? 'automatic' : 'manual', source: 'start' });
+    res.status(202).json(runtime.publications.start(batch.id, { approvalHash: input.approvalHash, requestId }));
+  });
+  router.post(`${batchBase}/:batchId/reconcile`, async (req, res) => {
+    z.object({}).strict().parse(req.body ?? {});
+    runtime.assertProjectIdle(pid(req));
+    res.json(await runtime.reconcilePublication(pid(req), batchFor(req).id));
+  });
+  router.post(`${batchBase}/:batchId/pause`, (req, res) => {
+    z.object({}).strict().parse(req.body);
+    res.json(runtime.publications.pause(batchFor(req).id));
+  });
   router.get(`${base}/platform-chapters`, (req, res) => res.json(runtime.chapterChoices(pid(req))));
   router.post(`${base}/platform-drafts/prepare`, async (req, res) => {
     const input = z.object({ linkId: identifier, chapterId: identifier }).strict().parse(req.body);
@@ -411,6 +447,13 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
     runtime.assertProjectIdle(pid(req));
     res.json(await runtime.reconcile(pid(req), String(req.params.operationId)));
   });
+  router.delete(`${base}/platform-operations/:operationId/draft`, async (req, res) => {
+    z.object({ approved: z.literal(true) })
+      .strict()
+      .parse(req.body ?? {});
+    runtime.assertProjectIdle(pid(req));
+    res.json(await runtime.deleteDraft(pid(req), String(req.params.operationId)));
+  });
   router.get(`${base}/platform-draft-receipts`, (req, res) => res.json(runtime.platforms.receipts(pid(req))));
   // Old clients cannot revive simulated publications or an implicit bulk-upload endpoint.
   router.post(`${base}/platform-publications`, (_req, _res) => {
@@ -422,16 +465,16 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
     );
   });
   router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    const status = error instanceof PlatformError ? error.status : error instanceof z.ZodError ? 400 : 500;
+    const status = error instanceof PlatformError ? error.status : error instanceof PublicationQueueError ? 409 : error instanceof z.ZodError ? 400 : 500;
     res.status(status).json({
       error:
-        error instanceof PlatformError
+        error instanceof PlatformError || error instanceof PublicationQueueError
           ? error.message
           : status === 400
             ? '平台请求参数无效。'
             : '平台操作失败，请检查本机配置；不要盲目重发草稿。',
       code:
-        error instanceof PlatformError
+        error instanceof PlatformError || error instanceof PublicationQueueError
           ? error.code
           : status === 400
             ? 'PLATFORM_VALIDATION_ERROR'

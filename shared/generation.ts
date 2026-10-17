@@ -72,6 +72,18 @@ export const runRequestSchema = z
     overwrite: z.boolean().optional(),
     settingTarget: z.enum(['world', 'character', 'plot']).optional(),
     instructions: z.string().trim().max(2000).optional(),
+    characterCount: z.number().int().min(1).max(100).optional(),
+    characterIndex: z.number().int().min(1).max(100).optional(),
+    characterProfile: z
+      .object({
+        name: z.string().trim().max(120).optional(),
+        gender: z.string().trim().max(40).optional(),
+        personality: z.string().trim().max(1000).optional(),
+        experience: z.string().trim().max(4000).optional(),
+        template: z.string().max(20000).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine(

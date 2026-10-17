@@ -12,7 +12,7 @@ import { SecretStore } from './secrets.js';
 import { PlatformStore } from './platform-store.js';
 import { PlatformRuntime } from './platform-runtime.js';
 import { createPlatformRouter } from './platform-routes.js';
-import { allowedFanqieNavigation, FanqieBrowser } from './fanqie-browser.js';
+import { allowedFanqieNavigation, FanqieBrowser, findAccount } from './fanqie-browser.js';
 import {
   PlatformError,
   type BrowserSessionState,
@@ -111,6 +111,9 @@ class FixtureBrowser implements DraftBrowserAdapter {
     _snapshot: DraftSnapshot,
   ) {
     return structuredClone([...this.drafts.values()]);
+  }
+  async deleteDraft(_connectionId: string, _state: BrowserSessionState, _workId: string, draftId: string) {
+    this.drafts.delete(draftId);
   }
   async closeConnection(_id: string) {}
   async close() {
@@ -240,11 +243,24 @@ test('v1 tomato impersonation is quarantined with original archives; pending gen
   }
 });
 
+test('fanqie identity resolves nested logged-in user state without accepting cookie-only evidence', () => {
+  assert.deepEqual(
+    findAccount({ store: { user: { id: 12345, nickname: '作者甲' } } }),
+    { accountId: '12345', accountName: '作者甲' },
+  );
+  assert.deepEqual(
+    findAccount({ data: { author_info: { author_id: 'author_123', author_name: '作者乙' } } }),
+    { accountId: 'author_123', accountName: '作者乙' },
+  );
+  assert.equal(findAccount({ cookie: 'sessionid=authenticated' }), undefined);
+});
+
 test('production browser is lazy and honestly gated; navigation does not accept arbitrary hosts', async () => {
   const browser = new FanqieBrowser();
   assert.equal(browser.readiness, 'ready');
   assert.equal(browser.loginOpen('never-started'), false);
   assert.ok(allowedFanqieNavigation('https://fanqienovel.com/main/writer/'));
+  assert.ok(allowedFanqieNavigation('https://fanqienovel.com/main/writer/book-manage'));
   for (const url of [
     'http://fanqienovel.com/',
     'https://fanqienovel.com.evil.test/',
@@ -310,6 +326,30 @@ test('approved single snapshot writes durable intent, reopens exact draft, dedup
   }
 });
 
+test('verified drafts can be explicitly deleted, reconciled locally, and recreated after deletion', async () => {
+  const dir = temporary();
+  const fixture = await connectedFixture(dir);
+  try {
+    const { runtime, project, browser, link } = fixture;
+    const preview = await runtime.prepare(project.id, link.id, 'fixture-chapter');
+    const operation = runtime.execute(project.id, preview.id, preview.snapshot.contentHash, randomUUID());
+    await runtime.waitForIdle();
+    assert.equal(runtime.platforms.draftOperation(project.id, operation.id)?.state, 'verified');
+    assert.equal(runtime.platforms.receipts(project.id).length, 1);
+    const deleted = await runtime.deleteDraft(project.id, operation.id);
+    assert.equal(deleted.state, 'deleted');
+    assert.equal(browser.drafts.size, 0);
+    assert.equal(runtime.platforms.receipts(project.id).length, 0);
+    const nextPreview = await runtime.prepare(project.id, link.id, 'fixture-chapter');
+    const next = runtime.execute(project.id, nextPreview.id, nextPreview.snapshot.contentHash, randomUUID());
+    await runtime.waitForIdle();
+    assert.notEqual(next.id, operation.id);
+    assert.equal(runtime.platforms.draftOperation(project.id, next.id)?.state, 'verified');
+  } finally {
+    await fixture.runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 test('timeout after remote save becomes unknown, never blind resend, read-only reconciliation verifies', async () => {
   const dir = temporary(),
     fixture = await connectedFixture(dir);

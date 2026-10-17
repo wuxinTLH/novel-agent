@@ -26,6 +26,14 @@ const workflowSchema = z
       .optional(),
     chapterCount: z.number().int().positive().optional(),
     autoGenerate: z.boolean().optional(),
+    automationMode: z.enum(['manual', 'automatic']).optional(),
+    publication: z.object({
+      enabled: z.boolean(),
+      linkId: z.string().trim().min(1).max(200),
+      volumeId: z.string().trim().min(1).max(200).optional(),
+      action: z.enum(['save_draft', 'submit_review']),
+      useAi: z.union([z.literal(1), z.literal(2)]).optional(),
+    }).strict().optional(),
     autoPublish: z.boolean().optional(),
     graphRevision: z.number().int().nonnegative().optional(),
   })
@@ -41,22 +49,25 @@ const chapterSchema = z
     revision: z.number().int().positive().optional(),
   })
   .passthrough();
-const storedRunSchema = z.object({
-  id: z.string(),
-  status: z.enum(['running', 'done', 'error', 'cancelled']),
-  mode: z.enum(['demo', 'live']),
-  startedAt: z.string(),
-  errorCode: z.string().optional(),
-  retryable: z.boolean().optional(),
-  admissionKey: z.string().optional(),
-  requestHash: z.string().optional(),
-}).passthrough();
+const storedRunSchema = z
+  .object({
+    id: z.string(),
+    status: z.enum(['running', 'done', 'error', 'cancelled']),
+    mode: z.enum(['demo', 'live']),
+    startedAt: z.string(),
+    errorCode: z.string().optional(),
+    retryable: z.boolean().optional(),
+    admissionKey: z.string().optional(),
+    requestHash: z.string().optional(),
+  })
+  .passthrough();
 const projectSchema = z
   .object({
     id: z.string().min(1),
     title: z.string(),
     genre: z.string(),
     description: z.string(),
+    coverUrl: z.string().startsWith('/uploads/').optional(),
     createdAt: z.string(),
     updatedAt: z.string(),
     steps: z.array(stepSchema),
@@ -88,7 +99,9 @@ const projectSchema = z
       .optional(),
     run: storedRunSchema.optional(),
     runHistory: z.array(storedRunSchema).optional(),
-    runAdmissions: z.record(z.string(), z.object({ requestHash: z.string(), runId: z.string() }).strict()).optional(),
+    runAdmissions: z
+      .record(z.string(), z.object({ requestHash: z.string(), runId: z.string() }).strict())
+      .optional(),
     requirements: requirementsSchema.optional(),
     chapterRequirements: chapterRequirementsSchema.optional(),
     chapterNumberHighWatermark: z.number().int().min(0).max(MAX_CHAPTER_NUMBER).optional(),

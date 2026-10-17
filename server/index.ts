@@ -13,6 +13,7 @@ import {
   type Project,
 } from '../shared/types.js';
 import {
+  createCharacterWorkflowGraph,
   createProject,
   createWorkflow,
   createWorkflowGraph,
@@ -38,7 +39,10 @@ import {
   acceptCandidateSchema,
 } from '../shared/generation.js';
 import { GenerationError, acceptCandidate, validateRequirements, resolveRequirements } from './generation.js';
+import { manualChapterRequestSchema } from '../shared/manual-chapters.js';
+import { addManualChapter } from './manual-chapters.js';
 import { validateGraph, downstreamIds } from './workflow-graph.js';
+import { completeWorkflowPublication } from './workflow-publication.js';
 import { PlatformRuntime } from './platform-runtime.js';
 import { appRoot, acquireDataLock } from './local-runtime.js';
 try {
@@ -52,7 +56,7 @@ const releaseDataLock = acquireDataLock(dir);
 process.once('exit', releaseDataLock);
 const store = new Store(dir);
 const platformRuntime = new PlatformRuntime(store);
-const runner = new Runner(store);
+const runner = new Runner(store, (project, run, workflow) => completeWorkflowPublication(store, platformRuntime, project, run, workflow));
 const models = new Map<string, RuntimeSettings>();
 const modelSecrets = new ModelSecretStore(dir);
 const defaultModelId = 'default';
@@ -61,10 +65,12 @@ const savedModelState = (() => {
   if (!fs.existsSync(modelsFile)) return { models: [] as RuntimeSettings[], activeModelId: '' };
   try {
     const parsed = JSON.parse(fs.readFileSync(modelsFile, 'utf8')) as
-      | RuntimeSettings[]
-      | { models?: RuntimeSettings[]; activeModelId?: string };
+      RuntimeSettings[] | { models?: RuntimeSettings[]; activeModelId?: string };
     if (Array.isArray(parsed)) return { models: parsed, activeModelId: '' };
-    return { models: Array.isArray(parsed.models) ? parsed.models : [], activeModelId: parsed.activeModelId || '' };
+    return {
+      models: Array.isArray(parsed.models) ? parsed.models : [],
+      activeModelId: parsed.activeModelId || '',
+    };
   } catch {
     return { models: [] as RuntimeSettings[], activeModelId: '' };
   }
@@ -80,8 +86,7 @@ const settings: RuntimeSettings = {
   activeModelId: savedModelState.activeModelId || savedDefault?.id || defaultModelId,
   protocol: normalizeProtocol(savedDefault?.protocol || process.env.MODEL_PROTOCOL),
 };
-if (!savedModels.length)
-  models.set(defaultModelId, { ...settings, id: defaultModelId, name: '默认模型' });
+if (!savedModels.length) models.set(defaultModelId, { ...settings, id: defaultModelId, name: '默认模型' });
 for (const model of savedModels) {
   const id = model.id || defaultModelId;
   const restoredKey = modelSecrets.get(id) || (id === defaultModelId ? process.env.MODEL_API_KEY || '' : '');
@@ -112,20 +117,30 @@ const saveModels = () => {
   fs.renameSync(modelsFile + '.tmp', modelsFile);
 };
 const app = express();
-const localOrigins = new Set([
-  `http://127.0.0.1:${port}`,
-  `http://localhost:${port}`,
-  'http://127.0.0.1:5173',
-  'http://localhost:5173',
-]);
+const privateHost = (hostname: string) =>
+  hostname === 'localhost' ||
+  hostname === '127.0.0.1' ||
+  hostname === '::1' ||
+  /^10\./.test(hostname) ||
+  /^192\.168\./.test(hostname) ||
+  /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname);
+const allowedOrigin = (value: string) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' && ['5173', String(port)].includes(url.port) && privateHost(url.hostname);
+  } catch {
+    return false;
+  }
+};
 app.use((req, res, next) => {
   const origin = req.get('origin');
+  const host = req.get('host') || '';
   if (
-    !localOrigins.has(`http://${req.get('host')}`) ||
-    (origin && !localOrigins.has(origin)) ||
+    !allowedOrigin(`http://${host}`) ||
+    (origin && !allowedOrigin(origin)) ||
     req.get('sec-fetch-site') === 'cross-site'
   )
-    return res.status(403).json({ error: '只允许指定的本机来源访问。', code: 'LOCAL_ORIGIN_REJECTED' });
+    return res.status(403).json({ error: '只允许本机或局域网来源访问。', code: 'LOCAL_ORIGIN_REJECTED' });
   if (req.path.startsWith('/api/')) {
     res.setHeader('Cache-Control', 'no-store');
     if (
@@ -263,12 +278,31 @@ const editableStepSchema = z
     prompt: z.string().max(12000),
     position: z.object({ x: z.number().finite(), y: z.number().finite() }),
     kind: z
-      .enum(['agent', 'start', 'end', 'audit', 'writer', 'custom', 'world', 'outline', 'plan', 'expand'])
+      .enum([
+        'agent',
+        'start',
+        'end',
+        'audit',
+        'writer',
+        'custom',
+        'world',
+        'outline',
+        'plan',
+        'expand',
+        'character',
+      ])
       .optional(),
     outputName: z.string().trim().max(120).optional(),
     modelId: z.string().optional(),
     assetIds: z.array(z.string()).max(100).optional(),
     enabled: z.boolean().optional(),
+    reusePreviousOutput: z.boolean().optional(),
+    characterName: z.string().max(120).optional(),
+    characterGender: z.string().max(40).optional(),
+    characterPersonality: z.string().max(1000).optional(),
+    characterExperience: z.string().max(4000).optional(),
+    characterCount: z.number().int().min(1).max(100).optional(),
+    characterTemplate: z.string().max(20000).optional(),
   })
   .strict();
 const edgesSchema = z
@@ -290,6 +324,14 @@ const editableWorkflowSchema = z
     outputName: z.string().trim().max(120).optional(),
     chapterCount: z.number().int().min(1).max(1000).optional(),
     autoGenerate: z.boolean().optional(),
+    automationMode: z.enum(['manual', 'automatic']).optional(),
+    publication: z.object({
+      enabled: z.boolean(),
+      linkId: z.string().trim().min(1).max(200),
+      volumeId: z.string().trim().min(1).max(200).optional(),
+      action: z.enum(['save_draft', 'submit_review']),
+      useAi: z.union([z.literal(1), z.literal(2)]).optional(),
+    }).strict().optional(),
   })
   .strict();
 function removeWorkflowItems(p: Project, nodeIds: string[], edgeIds: string[]) {
@@ -480,6 +522,7 @@ app.delete('/api/projects/:projectId', async (req, res) => {
   for (const asset of p.assets) {
     if (asset.url) fs.rmSync(path.join(dir, 'uploads', path.basename(asset.url)), { force: true });
   }
+  if (p.coverUrl) fs.rmSync(path.join(dir, 'uploads', path.basename(p.coverUrl)), { force: true });
   res.json(store.projects);
 });
 app.use('/api/projects/:projectId', (req, res, next) => {
@@ -497,6 +540,7 @@ app.patch('/api/projects/:projectId', (req, res) => {
     .object({
       ...graphScopeSchema,
       title: z.string().trim().min(1).max(80).optional(),
+      genre: z.string().trim().max(40).optional(),
       description: z.string().max(2000).optional(),
       steps: z
         .array(editableStepSchema.partial().required({ id: true }))
@@ -509,6 +553,7 @@ app.patch('/api/projects/:projectId', (req, res) => {
   const p = res.locals.project as Project;
   updateGraph(p, v, (draft) => {
     if (v.title !== undefined) draft.title = v.title;
+    if (v.genre !== undefined) draft.genre = v.genre;
     if (v.description !== undefined) draft.description = v.description;
     for (const update of v.steps || []) {
       const step = draft.steps.find((s) => s.id === update.id);
@@ -516,7 +561,9 @@ app.patch('/api/projects/:projectId', (req, res) => {
       const boundary = step.id === SYSTEM_START_NODE_ID || step.id === SYSTEM_END_NODE_ID;
       if (boundary && Object.keys(update).some((key) => key !== 'id' && key !== 'position'))
         throw inputError(400, 'SYSTEM_NODE_IMMUTABLE', '系统起止节点仅允许修改位置。');
-      const changesInput = Object.keys(update).some((key) => key !== 'id' && key !== 'position');
+      const changesInput = Object.keys(update).some(
+        (key) => key !== 'id' && key !== 'position' && key !== 'reusePreviousOutput',
+      );
       if (changesInput) invalidateSteps(draft, new Set([step.id, ...downstreamIds(draft, step.id)]));
       Object.assign(step, update);
       if (step.modelId === '') delete step.modelId;
@@ -527,7 +574,7 @@ app.patch('/api/projects/:projectId', (req, res) => {
       if (v.workflow.outputWriterNodeId === '') delete draft.workflow!.outputWriterNodeId;
       invalidateSteps(draft);
     }
-    if (v.title !== undefined || v.description !== undefined) invalidateSteps(draft);
+    if (v.title !== undefined || v.genre !== undefined || v.description !== undefined) invalidateSteps(draft);
   });
   res.json(p);
 });
@@ -592,6 +639,12 @@ app.post('/api/projects/:projectId/nodes', (req, res) => {
         ])
         .default('custom'),
       outputName: z.string().trim().max(120).optional(),
+      characterName: z.string().max(120).optional(),
+      characterGender: z.string().max(40).optional(),
+      characterPersonality: z.string().max(1000).optional(),
+      characterExperience: z.string().max(4000).optional(),
+      characterCount: z.number().int().min(1).max(100).optional(),
+      characterTemplate: z.string().max(20000).optional(),
       position: z.object({ x: z.number().finite(), y: z.number().finite() }).default({ x: 160, y: 160 }),
       modelId: z.string().optional(),
       assetIds: z.array(z.string()).max(100).optional(),
@@ -743,6 +796,36 @@ app.post('/api/projects/:projectId/assets/upload', upload.array('files', 10), (r
     s.status = 'idle';
   });
   persistProject(p);
+  res.status(201).json(p);
+});
+app.post('/api/projects/:projectId/cover', upload.single('cover'), (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: '请选择封面图片。' });
+  const ext = path.extname(file.originalname).toLowerCase();
+  const valid =
+    ext === '.png'
+      ? file.buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      : ext === '.webp'
+        ? file.buffer.toString('ascii', 0, 4) === 'RIFF' && file.buffer.toString('ascii', 8, 12) === 'WEBP'
+        : ['.jpg', '.jpeg'].includes(ext) &&
+          file.buffer[0] === 255 &&
+          file.buffer[1] === 216 &&
+          file.buffer[2] === 255;
+  if (!valid) return res.status(400).json({ error: '封面仅支持有效的 PNG、JPG 或 WebP 图片。' });
+  const p = res.locals.project as Project;
+  const id = randomUUID();
+  const url = `/uploads/${id}${ext}`;
+  fs.writeFileSync(path.join(dir, 'uploads', `${id}${ext}`), file.buffer);
+  const previous = p.coverUrl;
+  p.coverUrl = url;
+  try {
+    persistProject(p);
+  } catch (error) {
+    p.coverUrl = previous;
+    fs.rmSync(path.join(dir, 'uploads', `${id}${ext}`), { force: true });
+    throw error;
+  }
+  if (previous) fs.rmSync(path.join(dir, 'uploads', path.basename(previous)), { force: true });
   res.status(201).json(p);
 });
 app.post('/api/projects/:projectId/assets', (req, res) => {
@@ -905,6 +988,17 @@ const chapterScopeSchema = {
   expectedRevision: z.number().int().min(1),
   workflowId: z.string().min(1).optional(),
 };
+app.post('/api/projects/:projectId/chapters', (req, res) => {
+  const v = manualChapterRequestSchema.parse(req.body);
+  const p = res.locals.project as Project;
+  checkWorkflow(p, v);
+  let created = false;
+  mutateProject(p, (draft) => {
+    created = addManualChapter(draft, v).created;
+    if (created) invalidateSteps(draft);
+  });
+  res.status(created ? 201 : 200).json(p);
+});
 app.patch('/api/projects/:projectId/chapters/:chapterId', (req, res) => {
   const v = z
     .object({
@@ -977,7 +1071,7 @@ app.post('/api/projects/:projectId/workflows', (req, res) => {
     .object({
       name: z.string().trim().min(1).max(80).default('新工作流'),
       template: z.boolean().optional(),
-      preset: z.enum(['chapter', 'world', 'blank']).default('chapter'),
+      preset: z.enum(['chapter', 'world', 'character', 'blank']).default('chapter'),
     })
     .strict()
     .parse(req.body || {});
@@ -986,7 +1080,9 @@ app.post('/api/projects/:projectId/workflows', (req, res) => {
   const graph =
     v.preset === 'world'
       ? createWorldWorkflowGraph(v.name)
-      : createWorkflowGraph(v.name, v.preset === 'blank' ? false : v.template !== false);
+      : v.preset === 'character'
+        ? createCharacterWorkflowGraph(v.name)
+        : createWorkflowGraph(v.name, v.preset === 'blank' ? false : v.template !== false);
   p.workflows ||= [];
   p.workflows.push(graph);
   p.activeWorkflowId = graph.id;
@@ -1068,8 +1164,22 @@ app.delete('/api/projects/:projectId/workflows/:workflowId', (req, res) => {
 const staticDir = path.join(appRoot, 'dist');
 app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在。', code: 'NOT_FOUND' }));
 if (fs.existsSync(path.join(staticDir, 'index.html'))) {
-  app.use(express.static(staticDir));
-  app.get('/{*path}', (_req, res) => res.sendFile(path.join(staticDir, 'index.html')));
+  app.use(
+    express.static(staticDir, {
+      setHeaders(res, filePath) {
+        const fileName = path.basename(filePath);
+        if (/-[a-z0-9_-]{8,}\.(?:css|js|woff2?|png|jpe?g|svg|webp)$/i.test(fileName)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    }),
+  );
+  app.get('/{*path}', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(path.join(staticDir, 'index.html'));
+  });
 }
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const requestId = randomUUID();
@@ -1130,7 +1240,7 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
     requestId,
   });
 });
-const server = app.listen(port, '127.0.0.1', () => console.log(`Novel Agent API: http://127.0.0.1:${port}`));
+const server = app.listen(port, '0.0.0.0', () => console.log(`Novel Agent API: http://0.0.0.0:${port}`));
 let closing = false;
 async function shutdown() {
   if (closing) return;

@@ -1,3 +1,4 @@
+import ManualChapterModal from './components/ManualChapterModal';
 import { useConfirm } from './components/AppDialog';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
@@ -62,6 +63,8 @@ import GenerationProgress from './components/GenerationProgress';
 import Modal from './components/Modal';
 import AddNodeDialog from './components/AddNodeDialog';
 import ErrorBanner, { errorMessage } from './components/ErrorBanner';
+import ModelSettingsPanel from './components/ModelSettingsPanel';
+import ProjectSettingsPanel from './components/ProjectSettingsPanel';
 import { useChapterEditor } from './hooks/useChapterEditor';
 import {
   canApplyProject,
@@ -78,6 +81,7 @@ import { IMAGE_ASSET_MAX_BYTES, TEXT_ASSET_MAX_BYTES } from '../shared/limits';
 import {
   categories,
   categoryLabels,
+  DEFAULT_CHARACTER_TEMPLATE,
   type Asset,
   type Category,
   type Chapter,
@@ -86,14 +90,63 @@ import {
   type Project,
   type Step,
   type StepId,
-  protocolLabels,
   type Run,
   type RunRequest,
   type ChapterCandidate,
   type WorkflowGraph,
+  protocolLabels,
 } from '../shared/types';
-type Page = 'workflow' | 'assets' | 'chapters' | 'platforms' | 'settings';
+type Page =
+  | 'workflow'
+  | 'assets'
+  | 'chapters'
+  | 'platforms'
+  | 'settings'
+  | 'project-settings'
+  | 'character-workflow'
+  | 'world-workflow';
+type WorkflowPreset = 'chapter' | 'blank';
 type PendingRunSubmission = { key: string; request: RunRequest; requestHash: string };
+const routePages: Page[] = [
+  'workflow',
+  'assets',
+  'chapters',
+  'platforms',
+  'settings',
+  'project-settings',
+  'character-workflow',
+  'world-workflow',
+];
+function pageFromLocation(): Page | undefined {
+  const value = window.location.pathname.replace(/^\//, '') as Page;
+  return routePages.includes(value) ? value : undefined;
+}
+function isPresetWorkflow(graph: WorkflowGraph, preset: 'character' | 'world') {
+  const kinds = new Set<NonNullable<Step['kind']>>(graph.steps.map((step) => step.kind).filter(Boolean) as NonNullable<Step['kind']>[]);
+  if (preset === 'character') {
+    const blocked = ['world', 'expand', 'writer', 'audit', 'outline', 'plan'] as const;
+    return kinds.has('character') && !blocked.some((kind) => kinds.has(kind));
+  }
+  const blocked = ['character', 'writer', 'audit', 'outline', 'plan'] as const;
+  return kinds.has('world') && kinds.has('expand') && !blocked.some((kind) => kinds.has(kind));
+}
+type WorkflowFamily = 'chapter' | 'character' | 'world';
+function workflowFamily(graph: WorkflowGraph): WorkflowFamily | undefined {
+  if (isPresetWorkflow(graph, 'character')) return 'character';
+  if (isPresetWorkflow(graph, 'world')) return 'world';
+  const kinds = new Set(graph.steps.map((step) => step.kind));
+  if (kinds.has('character') || kinds.has('expand') || kinds.has('world')) return undefined;
+  return 'chapter';
+}
+function workflowFamilyForPage(page: Page): WorkflowFamily {
+  if (page === 'character-workflow') return 'character';
+  if (page === 'world-workflow') return 'world';
+  return 'chapter';
+}
+function workflowsForPage(project: Project, page: Page) {
+  const family = workflowFamilyForPage(page);
+  return (project.workflows || []).filter((graph) => workflowFamily(graph) === family);
+}
 const pendingRunMemory = new globalThis.Map<string, PendingRunSubmission>();
 function runSubmissionStorageKey(projectId: string) {
   return `novel-run-submission:${projectId}`;
@@ -145,6 +198,7 @@ const kindIcons: Partial<Record<NonNullable<Step['kind']>, LucideIcon>> = {
   plan: Layers3,
   writer: WandSparkles,
   audit: ShieldCheck,
+  character: UsersRound,
 };
 const nodePresets: Record<string, { title: string; subtitle: string; prompt: string }> = {
   world: {
@@ -322,18 +376,22 @@ export default function App() {
     [editAsset, setEditAsset] = useState<Asset | null>(null),
     [workflowConfig, setWorkflowConfig] = useState(false),
     [workflowCreator, setWorkflowCreator] = useState(false),
-    [platformGuide, setPlatformGuide] = useState(false);
+    [platformGuide, setPlatformGuide] = useState(false),
+    [profileSettings, setProfileSettings] = useState(false),
+    [workflowCreatorPreset, setWorkflowCreatorPreset] = useState<WorkflowPreset>('chapter');
   const [preview, setPreview] = useState<Asset | null>(null),
     [category, setCategory] = useState<Category>('world'),
     [filter, setFilter] = useState<Category | 'all'>('all'),
     [search, setSearch] = useState('');
   const chapterEditor = useChapterEditor(project, page === 'chapters');
   const { chapterId, editor, dirty, conflict: chapterConflict } = chapterEditor;
+  const [manualChapter, setManualChapter] = useState(false);
   const [generationEntry, setGenerationEntry] = useState<GenerationEntry | null>(null);
   const [platformChapterId, setPlatformChapterId] = useState('');
   const [inspectorTab, setInspectorTab] = useState<'config' | 'result'>('config'),
     [prompt, setPrompt] = useState('');
   const uploadRef = useRef<HTMLInputElement>(null),
+    avatarRef = useRef<HTMLInputElement>(null),
     activeId = useRef(''),
     activeIdentity = useRef(''),
     identityEpoch = useRef(0),
@@ -346,11 +404,45 @@ export default function App() {
     mutationPending = useRef(0),
     deleteInFlight = useRef(false),
     graphHistory = useRef<GraphSnapshot[]>([]),
-    restoringHistory = useRef(false);
+    restoringHistory = useRef(false),
+    presetRouteInFlight = useRef<string | null>(null);
   const projectId = project?.id,
     running = project?.run?.status === 'running';
   const projectSwitcherRef = useRef<HTMLDivElement>(null);
   const showToast = useCallback((message: string) => setToast(message), []);
+  const [avatarUrl, setAvatarUrl] = useState(() => localStorage.getItem('novel-avatar') || '');
+  const openWorkflowCreator = (preset: WorkflowPreset) => {
+    setError('');
+    setWorkflowCreatorPreset(preset);
+    setWorkflowCreator(true);
+  };
+  const openPresetWorkflow = (preset: 'character' | 'world') => {
+    const nextPage: Page = preset === 'character' ? 'character-workflow' : 'world-workflow';
+    void task(async () => {
+      const current = projectRef.current || project;
+      if (!current) throw new Error('请先选择作品。');
+      const graph = current.workflows?.find((item) => isPresetWorkflow(item, preset));
+      let updated = current;
+      if (!graph) {
+        updated = await projectRequest(`/projects/${current.id}/workflows`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: preset === 'character' ? '人物编写' : '世界观编写',
+            preset,
+          }),
+        }, true);
+      } else if (current.activeWorkflowId !== graph.id) {
+        updated = await projectRequest(`/projects/${current.id}/workflows/${graph.id}/select`, {
+          method: 'POST',
+        }, true);
+      }
+      if (!acceptProject(updated)) throw new Error('工作流已准备，但当前作品状态已变化，请刷新后重试。');
+      localStorage.setItem('novel-page', nextPage);
+      window.history.pushState({ page: nextPage }, '', `/${nextPage}`);
+      setPage(nextPage);
+      showToast(preset === 'character' ? '已打开人物工作流' : '已打开世界观工作流');
+    });
+  };
   useEffect(() => {
     if (toast) {
       const t = setTimeout(() => setToast(''), 4000);
@@ -415,8 +507,8 @@ export default function App() {
   );
   useEffect(() => {
     const sync = () => {
-      const next = window.location.pathname.replace(/^\//, '') as Page;
-      if (['workflow','assets','chapters','platforms','settings'].includes(next)) setPage(next);
+      const next = pageFromLocation();
+      if (next) setPage(next);
     };
     window.addEventListener('popstate', sync);
     return () => window.removeEventListener('popstate', sync);
@@ -432,15 +524,8 @@ export default function App() {
         setProjects(all);
         setSettings(s);
         const saved = localStorage.getItem('novel-project');
-        const savedPage = localStorage.getItem('novel-page');
-        if (
-          savedPage === 'workflow' ||
-          savedPage === 'assets' ||
-          savedPage === 'chapters' ||
-          savedPage === 'platforms' ||
-          savedPage === 'settings'
-        )
-          setPage(savedPage);
+        const savedPage = localStorage.getItem('novel-page') as Page;
+        setPage(pageFromLocation() || (routePages.includes(savedPage) ? savedPage : 'workflow'));
         const p = all.find((p) => p.id === saved) || all[0];
         if (p) activateProject(p);
       })
@@ -449,6 +534,43 @@ export default function App() {
       });
     return () => controller.abort();
   }, []);
+  useEffect(() => {
+    if (!project || !['workflow', 'character-workflow', 'world-workflow'].includes(page)) return;
+    const family = workflowFamilyForPage(page);
+    const preset = family === 'character' ? 'character' : family === 'world' ? 'world' : 'chapter';
+    const current = projectRef.current || project;
+    const existing = current.workflows?.find((item) => workflowFamily(item) === family);
+    if (existing && current.activeWorkflowId === existing.id) return;
+    const requestKey = `${current.id}:${family}`;
+    if (presetRouteInFlight.current === requestKey) return;
+    presetRouteInFlight.current = requestKey;
+    void task(async () => {
+      const updated = existing
+        ? await projectRequest(
+            `/projects/${current.id}/workflows/${existing.id}/select`,
+            { method: 'POST' },
+            true,
+          )
+        : await projectRequest(
+            `/projects/${current.id}/workflows`,
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                name: preset === 'character' ? '人物编写' : preset === 'world' ? '世界观编写' : '默认工作流',
+                preset,
+              }),
+            },
+            true,
+          );
+      if (!acceptProject(updated)) throw new Error('工作流已准备，但当前作品状态已变化，请刷新后重试。');
+    }).finally(() => {
+      if (presetRouteInFlight.current === requestKey) presetRouteInFlight.current = null;
+    });
+  }, [project, page, acceptProject, projectRequest]);
+  const visibleWorkflows = useMemo(
+    () => (project ? workflowsForPage(project, page) : []),
+    [project, page],
+  );
   useEffect(() => {
     if (!projectId || !running) return;
     let stopped = false;
@@ -689,6 +811,11 @@ export default function App() {
     });
     if (acceptProject(updated)) snapshotGraph(before);
   };
+  const saveCharacterSettings = (stepId: string, values: Record<string, unknown>) =>
+    void task(async () => {
+      await updateGraph({ steps: [{ id: stepId, ...values }] });
+      showToast('人物编写设置已保存');
+    });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z') return;
@@ -784,6 +911,45 @@ export default function App() {
       );
       showToast(`已添加 ${list.length} 份设定`);
       if (uploadRef.current) uploadRef.current.value = '';
+    });
+  const uploadCover = (file: File) =>
+    task(async () => {
+      if (!/\.(png|jpe?g|webp)$/i.test(file.name)) throw new Error('封面仅支持 PNG、JPG 或 WebP 图片');
+      if (file.size > IMAGE_ASSET_MAX_BYTES) throw new Error('封面图片不能超过 4 MiB');
+      const form = new FormData();
+      form.append('cover', file);
+      acceptProject(await projectRequest(`/projects/${projectId}/cover`, { method: 'POST', body: form }));
+      showToast('作品封面已更新');
+    });
+  const updateAvatar = (file: File) =>
+    task(async () => {
+      if (!file.type.startsWith('image/')) throw new Error('头像必须是图片文件');
+      if (file.size > 8 * 1024 * 1024) throw new Error('头像文件不能超过 8 MiB');
+      const source = await createImageBitmap(file);
+      if (source.width > 6000 || source.height > 6000) {
+        source.close();
+        throw new Error('头像图片尺寸不能超过 6000 × 6000 像素');
+      }
+      const size = 192;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('当前浏览器不支持头像处理');
+      const scale = Math.max(size / source.width, size / source.height);
+      context.drawImage(
+        source,
+        (size - source.width * scale) / 2,
+        (size - source.height * scale) / 2,
+        source.width * scale,
+        source.height * scale,
+      );
+      const dataUrl = canvas.toDataURL('image/webp', 0.86);
+      source.close();
+      localStorage.setItem('novel-avatar', dataUrl);
+      setAvatarUrl(dataUrl);
+      showToast('本地头像已更新');
+      if (avatarRef.current) avatarRef.current.value = '';
     });
   const selectChapter = async (c: Chapter) => {
     if (dirty && !(await confirmDialog('切换章节将丢弃未保存的修改，是否继续？'))) return;
@@ -1081,11 +1247,11 @@ export default function App() {
                 disabled={running || busy}
                 onClick={async () => {
                   setProjectSwitcherOpen(false);
-                  if (!dirty || (await confirmDialog('章节有未保存的修改，确定新建作品吗？')))
+                  if (!dirty || (await confirmDialog('章节有未保存的修改，确定创建小说吗？')))
                     setNewProject(true);
                 }}
               >
-                <Plus size={14} /> 新建作品
+                <Plus size={14} /> 创建小说
               </button>
             </div>
           )}
@@ -1093,24 +1259,46 @@ export default function App() {
         <button
           className="new-project"
           onClick={async () => {
-            if (!dirty || (await confirmDialog('章节有未保存的修改，确定新建作品吗？'))) setNewProject(true);
+            if (!dirty || (await confirmDialog('章节有未保存的修改，确定创建小说吗？'))) setNewProject(true);
           }}
         >
-          <Plus size={16} /> 新建作品
+          <Plus size={16} /> 创建小说
         </button>
         <nav>
           {(
             [
               { id: 'workflow', label: '创作工作流', icon: Network },
+              {
+                id: 'character-workflow',
+                label: '创建人物',
+                icon: UsersRound,
+              },
+              {
+                id: 'world-workflow',
+                label: '创建世界观',
+                icon: Globe2,
+              },
+              { id: 'project-settings', label: '小说设置', icon: Settings2 },
               { id: 'assets', label: '小说设定库', icon: FolderOpen },
               { id: 'chapters', label: '章节书稿', icon: BookOpen },
               { id: 'platforms', label: '平台作品', icon: Link2 },
             ] as const
           ).map((item) => (
             <button
+              type="button"
               key={item.id}
               className={page === item.id ? 'active' : ''}
-              onClick={() => navigate(item.id)}
+              onClick={() => {
+                if (item.id === 'character-workflow') {
+                  openPresetWorkflow('character');
+                  return;
+                }
+                if (item.id === 'world-workflow') {
+                  openPresetWorkflow('world');
+                  return;
+                }
+                void navigate(item.id as Page);
+              }}
             >
               <item.icon size={18} />
               {item.label}
@@ -1133,7 +1321,7 @@ export default function App() {
         </div>
         <div className="sidebar-bottom">
           <button className={page === 'settings' ? 'active' : ''} onClick={() => navigate('settings')}>
-            <Settings2 size={18} /> 模型设置
+            <Sparkles size={18} /> 模型设置
             <span className={`connection-dot ${settings.hasKey && settings.mode === 'live' ? 'live' : ''}`} />
           </button>
           <button onClick={() => setHelp(true)}>
@@ -1141,14 +1329,24 @@ export default function App() {
             <ArrowRight size={14} className="push-right" />
           </button>
           <div className="local-user">
-            <span className="user-avatar">N</span>
+            <button
+              className="user-avatar-button"
+              aria-label="自定义本地头像"
+              onClick={() => setProfileSettings(true)}
+            >
+              {avatarUrl ? (
+                <img className="user-avatar" src={avatarUrl} alt="本地头像" />
+              ) : (
+                <span className="user-avatar">N</span>
+              )}
+            </button>
             <div>
               本地创作空间
               <small>
                 <span className="green-dot" /> 数据保存在本机
               </small>
             </div>
-            <span className="version">v0.1</span>
+            <span className="version">v1.0.0a</span>
           </div>
         </div>
       </aside>
@@ -1162,11 +1360,16 @@ export default function App() {
             <strong>
               {
                 {
-                  workflow: '创作工作流',
+                  workflow:
+                    project.workflows?.find((graph) => graph.id === project.activeWorkflowId)?.name ||
+                    '创作工作流',
                   assets: '小说设定库',
                   chapters: '章节书稿',
                   platforms: '平台作品',
                   settings: '模型设置',
+                  'project-settings': '小说设置',
+                  'character-workflow': '人物工作流',
+                  'world-workflow': '世界观工作流',
                 }[page]
               }
             </strong>
@@ -1174,6 +1377,7 @@ export default function App() {
           <div className="topbar-right">
             <ThemeSwitcher />
             <button
+              type="button"
               className="icon-button quick-settings"
               aria-label="模型设置"
               onClick={() => navigate('settings')}
@@ -1184,10 +1388,36 @@ export default function App() {
               <span className="green-dot" />
               {running ? '工作流运行中' : '已保存至本地'}
             </span>
-            <button className="icon-button" aria-label="使用指南" onClick={() => setHelp(true)}>
+            <button
+              type="button"
+              className="icon-button help-trigger"
+              aria-label="使用指南"
+              aria-haspopup="dialog"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setHelp(true);
+              }}
+            >
               <CircleHelp size={18} />
             </button>
-            <span className="top-avatar">N</span>
+            <button
+              type="button"
+              className="top-avatar-button"
+              aria-label="自定义本地头像"
+              aria-haspopup="dialog"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setProfileSettings(true);
+              }}
+            >
+              {avatarUrl ? (
+                <img className="top-avatar" src={avatarUrl} alt="本地头像" />
+              ) : (
+                <span className="top-avatar">N</span>
+              )}
+            </button>
           </div>
         </header>
         <div className="page-content">
@@ -1202,7 +1432,13 @@ export default function App() {
                       ? 'MANUSCRIPT'
                       : page === 'platforms'
                         ? 'PLATFORM CONNECTION'
-                        : 'MODEL CONNECTION'}
+                        : page === 'settings'
+                        ? 'MODEL CONNECTION'
+                        : page === 'project-settings'
+                          ? 'NOVEL SETTINGS'
+                          : page === 'character-workflow'
+                            ? 'CHARACTER WORKFLOW'
+                            : 'WORLD WORKSPACE'}
               </div>
               <h1>
                 {
@@ -1212,6 +1448,9 @@ export default function App() {
                     chapters: '把灵感，写成下一章',
                     platforms: '为作品，连接新天地',
                     settings: '为灵感，连接动力',
+                    'project-settings': '让作品，更完整',
+                    'character-workflow': '让人物，从设定开始',
+                    'world-workflow': '让世界，从轮廓开始',
                   }[page]
                 }
               </h1>
@@ -1223,13 +1462,23 @@ export default function App() {
                     chapters: '生成、打磨、留存。在这里，让每一个字找到自己的位置。',
                     platforms: '人工选择账号、作品与一个已保存章节，确认后同步到外部草稿箱，不自动正式发布。',
                     settings: '连接你偏爱的模型服务，让每一个创作节点开始思考。',
+                    'project-settings': '集中管理小说名称、类型、简介和封面等作品设定。',
+                    'character-workflow': '独立管理人物资料、关系和人物弧光，不混入正文创作。',
+                    'world-workflow': '独立管理地理、规则、势力和时代背景，不混入正文创作。',
                   }[page]
                 }
               </p>
             </div>
             <div className="heading-actions">
-              {page === 'workflow' && (
+              {(page === 'workflow' || page === 'character-workflow' || page === 'world-workflow') && (
                 <>
+                  <button
+                    className="button secondary"
+                    disabled={running || busy}
+                    onClick={() => void navigate('project-settings')}
+                  >
+                    <Settings2 size={16} /> 小说设置
+                  </button>
                   <button className="button secondary" onClick={() => navigate('assets')}>
                     <Upload size={16} />
                     上传设定
@@ -1253,7 +1502,13 @@ export default function App() {
                       onClick={() => run()}
                     >
                       <Play size={15} fill="currentColor" />
-                      {writingWorkflow ? '运行工作流' : '运行世界观工作流'}
+                      {page === 'character-workflow'
+                        ? '运行人物工作流'
+                        : page === 'world-workflow'
+                          ? '运行世界观工作流'
+                          : writingWorkflow
+                            ? '运行工作流'
+                            : '运行世界观工作流'}
                     </button>
                   )}
                 </>
@@ -1344,11 +1599,15 @@ export default function App() {
               </button>
             </div>
           )}
-          {page === 'workflow' && (
+          {(page === 'workflow' || page === 'character-workflow' || page === 'world-workflow') && (
             <>
               <section className="project-strip">
                 <span className="book-cover">
-                  <BookOpen size={23} />
+                  {project.coverUrl ? (
+                    <img src={project.coverUrl} alt={`${project.title}封面`} />
+                  ) : (
+                    <BookOpen size={23} />
+                  )}
                 </span>
                 <div className="strip-title">
                   <h3>
@@ -1386,13 +1645,23 @@ export default function App() {
                       <span className="panel-dot" />
                       <strong>{project.workflow?.name || '小说创作工作流'}</strong>
                       <WorkflowSwitcher
-                        graphs={project.workflows || []}
-                        activeId={project.activeWorkflowId || project.workflows?.[0]?.id || ''}
+                        graphs={visibleWorkflows}
+                        activeId={
+                          visibleWorkflows.some((graph) => graph.id === project.activeWorkflowId)
+                            ? project.activeWorkflowId || ''
+                            : visibleWorkflows[0]?.id || ''
+                        }
                         disabled={running || busy}
                         onSelect={(id) =>
                           void task(async () => {
+                            if (!visibleWorkflows.some((graph) => graph.id === id))
+                              throw new Error('不能切换到其他类型的工作流。');
                             acceptProject(
-                              await projectRequest(`/projects/${project.id}/workflows/${id}/select`, { method: 'POST' }, true),
+                              await projectRequest(
+                                `/projects/${project.id}/workflows/${id}/select`,
+                                { method: 'POST' },
+                                true,
+                              ),
                             );
                             showToast('已切换工作流');
                           })
@@ -1403,9 +1672,9 @@ export default function App() {
                       <button
                         className="button secondary compact"
                         disabled={running || busy}
-                        onClick={() => setWorkflowCreator(true)}
+                        onClick={() => openWorkflowCreator('chapter')}
                       >
-                        <Plus size={14} /> 新建工作流
+                        <Plus size={14} /> 创建小说
                       </button>
                       <select
                         aria-label="整理节点"
@@ -1447,7 +1716,7 @@ export default function App() {
                       >
                         <Settings2 size={14} /> 工作流设置
                       </button>
-                      {(project.workflows?.length || 0) > 1 && (
+                      {visibleWorkflows.length > 1 && (
                         <button
                           className="button secondary compact"
                           disabled={running || busy}
@@ -1627,6 +1896,60 @@ export default function App() {
                               });
                             }}
                           />
+                          {step.kind === 'character' && (
+                            <div className="character-node-settings">
+                              <label className="field-label">人物数量 <span>纯随机可批量生成</span></label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={100}
+                                defaultValue={step.characterCount || 1}
+                                disabled={running || busy}
+                                onBlur={(event) =>
+                                  saveCharacterSettings(step.id, {
+                                    characterCount: Math.max(1, Math.min(100, Number(event.target.value) || 1)),
+                                  })
+                                }
+                              />
+                              <label className="field-label">名字 <span>不填则随机</span></label>
+                              <input
+                                defaultValue={step.characterName || ''}
+                                disabled={running || busy}
+                                placeholder="不填则随机生成"
+                                onBlur={(event) => saveCharacterSettings(step.id, { characterName: event.target.value.trim() })}
+                              />
+                              <label className="field-label">性别 <span>留空则随机男女</span></label>
+                              <input
+                                defaultValue={step.characterGender || ''}
+                                disabled={running || busy}
+                                placeholder="不填则随机男女"
+                                onBlur={(event) => saveCharacterSettings(step.id, { characterGender: event.target.value.trim() })}
+                              />
+                              <label className="field-label">性格 <span>留空则随机</span></label>
+                              <textarea
+                                defaultValue={step.characterPersonality || ''}
+                                disabled={running || busy}
+                                rows={2}
+                                placeholder="不填则根据世界设定随机"
+                                onBlur={(event) => saveCharacterSettings(step.id, { characterPersonality: event.target.value.trim() })}
+                              />
+                              <label className="field-label">经历 <span>填写部分内容以补全</span></label>
+                              <textarea
+                                defaultValue={step.characterExperience || ''}
+                                disabled={running || busy}
+                                rows={3}
+                                placeholder="例如：曾在边境军团服役"
+                                onBlur={(event) => saveCharacterSettings(step.id, { characterExperience: event.target.value.trim() })}
+                              />
+                              <label className="field-label">人物模板 <span>按模板结构补全</span></label>
+                              <textarea
+                                defaultValue={step.characterTemplate || DEFAULT_CHARACTER_TEMPLATE}
+                                disabled={running || busy}
+                                rows={12}
+                                onBlur={(event) => saveCharacterSettings(step.id, { characterTemplate: event.target.value })}
+                              />
+                            </div>
+                          )}
                           <label className="field-label">
                             节点模型 <span>可为不同节点指定模型</span>
                           </label>
@@ -1648,6 +1971,31 @@ export default function App() {
                               </option>
                             ))}
                           </select>
+                          {step.kind !== 'writer' && step.id !== 'draft' && (
+                            <label className="reuse-previous-output">
+                              <input
+                                type="checkbox"
+                                checked={!!step.reusePreviousOutput}
+                                disabled={running || busy || !step.output.trim()}
+                                onChange={(event) =>
+                                  void task(async () => {
+                                    await updateGraph({
+                                      steps: [{ id: selected, reusePreviousOutput: event.target.checked }],
+                                    });
+                                    showToast(event.target.checked ? '已启用前次解析' : '已关闭前次解析');
+                                  })
+                                }
+                              />
+                              <span>
+                                <strong>使用前一次 AI 解析</strong>
+                                <small>
+                                  {step.output.trim()
+                                    ? '开启后跳过此节点的模型请求，沿用当前结果'
+                                    : '该节点尚无可复用结果'}
+                                </small>
+                              </span>
+                            </label>
+                          )}
                           <label className="field-label">
                             关联设定 <span>留空则使用全部设定</span>
                           </label>
@@ -1811,8 +2159,12 @@ export default function App() {
                             : '先设定世界，再让故事发生'}
                     </strong>
                     <p>
-                      {project.run?.error ||
-                        (project.run?.status === 'done'
+                      {project.run?.error || project.run?.publication?.error ||
+                        (project.run?.publication?.state === 'queued'
+                          ? `自动远端队列已创建（${project.run.publication.batchId}），请到平台作品页查看上传 / 送审结果。`
+                          : project.run?.publication?.state === 'pending'
+                          ? '正在接续远端自动队列；若服务中断请到平台页只读核对，不要重复启动。'
+                          : project.run?.status === 'done'
                           ? '前往章节书稿继续编辑，或选择节点查看结果。'
                           : '补充人物、地图和剧情走向，让 Agent 更懂你想讲述的故事。')}
                     </p>
@@ -2003,6 +2355,13 @@ export default function App() {
           )}
           {page === 'chapters' && (
             <>
+              <div className="section-toolbar">
+                <button className="button primary" disabled={busy || running} onClick={async () => {
+                  if (dirty && !(await confirmDialog('当前章节有未保存修改。请先保存，或确认放弃后添加新章节。'))) return;
+                  if (dirty) chapterEditor.resetEditor(project.chapters);
+                  setManualChapter(true);
+                }}><Plus size={16}/> 添加正文（上传 / 手动编写）</button>
+              </div>
               <GenerationProgress
                 run={project.run}
                 savedChapters={project.chapters.length}
@@ -2190,12 +2549,14 @@ export default function App() {
             <PlatformPanel
               key={project.id}
               projectId={project.id}
+              workflow={project.workflow}
+              onProjectChange={(updated: Project) => { acceptProject(updated); }}
               running={running}
               selectedChapterId={platformChapterId || undefined}
             />
           )}
           {page === 'settings' && (
-            <SettingsPanel
+            <ModelSettingsPanel
               settings={settings}
               busy={busy}
               onSettingsChange={setSettings}
@@ -2210,6 +2571,27 @@ export default function App() {
               }
             />
           )}
+          {page === 'project-settings' && (
+            <ProjectSettingsPanel
+              project={project}
+              busy={busy}
+              error={error}
+              onError={setError}
+              onUploadCover={uploadCover}
+              onSave={(values) =>
+                void task(async () => {
+                  acceptProject(
+                    await projectRequest(`/projects/${project.id}`, {
+                      method: 'PATCH',
+                      body: JSON.stringify(values),
+                    }),
+                  );
+                  setError('');
+                  showToast('小说设置已保存');
+                })
+              }
+            />
+          )}
         </div>
       </main>
       {toast && (
@@ -2218,6 +2600,19 @@ export default function App() {
           {toast}
         </div>
       )}
+      {manualChapter && <ManualChapterModal key={`${project.id}:${project.workflow?.id}`} project={project} busy={busy || !!running} onClose={() => setManualChapter(false)} onSave={async input => {
+        if (taskInFlight.current) throw new Error('其他保存操作正在进行，请稍后重试。');
+        taskInFlight.current = true;
+        setBusy(true);
+        try {
+          const saved = await projectRequest(`/projects/${project.id}/chapters`, {method:'POST', body:JSON.stringify(input)});
+          if (!acceptProject(saved)) throw new Error('当前作品已切换，请返回原作品查看保存结果。');
+          const added = saved.chapters.find(chapter => chapter.manualRequestId === input.requestId);
+          if (added) chapterEditor.selectChapter(added);
+          setManualChapter(false);
+          showToast('正文已添加，可继续编辑或到平台页上传');
+        } finally { taskInFlight.current = false; setBusy(false); }
+      }}/ >}
       {generationEntry && (
         <GenerationModal
           key={`${project.id}/${workflowIdOf(project)}`}
@@ -2280,7 +2675,8 @@ export default function App() {
                 throw new Error('运行已提交，但当前作品已切换；请返回原作品查看状态，不要重复提交。');
               clearPendingRunSubmission(projectKey);
               setGenerationEntry(null);
-              setPage('workflow');
+              localStorage.setItem('novel-page', page);
+              setPage(page);
               setInspectorTab('result');
               if (request.stepId) setSelected(request.stepId);
               showToast(
@@ -2311,7 +2707,8 @@ export default function App() {
                 if (receipt?.project && acceptProject(receipt.project)) {
                   clearPendingRunSubmission(projectKey);
                   setGenerationEntry(null);
-                  setPage('workflow');
+                  localStorage.setItem('novel-page', page);
+                  setPage(page);
                   setInspectorTab('result');
                   showToast('已核对到这次运行，未重复提交');
                   return;
@@ -2334,7 +2731,7 @@ export default function App() {
         />
       )}
       {newProject && (
-        <Modal busy={busy} error={error} title="开启一个新故事" close={() => setNewProject(false)}>
+        <Modal busy={busy} error={error} title="创建小说" close={() => setNewProject(false)}>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -2382,10 +2779,44 @@ export default function App() {
               />
             </label>
             <button className="button primary full" disabled={busy}>
-              创建作品
+              创建小说
               <ArrowRight size={16} />
             </button>
           </form>
+        </Modal>
+      )}
+      {profileSettings && (
+        <Modal title="本地头像" close={() => setProfileSettings(false)} busy={busy}>
+          <div className="profile-avatar-editor">
+            {avatarUrl ? <img src={avatarUrl} alt="当前本地头像" /> : <span>N</span>}
+            <p>头像仅保存在此浏览器，不会上传到服务器。</p>
+          </div>
+          <input
+            ref={avatarRef}
+            className="visually-hidden"
+            type="file"
+            accept="image/*"
+            onChange={(event) => event.target.files?.[0] && void updateAvatar(event.target.files[0])}
+          />
+          <div className="modal-actions">
+            <button type="button" className="button primary" onClick={() => avatarRef.current?.click()}>
+              <Upload size={15} />
+              选择头像
+            </button>
+            {avatarUrl && (
+                <button
+                  type="button"
+                  className="button secondary"
+                onClick={() => {
+                  localStorage.removeItem('novel-avatar');
+                  setAvatarUrl('');
+                  setProfileSettings(false);
+                }}
+              >
+                恢复默认
+              </button>
+            )}
+          </div>
         </Modal>
       )}
       {addAsset && (
@@ -2520,24 +2951,32 @@ export default function App() {
         />
       )}
       {workflowCreator && (
-        <Modal title="新建工作流" close={() => setWorkflowCreator(false)} busy={busy}>
+        <Modal
+          title="创建小说工作流"
+          close={() => setWorkflowCreator(false)}
+          busy={busy}
+          error={error}
+        >
           <form
             onSubmit={(event) => {
               event.preventDefault();
               const data = new FormData(event.currentTarget);
+              setError('');
               void task(async () => {
-                acceptProject(
-                  await projectRequest(
-                    `/projects/${project.id}/workflows`,
-                    {
-                      method: 'POST',
-                      body: JSON.stringify({ name: data.get('name'), preset: data.get('preset') }),
-                    },
-                    true,
-                  ),
+                const created = await projectRequest(
+                  `/projects/${project.id}/workflows`,
+                  {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      name: String(data.get('name') || '').trim(),
+                      preset: workflowCreatorPreset,
+                    }),
+                  },
+                  true,
                 );
+                if (!acceptProject(created)) throw new Error('工作流已创建，但当前作品状态已变化，请刷新后查看。');
                 setWorkflowCreator(false);
-                showToast('工作流已创建');
+                showToast('小说工作流已创建');
               });
             }}
           >
@@ -2547,23 +2986,36 @@ export default function App() {
                 name="name"
                 required
                 maxLength={80}
-                defaultValue={`工作流 ${(project.workflows?.length || 0) + 1}`}
+                defaultValue={
+                  `小说 ${(project.workflows?.length || 0) + 1}`
+                }
               />
             </label>
             <fieldset className="node-presets">
               <legend>工作流类型</legend>
               <label className="workflow-choice">
-                <input type="radio" name="preset" value="world" defaultChecked /> 世界观编写（不生成章节）
+                <input
+                  type="radio"
+                  name="preset"
+                  value="chapter"
+                  checked={workflowCreatorPreset === 'chapter'}
+                  onChange={() => setWorkflowCreatorPreset('chapter')}
+                />{' '}
+                小说章节创作模板
               </label>
               <label className="workflow-choice">
-                <input type="radio" name="preset" value="chapter" /> 章节创作模板
-              </label>
-              <label className="workflow-choice">
-                <input type="radio" name="preset" value="blank" /> 空白工作流
+                <input
+                  type="radio"
+                  name="preset"
+                  value="blank"
+                  checked={workflowCreatorPreset === 'blank'}
+                  onChange={() => setWorkflowCreatorPreset('blank')}
+                />{' '}
+                空白小说工作流
               </label>
             </fieldset>
             <button className="button primary full" disabled={busy}>
-              <Plus size={15} /> 创建工作流
+              <Plus size={15} /> 创建
             </button>
           </form>
         </Modal>
@@ -2582,6 +3034,7 @@ export default function App() {
                     ...graphScope(),
                     chapterCount: Number(f.get('chapterCount')),
                     autoGenerate: f.get('autoGenerate') === 'on',
+                    automationMode: String(f.get('automationMode') || 'manual'),
                     auditNodeId: String(f.get('auditNodeId') || ''),
                     outputName: String(f.get('outputName') || ''),
                   }),
@@ -2606,8 +3059,16 @@ export default function App() {
               <input name="autoGenerate" type="checkbox" defaultChecked={project.workflow?.autoGenerate} />
               使用该章数作为续写默认值
             </label>
+            <label>
+              执行模式
+              <select name="automationMode" defaultValue={project.workflow?.automationMode || 'manual'}>
+                <option value="manual">手动采用重生成候选</option>
+                <option value="automatic">全自动 · 启动后无需逐章确认</option>
+              </select>
+            </label>
             <p className="info-note">
-              开始和结束节点由系统固定。该章数仅作为生成对话框的续写默认值，每次运行仍需确认；不执行自动同步或正式发布。
+              全自动模式启动后连续执行所选章节，审校完成且硬性文本校验通过时自动保存、采用重生成版本；校验、审校或版本冲突会立即停止并保留恢复稿，不跳过安全检查。
+              自动模式使用上方章数作为续写默认值。自动上传需要在平台同步页显式绑定目标、分卷和动作；未配置时仅生成，不会自动发布。
             </p>
             <label>
               {writingWorkflow ? '默认章节名称' : '世界观名称'}
@@ -3035,6 +3496,10 @@ function SettingsPanel({
   }[protocol];
   const selectModel = (id: string) =>
     mutateModel(() => api<ModelSettings>(`/models/${id}/select`, { method: 'POST' }));
+  const cancelNewModel = () => {
+    setShowModelForm(false);
+    setNewProtocol('chat-completions');
+  };
   return (
     <div className="settings-layout">
       <form
@@ -3047,206 +3512,274 @@ function SettingsPanel({
           setKey('');
         }}
       >
-        <div className="settings-heading">
+        <div className="settings-heading legacy-settings-heading">
           <span className="icon-box draft">
             <Sparkles size={22} />
           </span>
           <div>
-            <h3>模型连接</h3>
-            <p>选择官方协议：Responses、Chat Completions 或 Anthropic Messages</p>
+            <h3>模型设置</h3>
+            <p>连接参数只作用于当前选中的模型。</p>
           </div>
         </div>
-        <label className="field-label">运行方式</label>
-        <div className="mode-options">
-          <button type="button" className={mode === 'demo' ? 'active' : ''} onClick={() => setMode('demo')}>
-            <WandSparkles size={19} />
-            <strong>演示模式</strong>
-            <small>无需密钥，体验创作流程</small>
-            {mode === 'demo' && <Check size={16} />}
-          </button>
-          <button type="button" className={mode === 'live' ? 'active' : ''} onClick={() => setMode('live')}>
-            <Sparkles size={19} />
-            <strong>连接模型</strong>
-            <small>使用 AI 生成小说内容</small>
-            {mode === 'live' && <Check size={16} />}
-          </button>
-        </div>
-        <label>
-          服务地址 <span>Base URL</span>
-          <input
-            name="baseUrl"
-            type="url"
-            required
-            value={baseUrl}
-            onChange={(event) => setBaseUrl(event.target.value)}
-            placeholder="https://api.openai.com/v1"
-          />
-          <small>填写 API 基础地址。协议路径由所选模式自动追加，无需手填 endpoint。</small>
-        </label>
-        <label>
-          接口协议
-          <select
-            name="protocol"
-            value={protocol}
-            onChange={(e) => setProtocol(e.target.value as ModelProtocol)}
-          >
-            <option value="responses">Responses API</option>
-            <option value="chat-completions">Chat Completions</option>
-            <option value="anthropic-messages">Anthropic Messages</option>
-          </select>
-          <small>{protocolHint}</small>
-        </label>
-        <div className="model-list-heading">
-          <label className="field-label">
-            模型列表 <span>可切换不同服务商与路由</span>
+        <section
+          className="active-model-config active-connection-config"
+          aria-labelledby="active-connection-title"
+        >
+          <div className="model-section-heading">
+            <div>
+              <h4 id="active-connection-title">当前连接方式</h4>
+              <p>{modelList.find((item) => item.id === settings.activeModelId)?.name || '未选择模型'}</p>
+            </div>
+            <span className="subtle-tag">连接配置</span>
+          </div>
+          <label className="field-label">运行方式</label>
+          <div className="mode-options">
+            <button type="button" className={mode === 'demo' ? 'active' : ''} onClick={() => setMode('demo')}>
+              <WandSparkles size={19} />
+              <strong>演示模式</strong>
+              <small>无需密钥，体验创作流程</small>
+              {mode === 'demo' && <Check size={16} />}
+            </button>
+            <button type="button" className={mode === 'live' ? 'active' : ''} onClick={() => setMode('live')}>
+              <Sparkles size={19} />
+              <strong>连接模型</strong>
+              <small>使用 AI 生成小说内容</small>
+              {mode === 'live' && <Check size={16} />}
+            </button>
+          </div>
+          <label>
+            服务地址 <span>Base URL</span>
+            <input
+              name="baseUrl"
+              type="url"
+              required
+              value={baseUrl}
+              onChange={(event) => setBaseUrl(event.target.value)}
+              placeholder="https://api.openai.com/v1"
+            />
+            <small>填写 API 基础地址。协议路径由所选模式自动追加，无需手填 endpoint。</small>
           </label>
-          <button type="button" className="text-button" onClick={() => setShowModelForm((v) => !v)}>
-            <Plus size={14} /> 添加模型
-          </button>
-        </div>
-        <div className="model-list">
-          {modelList.map((m) => (
-            <div className={`model-list-item ${settings.activeModelId === m.id ? 'active' : ''}`} key={m.id}>
-              <div>
-                <strong>{m.name}</strong>
-                <small>
-                  {protocolLabels[m.protocol] || m.protocol} · {m.model} · {m.baseUrl}
-                </small>
-              </div>
-              <button
-                type="button"
-                className="button secondary"
-                disabled={modelBusy || busy}
-                onClick={() => void selectModel(m.id)}
+          <label>
+            接口协议
+            <select
+              name="protocol"
+              value={protocol}
+              onChange={(e) => setProtocol(e.target.value as ModelProtocol)}
+            >
+              <option value="responses">Responses API</option>
+              <option value="chat-completions">Chat Completions</option>
+              <option value="anthropic-messages">Anthropic Messages</option>
+            </select>
+            <small>{protocolHint}</small>
+          </label>
+        </section>
+        <section className="model-management" aria-labelledby="model-management-title">
+          <div className="model-list-heading">
+            <div>
+              <h4 id="model-management-title">已保存模型</h4>
+              <p>在这里切换或删除服务商配置，不会直接改动当前连接参数。</p>
+            </div>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => (showModelForm ? cancelNewModel() : setShowModelForm(true))}
+            >
+              {showModelForm ? <X size={14} /> : <Plus size={14} />}
+              {showModelForm ? '关闭新增' : '添加模型'}
+            </button>
+          </div>
+          <div className="model-list">
+            {modelList.map((m) => (
+              <div
+                className={`model-list-item ${settings.activeModelId === m.id ? 'active' : ''}`}
+                key={m.id}
               >
-                {settings.activeModelId === m.id ? '使用中' : '切换'}
-              </button>
+                <div className="model-list-copy">
+                  <strong>{m.name}</strong>
+                  <small>
+                    {protocolLabels[m.protocol] || m.protocol} · {m.model} · {m.baseUrl}
+                  </small>
+                </div>
+                <div className="model-list-actions">
+                  <button
+                    type="button"
+                    className="button secondary"
+                    disabled={modelBusy || busy}
+                    onClick={() => void selectModel(m.id)}
+                  >
+                    {settings.activeModelId === m.id ? '当前使用' : '切换使用'}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button delete"
+                    aria-label={`删除模型 ${m.name}`}
+                    disabled={modelBusy || busy}
+                    onClick={async () => {
+                      if (!(await confirmDialog(`确定删除模型「${m.name}」吗？`))) return;
+                      await mutateModel(async () => {
+                        await api(`/models/${m.id}`, { method: 'DELETE' });
+                        return api<ModelSettings>('/settings');
+                      });
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {showModelForm && (
+            <div className="model-form">
+              <div className="model-form-heading">
+                <div>
+                  <h4>新增模型配置</h4>
+                  <p>保存后会出现在上方列表，可随时切换使用。</p>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="取消新增模型"
+                  disabled={modelBusy || busy}
+                  onClick={cancelNewModel}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <label>
+                显示名称
+                <input form="new-model-form" data-model-field="name" required placeholder="例如：本地 Qwen" />
+              </label>
+              <label>
+                完整服务地址
+                <input
+                  data-model-field="baseUrl"
+                  form="new-model-form"
+                  type="url"
+                  required
+                  placeholder="https://api.openai.com/v1"
+                />
+              </label>
+              <label>
+                接口协议
+                <select
+                  data-model-field="protocol"
+                  form="new-model-form"
+                  value={newProtocol}
+                  onChange={(e) => setNewProtocol(e.target.value as ModelProtocol)}
+                >
+                  <option value="responses">Responses API</option>
+                  <option value="chat-completions">Chat Completions</option>
+                  <option value="anthropic-messages">Anthropic Messages</option>
+                </select>
+              </label>
+              <label>
+                模型 ID
+                <input form="new-model-form" data-model-field="model" required placeholder="gpt-4.1-mini" />
+              </label>
+              <label>
+                API Key
+                <input form="new-model-form" data-model-field="apiKey" type="password" autoComplete="off" />
+              </label>
+              <p className="info-note">
+                {newProtocol === 'anthropic-messages'
+                  ? 'Anthropic 将使用 x-api-key 与 anthropic-version: 2023-06-01。'
+                  : newProtocol === 'responses'
+                    ? 'Responses 将请求 /responses，并使用 input / max_output_tokens。'
+                    : 'Chat Completions 将请求 /chat/completions，并使用 messages / max_tokens。'}
+              </p>
               <button
                 type="button"
-                className="icon-button delete"
-                aria-label={`删除模型 ${m.name}`}
+                className="button primary full"
                 disabled={modelBusy || busy}
-                onClick={async () => {
-                  if (!(await confirmDialog(`确定删除模型「${m.name}」吗？`))) return;
+                onClick={async (e) => {
+                  const container = e.currentTarget.closest('.model-form')!;
+                  const fields = Array.from(
+                    container.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-model-field]'),
+                  );
+                  if (fields.some((field) => !field.checkValidity())) {
+                    fields.find((field) => !field.checkValidity())?.reportValidity();
+                    return;
+                  }
+                  const values = Object.fromEntries(
+                    fields.map((field) => [field.dataset.modelField!, field.value]),
+                  );
                   await mutateModel(async () => {
-                    await api(`/models/${m.id}`, { method: 'DELETE' });
-                    return api<ModelSettings>('/settings');
+                    await api('/models', { method: 'POST', body: JSON.stringify(values) });
+                    const canonical = await api<ModelSettings>('/settings');
+                    setShowModelForm(false);
+                    return canonical;
                   });
                 }}
               >
-                <Trash2 size={14} />
+                <Check size={15} />
+                保存并加入模型列表
+              </button>
+              <button
+                type="button"
+                className="button secondary full model-form-cancel"
+                disabled={modelBusy || busy}
+                onClick={cancelNewModel}
+              >
+                取消新增
               </button>
             </div>
-          ))}
-        </div>
-        {showModelForm && (
-          <div className="model-form">
-            <label>
-              显示名称
-              <input data-model-field="name" required placeholder="例如：本地 Qwen" />
-            </label>
-            <label>
-              完整服务地址
-              <input data-model-field="baseUrl" type="url" required placeholder="https://api.openai.com/v1" />
-            </label>
-            <label>
-              接口协议
-              <select
-                data-model-field="protocol"
-                value={newProtocol}
-                onChange={(e) => setNewProtocol(e.target.value as ModelProtocol)}
-              >
-                <option value="responses">Responses API</option>
-                <option value="chat-completions">Chat Completions</option>
-                <option value="anthropic-messages">Anthropic Messages</option>
-              </select>
-            </label>
-            <label>
-              模型 ID
-              <input data-model-field="model" required placeholder="gpt-4.1-mini" />
-            </label>
-            <label>
-              API Key
-              <input data-model-field="apiKey" type="password" autoComplete="off" />
-            </label>
-            <p className="info-note">
-              {newProtocol === 'anthropic-messages'
-                ? 'Anthropic 将使用 x-api-key 与 anthropic-version: 2023-06-01。'
-                : newProtocol === 'responses'
-                  ? 'Responses 将请求 /responses，并使用 input / max_output_tokens。'
-                  : 'Chat Completions 将请求 /chat/completions，并使用 messages / max_tokens。'}
-            </p>
-            <button
-              type="button"
-              className="button primary full"
-              disabled={modelBusy || busy}
-              onClick={async (e) => {
-                const container = e.currentTarget.closest('.model-form')!;
-                const fields = Array.from(
-                  container.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-model-field]'),
-                );
-                if (fields.some((field) => !field.checkValidity())) {
-                  fields.find((field) => !field.checkValidity())?.reportValidity();
-                  return;
-                }
-                const values = Object.fromEntries(
-                  fields.map((field) => [field.dataset.modelField!, field.value]),
-                );
-                await mutateModel(async () => {
-                  await api('/models', { method: 'POST', body: JSON.stringify(values) });
-                  const canonical = await api<ModelSettings>('/settings');
-                  setShowModelForm(false);
-                  return canonical;
-                });
+          )}
+        </section>
+        <section className="active-model-config" aria-labelledby="active-model-title">
+          <div className="model-section-heading">
+            <div>
+              <h4 id="active-model-title">当前模型参数</h4>
+              <p>
+                以下参数只对应当前正在使用的模型：
+                {modelList.find((item) => item.id === settings.activeModelId)?.name || '未选择'}
+              </p>
+            </div>
+            <span className="subtle-tag">运行配置</span>
+          </div>
+          <label>
+            模型名称
+            <input
+              name="model"
+              required
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder="输入服务商提供的模型 ID"
+              maxLength={100}
+            />
+          </label>
+          <label>
+            API Key <span>{settings.hasKey ? '已配置' : '未配置'}</span>
+            <input
+              type="password"
+              autoComplete="off"
+              value={key}
+              onChange={(e) => {
+                setKey(e.target.value);
+                setClearKey(false);
               }}
-            >
-              <Check size={15} />
-              保存并加入模型列表
+              placeholder={settings.hasKey ? '留空保留现有密钥' : '输入你的 API Key'}
+            />
+            <small>密钥不传回浏览器、不写入项目文件，仅在当前服务进程中使用。</small>
+          </label>
+          {settings.hasKey && (
+            <label className="checkbox-label">
+              <input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
+              清除已保存的密钥
+            </label>
+          )}
+          <div className="settings-save">
+            <span>
+              <ShieldCheck size={15} />
+              仅在本机运行
+            </span>
+            <button className="button primary" disabled={busy || modelBusy}>
+              <Check size={16} />
+              保存设置
             </button>
           </div>
-        )}
-        <label>
-          模型名称
-          <input
-            name="model"
-            required
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder="输入服务商提供的模型 ID"
-            maxLength={100}
-          />
-        </label>
-        <label>
-          API Key <span>{settings.hasKey ? '已配置' : '未配置'}</span>
-          <input
-            type="password"
-            autoComplete="off"
-            value={key}
-            onChange={(e) => {
-              setKey(e.target.value);
-              setClearKey(false);
-            }}
-            placeholder={settings.hasKey ? '留空保留现有密钥' : '输入你的 API Key'}
-          />
-          <small>密钥不传回浏览器、不写入项目文件，仅在当前服务进程中使用。</small>
-        </label>
-        {settings.hasKey && (
-          <label className="checkbox-label">
-            <input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
-            清除已保存的密钥
-          </label>
-        )}
-        <div className="settings-save">
-          <span>
-            <ShieldCheck size={15} />
-            仅在本机运行
-          </span>
-          <button className="button primary" disabled={busy || modelBusy}>
-            <Check size={16} />
-            保存设置
-          </button>
-        </div>
+        </section>
       </form>
+      <form id="new-model-form" hidden aria-hidden="true" />
       <aside className="settings-aside">
         <span className="eyebrow">A NOTE FOR WRITERS</span>
         <h2>
