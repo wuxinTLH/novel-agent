@@ -7,6 +7,19 @@ import { PublicationQueue, PublicationQueueError, publicationPreviewHash, type P
 import type { DraftSnapshot } from '../shared/platforms.js';
 import type { PublicationTarget } from '../shared/publication.js';
 
+test('explicit staging clear backs up history and rejects active batches', async t => {
+  const { queue, file } = fixture(t);
+  const batch = await queue.preview({ target, action: 'save_draft', chapters: [chapter()] });
+  queue.clearStaging('another-project');
+  assert.equal(queue.list(target.projectId).length, 1);
+  queue.clearStaging(target.projectId);
+  assert.equal(queue.list(target.projectId).length, 0);
+  assert.ok(fs.readdirSync(path.dirname(file)).some(name => name.includes('.staging-')));
+  const next = await approved(queue);
+  assert.throws(() => queue.clearStaging(target.projectId), errorCode('INVALID_STATE'));
+  assert.equal(queue.get(next.id).state, 'queued');
+});
+
 test('automatic policy is hash-bound and restart-safe approval provenance is persisted', async t => {
   const { queue, file, hooks } = fixture(t);
   const batch = await queue.preview({ target, action: 'save_draft', chapters: [chapter()], autoApprove: true });
@@ -38,6 +51,26 @@ test('read-only recovery rejects replacement ID and action mismatch, preserving 
     assert.equal(result.state, outcome === 'exact' ? 'completed' : 'unknown');
     assert.equal(writes, 1);
     assert.equal(result.items[0].reconciliation?.outcome, outcome === 'exact' ? 'draft_verified' : 'unproven');
+  }
+});
+
+test('manual remote ID is only persisted after read-only proof and never reexecutes', async t => {
+  for (const proven of [false, true]) {
+    let writes = 0;
+    const { queue } = fixture(t, {
+      execute: async (_p, _i, context) => { writes++; context.beforeMutation(); throw new Error('lost ID'); },
+      reconcile: async (_p, item) => {
+        assert.equal(item.remoteDraftId, 'candidate-id');
+        return proven ? { state: 'draft_verified', remoteDraftId: 'candidate-id', remoteFingerprint: 'proof' } : undefined;
+      },
+    });
+    const batch = await approved(queue);
+    queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' });
+    await queue.waitForIdle();
+    const result = await queue.reconcile(batch.id, { [batch.items[0].id]: 'candidate-id' });
+    assert.equal(result.state, proven ? 'completed' : 'unknown');
+    assert.equal(result.items[0].remoteDraftId, proven ? 'candidate-id' : undefined);
+    assert.equal(writes, 1);
   }
 });
 

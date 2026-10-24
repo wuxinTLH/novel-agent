@@ -17,7 +17,7 @@ import type { Store } from './store.js';
 import { PlatformStore, type ConnectionRecord, type DraftOperationRecord } from './platform-store.js';
 import { SecretStore } from './secrets.js';
 import { createPlatformRegistry } from './platform-registry.js';
-import { FanqieBrowser, fanqieTitlesEquivalent } from './fanqie-browser.js';
+import { FanqieBrowser, fanqieTitlesEquivalent, fanqieSnapshotTitle } from './fanqie-browser.js';
 import { ExtensionBridge } from './extension-bridge.js';
 import { literalIssues, resolveRequirements } from './generation.js';
 import {
@@ -537,7 +537,7 @@ export class PlatformRuntime {
       actual.publishStatus ?? null, actual.title, actual.content, actual.paragraphs]);
   }
   private publicationMatches(snapshot: DraftSnapshot, actual: VerifiedDraft) {
-    return fanqieTitlesEquivalent(actual.title, snapshot.title) && actual.content === snapshot.content &&
+    return (fanqieTitlesEquivalent(actual.title, snapshot.title) || fanqieTitlesEquivalent(actual.title, fanqieSnapshotTitle(snapshot))) && actual.content === snapshot.content &&
       JSON.stringify(actual.paragraphs) === JSON.stringify(snapshot.paragraphs);
   }
   private assertRemoteDraft(actual: VerifiedDraft, accountId: string, workId: string, draftId: string, volumeId: string) {
@@ -614,11 +614,21 @@ export class PlatformRuntime {
     this.publications.approve(batch.id, batch.preview.hash, { mode: 'automatic', source: 'prepare' });
     return this.publications.start(batch.id, { approvalHash: batch.preview.hash, requestId: `auto-prepare:${batch.id}` });
   }
-  async reconcilePublication(projectId: string, batchId: string) {
+  clearStaging(projectId: string) {
+    this.assertWritable(projectId);
+    this.assertProjectIdle(projectId);
+    if (this.platforms.draftOperations(projectId).some(item => ['queued', 'running'].includes(item.state)) ||
+      this.publications.list(projectId).some(batch => ['queued', 'running'].includes(batch.state)))
+      throw new PlatformError(409, 'PLATFORM_BUSY', '仍有上传执行中，请完成或暂停后再清空。');
+    this.publications.clearStaging(projectId);
+    this.platforms.clearStaging(projectId);
+    return { cleared: true };
+  }
+  async reconcilePublication(projectId: string, batchId: string, candidates: Record<string, string> = {}) {
     this.assertWritable(projectId);
     if (this.publications.get(batchId).preview.target.projectId !== projectId)
       throw new PlatformError(404, 'PUBLICATION_NOT_FOUND', '发布队列不存在。');
-    return this.publications.reconcile(batchId);
+    return this.publications.reconcile(batchId, candidates);
   }
   private async reconcilePublicationItem(preview: PublicationPreview, item: PublicationBatch['items'][number]) {
     const { target } = preview;
@@ -980,8 +990,8 @@ export class PlatformRuntime {
       actual.workId === operation.remoteWorkId &&
       (!operation.remoteDraftId || actual.id === operation.remoteDraftId) &&
       !!actual.id &&
-      actual.title === operation.snapshot.title &&
-      draftHash(actual.title, actual.content) === operation.contentHash &&
+      (fanqieTitlesEquivalent(actual.title, operation.snapshot.title) || fanqieTitlesEquivalent(actual.title, fanqieSnapshotTitle(operation.snapshot))) &&
+      draftHash(operation.snapshot.title, actual.content) === operation.contentHash &&
       JSON.stringify(actual.paragraphs) === JSON.stringify(operation.snapshot.paragraphs)
     );
   }

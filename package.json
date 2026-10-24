@@ -1,6 +1,6 @@
 {
   "name": "novel-agent",
-  "version": "1.0.0a",
+  "version": "0.0.2-a",
   "private": true,
   "type": "module",
   "scripts": {

@@ -142,6 +142,18 @@ function parseLosslessJson(payload: string): unknown {
   return JSON.parse(payload.replace(/"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g, (token) =>
     /^-?\d+$/.test(token) && !Number.isSafeInteger(Number(token)) ? JSON.stringify(token) : token));
 }
+export function fanqieSnapshotTitle(snapshot: Pick<DraftSnapshot, 'title' | 'number'>): string {
+  const title = snapshot.title.trim();
+  if (!Number.isSafeInteger(snapshot.number) || snapshot.number < 1 || !title)
+    verificationRequired('章节必须包含有效序号和非空标题，未进入编辑器。');
+  const match = /^第\s*([1-9]\d*)\s*章\s*(.+)$/.exec(title);
+  if (match) {
+    if (Number(match[1]) !== snapshot.number) verificationRequired('标题中的章节序号与本地章节序号不一致，未进入编辑器。');
+    return `第${snapshot.number}章 ${match[2].trim()}`;
+  }
+  if (/^第\s*[\d一二三四五六七八九十百千万零〇两]+\s*章/.test(title)) verificationRequired('章节标题格式无效，未进入编辑器。');
+  return `第${snapshot.number}章 ${title}`;
+}
 export function fanqieTitlesEquivalent(left: string, right: string): boolean {
   const parse = (value: string) => /^第\s*([1-9]\d*)\s*章\s*(.+)$/.exec(value.trim());
   const a = parse(left), b = parse(right);
@@ -490,14 +502,28 @@ async function readEditor(page: Page, workId: string, draftId: string): Promise<
     paragraphs: values[1].replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').trim().split('\n'),
   };
 }
+async function waitForDraftEditor(page: Page) {
+  const button = page.locator('button.auto-editor-save-btn').filter({ hasText: /^\s*存草稿\s*$/ });
+  try {
+    await button.waitFor({ state: 'visible', timeout: 15_000 });
+    await page.waitForFunction(() => {
+      const buttons = [...document.querySelectorAll<HTMLButtonElement>('button.auto-editor-save-btn')]
+        .filter(item => item.textContent?.trim() === '存草稿');
+      return buttons.length === 1 && !buttons[0].disabled && !buttons[0].classList.contains('arco-btn-loading');
+    }, undefined, { timeout: 15_000 });
+  } catch {
+    verificationRequired('草稿编辑器未就绪：存草稿按钮缺失、不可用或仍在加载。请先处理官方页面的缓存恢复或权限提示；未点击保存。');
+  }
+}
 async function fillEditor(page: Page, snapshot: DraftSnapshot) {
+  await waitForDraftEditor(page);
   const title = await editorTitle(page);
   const body = await editorBody(page);
   if (!title || !body) verificationRequired('已打开番茄编辑页，但没有找到稳定的标题或正文编辑器。');
   const number = page.locator('.serial-editor-title:not(.free) .left-input input');
-  let titleValue = snapshot.title;
+  let titleValue = fanqieSnapshotTitle(snapshot);
   if (await number.count()) {
-    const match = /^第\s*([1-9]\d*)\s*章\s*(.+)$/.exec(snapshot.title);
+    const match = /^第\s*([1-9]\d*)\s*章\s*(.+)$/.exec(titleValue);
     if (await number.count() !== 1 || !match || Number(match[1]) !== snapshot.number)
       verificationRequired('标准章节标题必须为与章节序号一致的“第N章 标题”；不支持的格式不会写入编辑器。');
     await number.fill(match[1]);
@@ -513,11 +539,32 @@ async function fillEditor(page: Page, snapshot: DraftSnapshot) {
   await body.fill(snapshot.content);
 }
 async function clickSave(page: Page) {
-  const button = page.locator('.auto-editor-save-btn').filter({ hasText: /^存草稿$/ });
+  await waitForDraftEditor(page);
+  const button = page.locator('button.auto-editor-save-btn').filter({ hasText: /^\s*存草稿\s*$/ });
   if (await button.count() !== 1 || !(await button.isVisible()) || await button.isDisabled())
     verificationRequired('编辑器中没有找到唯一可用的“存草稿”操作。');
+  const route = /\/writer\/([^/]+)\/publish\/([^/?#]+)/.exec(new URL(page.url()).pathname);
+  if (!route) verificationRequired('保存前无法确定唯一作品和草稿身份。');
+  const completion = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    if (url.origin !== 'https://fanqienovel.com' || !['/api/author/publish_article/v0/', '/api/author/article/cover_article/v0/'].includes(url.pathname)) return false;
+    const request = response.request();
+    if (request.method() !== 'POST') return false;
+    try {
+      const raw = request.postData() ?? '';
+      const data = request.headers()['content-type']?.includes('application/json') ? parseLosslessJson(raw) as Record<string, unknown> : Object.fromEntries(new URLSearchParams(raw));
+      return String(data.book_id) === route![1] && String(data.item_id) === route![2] &&
+        (url.pathname.includes('cover_article') || String(data.publish_status) === '0');
+    } catch { return false; }
+  }, { timeout: 20_000 }).then(async response => {
+    const body = parseLosslessJson(await response.text()) as { code?: unknown };
+    if (!response.ok() || body.code !== 0) verificationRequired('番茄未确认草稿保存成功；结果未知，请只读核对。');
+  });
+  // Attach a rejection handler before clicking; an interrupted click must not leak an unhandled waiter.
+  void completion.catch(() => {});
   await button.click();
-  await page.waitForTimeout(1400);
+  try { await completion; }
+  catch { verificationRequired('未收到当前作品与草稿的成功保存回执；结果未知，不会自动重传。'); }
 }
 
 export class FanqieBrowser implements DraftBrowserAdapter {
@@ -772,7 +819,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     await fillEditor(page, snapshot);
     await clickSave(page);
     const saved = await this.readDraft(connectionId, state, workId, draftId);
-    if (saved.accountId !== accountId || saved.publishStatus !== 0 || !fanqieTitlesEquivalent(saved.title, snapshot.title) ||
+    if (saved.accountId !== accountId || saved.publishStatus !== 0 || !fanqieTitlesEquivalent(saved.title, fanqieSnapshotTitle(snapshot)) ||
         saved.content !== snapshot.content.replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').trim() || (volumeId && saved.volumeId !== volumeId))
       throw new PlatformError(409, 'PLATFORM_DRAFT_OVERWRITE_UNVERIFIED', '同一草稿已保存但回读内容或分卷不匹配，结果未知。');
     return saved;
@@ -786,6 +833,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     onIdentified: (draftId: string) => void,
     volumeId?: string,
   ): Promise<{ draftId: string }> {
+    fanqieSnapshotTitle(snapshot);
     const page = await this.openVerified(connectionId, state);
     const title = await this.workTitle(connectionId, state, workId);
     const volume = await this.selectedVolume(connectionId, state, workId, volumeId);
@@ -807,7 +855,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     if (createdId && draftId !== decodeURIComponent(createdId)) verificationRequired('保存后草稿身份发生变化，结果未知。');
     if (!draftId) {
       const entries = await openDraftList(page, workId, title);
-      const matches = entries.filter((entry) => fanqieTitlesEquivalent(entry.title, snapshot.title));
+      const matches = entries.filter((entry) => fanqieTitlesEquivalent(entry.title, fanqieSnapshotTitle(snapshot)));
       if (matches.length !== 1)
         throw new PlatformError(409, 'PLATFORM_DRAFT_ID_UNKNOWN', '草稿已提交但未找到唯一远端草稿 ID，结果未知，请到作者页核对。');
       draftId = matches[0].id;
@@ -846,7 +894,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     const drafts: VerifiedDraft[] = [];
     for (const entry of entries) {
       const actual = await this.readDraft(connectionId, state, workId, entry.id);
-      if (actual.accountId === accountId && fanqieTitlesEquivalent(actual.title, snapshot.title)) drafts.push(actual);
+      if (actual.accountId === accountId && fanqieTitlesEquivalent(actual.title, fanqieSnapshotTitle(snapshot))) drafts.push(actual);
     }
     return drafts;
   }
@@ -888,7 +936,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     // Same code=0 / item_id / title / immediate display_status proof as submitReview.
     return reviewReceiptMatches(JSON.stringify({ code: 0, data: { item_list: entries.map((entry) => ({
       item_id: entry.id, title: entry.title, display_status: entry.status,
-    })) } }), draftId, snapshot.title);
+    })) } }), draftId, fanqieSnapshotTitle(snapshot));
   }
   async submitReview(
     connectionId: string, state: BrowserSessionState, accountId: string,
@@ -904,7 +952,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
       verificationRequired('编辑器跳转到了不同作品或草稿，未执行送审。');
     const actual = await readEditor(page, workId, draftId);
     const accountMatches = actual.accountId === accountId;
-    const titleMatches = fanqieTitlesEquivalent(actual.title, snapshot.title);
+    const titleMatches = fanqieTitlesEquivalent(actual.title, fanqieSnapshotTitle(snapshot));
     const contentMatches = actual.content === snapshot.content.replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').trim();
     if (!accountMatches || !titleMatches || !contentMatches)
       throw new PlatformError(409, 'PLATFORM_REVIEW_DRAFT_MISMATCH', `账号、标题或正文与已批准的草稿不一致，未执行送审（account_match=${accountMatches}; title_match=${titleMatches}; content_match=${contentMatches}）。`);
@@ -948,7 +996,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
           url.searchParams.get('book_id') === workId && response.request().method() === 'GET' && response.ok();
       } catch { return false; }
     }, { timeout: 10_000 }).then(async (response) =>
-      reviewReceiptMatches(await response.text(), draftId, snapshot.title),
+      reviewReceiptMatches(await response.text(), draftId, fanqieSnapshotTitle(snapshot)),
     ).catch(() => false);
     await confirm.click();
     await page.waitForTimeout(1200);

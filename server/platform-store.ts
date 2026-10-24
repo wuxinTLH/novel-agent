@@ -435,6 +435,18 @@ export class PlatformStore {
       data.receipts = data.receipts.filter((receipt) => receipt.operationId !== operationId);
     });
   }
+  clearStaging(projectId: string) {
+    const backup = `${this.file}.staging-${Date.now()}.bak`;
+    fs.copyFileSync(this.file, backup);
+    this.change(data => {
+      data.preparations = data.preparations.filter(value => value.projectId !== projectId);
+      data.draftOperations = data.draftOperations.filter(value => value.projectId !== projectId);
+      data.receipts = data.receipts.filter(value => value.projectId !== projectId);
+      for (const [key, value] of Object.entries(data.operations))
+        if (value.projectId === projectId) delete data.operations[key];
+    });
+    return backup;
+  }
   removeProject(projectId: string) {
     this.change((data) => {
       const connections = data.connections.filter((c) => c.projectId === projectId);

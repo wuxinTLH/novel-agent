@@ -10,6 +10,21 @@ import type {
 } from '../../shared/types';
 import { GENERATION_LIMITS, runRequestSchema } from '../../shared/generation';
 
+export function previousOutputControl(step: Pick<Step, 'reusePreviousOutput' | 'output'>, locked: boolean) {
+  const checked = !!step.reusePreviousOutput;
+  const available = !!step.output.trim();
+  return {
+    checked,
+    // A stale checked preference must remain switchable off, even after invalidation clears output.
+    disabled: locked || (!available && !checked),
+    hint: available
+      ? '开启后跳过此节点的模型请求，沿用当前结果'
+      : checked
+        ? '前次结果已失效，请取消勾选后重新运行此节点或完整工作流'
+        : '该节点尚无可复用结果，请先运行节点',
+  };
+}
+
 export function workflowIdOf(project: Project) {
   return project.activeWorkflowId || project.workflow?.id || project.workflows?.[0]?.id || '';
 }

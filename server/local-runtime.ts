@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const appRoot = path.resolve(here, path.basename(path.dirname(here)) === 'build' ? '../..' : '..');
 
-function ownerExited(raw: string) {
-  let owner: { pid?: unknown; token?: unknown };
+function ownerExited(raw: string, modifiedAt: number) {
+  let owner: { pid?: unknown; token?: unknown; startedAt?: unknown };
   try {
     owner = JSON.parse(raw);
   } catch {
@@ -21,6 +22,11 @@ function ownerExited(raw: string) {
     !owner.token
   )
     return false;
+  // PIDs can belong to unrelated processes after a reboot. Require both the recorded
+  // creation time and the on-disk modification time to predate this boot, with margin.
+  const startedAt = typeof owner.startedAt === 'string' ? Date.parse(owner.startedAt) : NaN;
+  const bootBoundary = Date.now() - os.uptime() * 1000 - 60_000;
+  if (Number.isFinite(startedAt) && startedAt < bootBoundary && modifiedAt < bootBoundary) return true;
   try {
     process.kill(owner.pid as number, 0);
     return false;
@@ -45,7 +51,7 @@ function openDataLock(file: string): number {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fs.openSync(file, 'wx', 0o600);
     throw error;
   }
-  if (!ownerExited(previous)) throw locked();
+  if (!ownerExited(previous, fs.statSync(file).mtimeMs)) throw locked();
 
   // Only one contender may remove the observed dead owner's lock. Others fail closed.
   const recoveryFile = `${file}.recovery`;
@@ -59,7 +65,7 @@ function openDataLock(file: string): number {
   }
   try {
     fs.writeFileSync(recovery, JSON.stringify({ pid: process.pid }));
-    if (fs.readFileSync(file, 'utf8') !== previous || !ownerExited(previous)) throw locked();
+    if (fs.readFileSync(file, 'utf8') !== previous || !ownerExited(previous, fs.statSync(file).mtimeMs)) throw locked();
     fs.unlinkSync(file);
     // Exclusive creation still arbitrates against an ordinary concurrent startup.
     return fs.openSync(file, 'wx', 0o600);

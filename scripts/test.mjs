@@ -4,12 +4,13 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const testFiles = ['server', 'src'].flatMap((directory) =>
-  fs
-    .readdirSync(path.join(root, directory))
-    .filter((name) => name.endsWith('.test.ts'))
-    .map((name) => path.join(directory, name)),
-);
+function collect(directory) {
+  return fs.readdirSync(path.join(root, directory), { withFileTypes: true }).flatMap(entry => {
+    const relative = path.join(directory, entry.name);
+    return entry.isDirectory() ? collect(relative) : entry.name.endsWith('.test.ts') ? [relative] : [];
+  });
+}
+const testFiles = ['server', 'src'].flatMap(collect);
 const result = spawnSync(
   process.execPath,
   [path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', ...testFiles],

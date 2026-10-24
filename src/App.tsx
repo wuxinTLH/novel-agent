@@ -57,6 +57,8 @@ import {
 } from 'lucide-react';
 import { api, ApiError, download } from './api';
 import PlatformPanel from './PlatformPanel';
+import type { PlatformId } from '../shared/platforms';
+import { platformFromPath, platformPath } from './hooks/platformNavigation';
 import GenerationModal, { type GenerationEntry } from './components/GenerationModal';
 import GenerationCandidates from './components/GenerationCandidates';
 import GenerationProgress from './components/GenerationProgress';
@@ -72,6 +74,7 @@ import {
   graphSnapshot,
   nextChapterNumber,
   projectIdentity,
+  previousOutputControl,
   sortedChapters,
   workflowIdOf,
   type GraphSnapshot,
@@ -119,7 +122,11 @@ const routePages: Page[] = [
 ];
 function pageFromLocation(): Page | undefined {
   const value = window.location.pathname.replace(/^\//, '') as Page;
+  if (platformFromPath(window.location.pathname)) return 'platforms';
   return routePages.includes(value) ? value : undefined;
+}
+function platformFromLocation(): PlatformId | null {
+  return platformFromPath(window.location.pathname);
 }
 function isPresetWorkflow(graph: WorkflowGraph, preset: 'character' | 'world') {
   const kinds = new Set<NonNullable<Step['kind']>>(graph.steps.map((step) => step.kind).filter(Boolean) as NonNullable<Step['kind']>[]);
@@ -388,6 +395,7 @@ export default function App() {
   const [manualChapter, setManualChapter] = useState(false);
   const [generationEntry, setGenerationEntry] = useState<GenerationEntry | null>(null);
   const [platformChapterId, setPlatformChapterId] = useState('');
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformId | null>(() => platformFromLocation());
   const [inspectorTab, setInspectorTab] = useState<'config' | 'result'>('config'),
     [prompt, setPrompt] = useState('');
   const uploadRef = useRef<HTMLInputElement>(null),
@@ -476,6 +484,7 @@ export default function App() {
     chapterEditor.resetEditor();
     setGenerationEntry(null);
     setPlatformChapterId('');
+    setSelectedPlatform(platformFromLocation());
     responseScopes.current.delete(p);
     acceptProject(p);
   };
@@ -508,7 +517,10 @@ export default function App() {
   useEffect(() => {
     const sync = () => {
       const next = pageFromLocation();
-      if (next) setPage(next);
+      if (next) {
+        setPage(next);
+        setSelectedPlatform(next === 'platforms' ? platformFromLocation() : null);
+      }
     };
     window.addEventListener('popstate', sync);
     return () => window.removeEventListener('popstate', sync);
@@ -526,6 +538,7 @@ export default function App() {
         const saved = localStorage.getItem('novel-project');
         const savedPage = localStorage.getItem('novel-page') as Page;
         setPage(pageFromLocation() || (routePages.includes(savedPage) ? savedPage : 'workflow'));
+        setSelectedPlatform(platformFromLocation());
         const p = all.find((p) => p.id === saved) || all[0];
         if (p) activateProject(p);
       })
@@ -873,6 +886,7 @@ export default function App() {
     localStorage.setItem('novel-page', next);
     window.history.pushState({ page: next }, '', `/${next}`);
     setPage(next);
+    setSelectedPlatform(null);
     if (next !== 'chapters') chapterEditor.resetEditor();
     if (next === 'platforms') setPlatformChapterId('');
   };
@@ -1026,6 +1040,15 @@ export default function App() {
       showToast('提交的版本已保存；保存期间的新输入仍保留在编辑器');
     });
   };
+  const openPlatform = (id: PlatformId) => {
+    window.history.pushState({ page: 'platforms', platform: id }, '', platformPath(id));
+    setSelectedPlatform(id);
+  };
+  const backToPlatforms = () => {
+    window.history.pushState({ page: 'platforms' }, '', '/platforms');
+    setSelectedPlatform(null);
+    setPlatformChapterId('');
+  };
   const openDraftSync = () => {
     if (dirty || chapterConflict || !chapterId) {
       setError('请先保存或处理当前章节版本，再选择同步。');
@@ -1033,6 +1056,9 @@ export default function App() {
     }
     setPlatformChapterId(chapterId);
     chapterEditor.resetEditor();
+    localStorage.setItem('novel-page', 'platforms');
+    window.history.pushState({ page: 'platforms', platform: 'tomato' }, '', platformPath('tomato'));
+    setSelectedPlatform('tomato');
     setPage('platforms');
   };
   const onNodeChanges = useCallback(
@@ -1346,7 +1372,7 @@ export default function App() {
                 <span className="green-dot" /> 数据保存在本机
               </small>
             </div>
-            <span className="version">v1.0.0a</span>
+            <span className="version">v0.0.2a</span>
           </div>
         </div>
       </aside>
@@ -1373,6 +1399,9 @@ export default function App() {
                 }[page]
               }
             </strong>
+            {page === 'platforms' && selectedPlatform && (
+              <><ChevronRight size={14} /><strong>{({ tomato: '番茄小说', mock: '本地 Mock 测试', qidian: '起点中文网', qimao: '七猫中文网' } as const)[selectedPlatform]}</strong></>
+            )}
           </div>
           <div className="topbar-right">
             <ThemeSwitcher />
@@ -1975,23 +2004,22 @@ export default function App() {
                             <label className="reuse-previous-output">
                               <input
                                 type="checkbox"
-                                checked={!!step.reusePreviousOutput}
-                                disabled={running || busy || !step.output.trim()}
-                                onChange={(event) =>
+                                checked={previousOutputControl(step, running || busy).checked}
+                                disabled={previousOutputControl(step, running || busy).disabled}
+                                onChange={(event) => {
+                                  const reusePreviousOutput = event.currentTarget.checked;
                                   void task(async () => {
                                     await updateGraph({
-                                      steps: [{ id: selected, reusePreviousOutput: event.target.checked }],
+                                      steps: [{ id: step.id, reusePreviousOutput }],
                                     });
-                                    showToast(event.target.checked ? '已启用前次解析' : '已关闭前次解析');
-                                  })
-                                }
+                                    showToast(reusePreviousOutput ? '已启用前次解析' : '已关闭前次解析');
+                                  });
+                                }}
                               />
                               <span>
                                 <strong>使用前一次 AI 解析</strong>
                                 <small>
-                                  {step.output.trim()
-                                    ? '开启后跳过此节点的模型请求，沿用当前结果'
-                                    : '该节点尚无可复用结果'}
+                                  {previousOutputControl(step, running || busy).hint}
                                 </small>
                               </span>
                             </label>
@@ -2553,6 +2581,9 @@ export default function App() {
               onProjectChange={(updated: Project) => { acceptProject(updated); }}
               running={running}
               selectedChapterId={platformChapterId || undefined}
+              selectedPlatform={selectedPlatform}
+              onSelectPlatform={openPlatform}
+              onBackToPlatforms={backToPlatforms}
             />
           )}
           {page === 'settings' && (

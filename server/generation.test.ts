@@ -200,6 +200,18 @@ test('migration backs up exact source and corrupt input leaves original file int
   });
 });
 
+test('stale reuse fails closed but switching it off unblocks a fresh full workflow', () => {
+  const p = createProject('reuse recovery');
+  const step = p.steps.find((item) => item.kind !== 'writer' && item.id !== SYSTEM_START_NODE_ID && item.id !== SYSTEM_END_NODE_ID)!;
+  assert.ok(step);
+  step.output = '';
+  step.reusePreviousOutput = true;
+  assert.throws(() => prepareRun(p), (error: unknown) =>
+    error instanceof Error && 'code' in error && error.code === 'REUSE_OUTPUT_UNAVAILABLE');
+  step.reusePreviousOutput = false;
+  assert.ok(prepareRun(p).orderedStepIds.includes(step.id));
+});
+
 test('preflight handles single, range, high watermark, conflicts and multiple writers without mutating state', () => {
   const p = createProject('targets');
   p.chapters = [chapter(1), chapter(5)];

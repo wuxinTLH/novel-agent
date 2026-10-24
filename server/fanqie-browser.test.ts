@@ -175,11 +175,13 @@ test('draft writer uses evidenced split title and exact 存草稿; unsupported t
         const url = new URL(route.request().url());
         if (url.pathname === '/api/user/info/v2') {
           await route.fulfill({ contentType: 'application/json', body: '{"code":0,"data":{"id":"author","name":"Author"}}' });
+        } else if (url.pathname === '/api/author/publish_article/v0/') {
+          await route.fulfill({ contentType: 'application/json', body: '{"code":0,"data":{}}' });
         } else if (url.pathname.includes('/publish/')) {
-          await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<html><body>
+          await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<html><body><script>history.replaceState({},'', '/main/writer/book-1/publish/draft-1')</script>
             <div class="serial-editor-title"><div class="left-input"><input value="1"></div><div class="serial-editor-title-right"><input class="serial-editor-input-hint-area" value="初始"></div></div>
             <div class="ProseMirror" contenteditable="true">初始正文</div>
-            <button class="auto-editor-save-btn" onclick="window.saves=(window.saves||0)+1;history.replaceState({},'', '/main/writer/book-1/publish/draft-1')">存草稿</button>
+            <button class="auto-editor-save-btn" onclick="window.saves=(window.saves||0)+1;fetch('/api/author/publish_article/v0/',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({book_id:'book-1',item_id:'draft-1',publish_status:0})})">存草稿</button>
             <button onclick="window.wrongSave=true">保存并发布</button></body></html>` });
         } else {
           await route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<script type="application/json">{"bookList":[{"book_id":"book-1","title":"作品"}]}</script>' });
@@ -198,10 +200,8 @@ test('draft writer uses evidenced split title and exact 存草稿; unsupported t
         assert.equal(await page.locator('.ProseMirror').innerText(), '新正文');
         assert.equal(await page.evaluate(() => (window as unknown as { saves: number }).saves), 1);
       } else {
-        await assert.rejects(run(), /不支持的格式不会写入编辑器/);
-        assert.equal(await page.locator('.left-input input').inputValue(), '1');
-        assert.equal(await page.locator('.serial-editor-input-hint-area').inputValue(), '初始');
-        assert.equal(await page.locator('.ProseMirror').innerText(), '初始正文');
+        await assert.rejects(run(), /未进入编辑器/);
+        assert.equal(page.url(), 'https://fanqienovel.com/main/writer/book-manage');
         assert.equal(identified, '');
       }
       assert.equal(await page.evaluate(() => (window as unknown as { wrongSave?: boolean }).wrongSave), undefined);

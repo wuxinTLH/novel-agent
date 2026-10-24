@@ -233,7 +233,8 @@ try {
   project = await waitRun();
   assert.equal(project.workflows.at(-1).name, '独立世界观');
   assert.equal(project.chapters.length, 1);
-  assert.deepEqual(project.chapters.map((chapter) => chapter.id), chapterIdsBeforeWorldRun);({ path: path.join(artifacts, 'chapters.png'), fullPage: true });
+  assert.deepEqual(project.chapters.map((chapter) => chapter.id), chapterIdsBeforeWorldRun);
+  await page.screenshot({ path: path.join(artifacts, 'chapters.png'), fullPage: true });
   await page.getByRole('button', { name: /^章节书稿(?:\s*\d+)?$/ }).click();
   await page.getByRole('button', { name: '同步此章到草稿', exact: true }).click();
   await page
@@ -242,6 +243,15 @@ try {
     .waitFor({ timeout: 3000 })
     .catch(() => {});
   await page.screenshot({ path: path.join(artifacts, 'platform.png'), fullPage: true });
+  const stepNavigation = page.getByRole('navigation', { name: '平台操作步骤' });
+  assert.equal(await stepNavigation.getByRole('button', { name: /核验账号/ }).isEnabled(), true);
+  assert.equal(await stepNavigation.getByRole('button', { name: /绑定作品/ }).isDisabled(), true);
+  assert.equal(await stepNavigation.getByRole('button', { name: /选择章节/ }).isDisabled(), true);
+  assert.equal(await stepNavigation.getByRole('button', { name: /预览并批准/ }).isDisabled(), true);
+  await stepNavigation.getByRole('button', { name: /核对结果/ }).click();
+  await page.getByRole('heading', { name: '草稿操作与核实回执' }).waitFor();
+  await stepNavigation.getByRole('button', { name: /核验账号/ }).click();
+  await page.getByRole('heading', { name: '平台连接与能力' }).waitFor();
   const providers = await (await fetch(`${base}/api/platforms/providers`)).json();
   const tomato = providers.find((provider) => provider.id === 'tomato');
   assert.equal(tomato.capabilities.publishChapter, false);
@@ -267,6 +277,7 @@ try {
           'regeneration preserves original',
           'explicit candidate adoption',
           'reload',
+          'platform manual steps gate setup and preview but keep read-only results accessible',
           'platform supports verified draft capabilities and keeps publication disabled',
         ],
         artifacts,

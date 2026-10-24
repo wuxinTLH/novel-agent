@@ -65,6 +65,23 @@ test('startup recovers an exited backend lock without changing project data', ()
   }
 });
 
+test('pre-reboot locks recover even when their PID has been reused, but fresh files remain protected', () => {
+  const dir = temporaryDirectory();
+  try {
+    const file = path.join(dir, '.instance.lock');
+    const old = new Date(Date.now() - (os.uptime() + 3600) * 1000);
+    const raw = JSON.stringify({ pid: process.pid, token: 'previous-boot', startedAt: old.toISOString() });
+    fs.writeFileSync(file, raw);
+    assert.throws(() => acquireDataLock(dir), /数据目录已锁定/);
+    assert.equal(fs.readFileSync(file, 'utf8'), raw);
+    fs.utimesSync(file, old, old);
+    const release = acquireDataLock(dir);
+    assert.notEqual(JSON.parse(fs.readFileSync(file, 'utf8')).token, 'previous-boot');
+    assert.throws(() => acquireDataLock(dir), /数据目录已锁定/);
+    release();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('malformed, incomplete, and invalid-owner locks fail closed without modification', () => {
   const dir = temporaryDirectory();
   try {

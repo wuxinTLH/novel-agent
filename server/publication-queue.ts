@@ -332,18 +332,25 @@ export class PublicationQueue {
     this.change(() => { batch.pauseRequested = true; if (batch.state !== 'running') batch.state = 'paused'; batch.updatedAt = this.now(); });
     return this.get(id);
   }
-  async reconcile(id: string): Promise<PublicationBatch> {
+  async reconcile(id: string, candidates: Record<string, string> = {}): Promise<PublicationBatch> {
     const initial = this.get(id);
     if (this.tasks.has(id) || initial.state !== 'unknown') reject('INVALID_STATE', 'Only an idle unknown batch can be reconciled');
     if (!this.hooks.reconcile) reject('RECONCILIATION_UNAVAILABLE', 'Read-only reconciliation is unavailable');
+    for (const [itemId, candidate] of Object.entries(candidates)) {
+      const item = initial.items.find(value => value.id === itemId && value.state === 'unknown');
+      if (!item || !/^[A-Za-z0-9_-]{2,160}$/.test(candidate)) reject('INVALID_RECONCILIATION', 'Invalid unknown item or remote chapter ID');
+      const plan = planFor(initial.preview, item.snapshot.chapterId);
+      const pinned = item.remoteDraftId ?? (plan && plan.mode !== 'create' ? plan.remoteDraftId : undefined);
+      if (pinned && pinned !== candidate) reject('INVALID_RECONCILIATION', 'Cannot replace the known remote chapter ID');
+    }
     let release: (() => void | Promise<void>) | undefined;
     try {
       release = await this.hooks.acquire?.(initial.preview);
       for (const item of initial.items.filter(value => value.state === 'unknown')) {
         const plan = planFor(initial.preview, item.snapshot.chapterId);
-        const knownId = item.remoteDraftId ?? (plan && plan.mode !== 'create' ? plan.remoteDraftId : undefined);
+        const knownId = item.remoteDraftId ?? (plan && plan.mode !== 'create' ? plan.remoteDraftId : candidates[item.id]);
         let evidence: Awaited<ReturnType<NonNullable<PublicationQueueHooks['reconcile']>>>;
-        try { evidence = knownId ? await this.hooks.reconcile(initial.preview, item) : undefined; } catch { evidence = undefined; }
+        try { evidence = knownId ? await this.hooks.reconcile(initial.preview, { ...item, remoteDraftId: knownId }) : undefined; } catch { evidence = undefined; }
         const proven = !!evidence && evidence.remoteDraftId === knownId && !!evidence.remoteFingerprint &&
           evidence.state === (initial.preview.action === 'save_draft' ? 'draft_verified' : 'submitted');
         this.change(() => {
@@ -362,6 +369,12 @@ export class PublicationQueue {
       }
       return this.get(id);
     } finally { await release?.(); }
+  }
+  clearStaging(projectId: string) {
+    if (this.batches.some(batch => batch.preview.target.projectId === projectId && (this.tasks.has(batch.id) || ['queued', 'running'].includes(batch.state))))
+      reject('INVALID_STATE', 'Cannot clear active publication batches');
+    if (fs.existsSync(this.filePath)) fs.copyFileSync(this.filePath, `${this.filePath}.staging-${Date.now()}.bak`);
+    this.change(() => { this.batches = this.batches.filter(batch => batch.preview.target.projectId !== projectId); });
   }
   async waitForIdle(id?: string): Promise<void> {
     if (id) await this.tasks.get(id); else await this.tail;

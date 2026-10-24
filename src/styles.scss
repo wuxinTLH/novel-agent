@@ -3436,6 +3436,88 @@ h1 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 15px;
 }
+.platform-provider-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+.platform-provider-entry:hover, .platform-provider-entry:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.platform-provider-entry .platform-section-heading { width: 100%; }
+.platform-provider-entry .platform-section-heading strong { font-size: 17px; }
+.platform-provider-entry .platform-help { margin: 0; }
+.platform-entry-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+.platform-back { margin-bottom: 14px; }
+.platform-step-layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 235px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+  margin-top: 20px;
+}
+.platform-step-nav {
+  position: sticky;
+  top: 20px;
+  display: grid;
+  gap: 7px;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.platform-step-nav .platform-help { margin: 5px 2px; }
+.platform-step-button {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 11px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.platform-step-button:hover:not(:disabled), .platform-step-button.is-current {
+  background: var(--soft);
+  border-color: var(--border);
+}
+.platform-step-button:disabled { opacity: .48; cursor: not-allowed; }
+.platform-step-button small { display: block; margin-top: 3px; color: var(--muted-text); line-height: 1.4; }
+.platform-step-index {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--soft);
+  color: var(--accent);
+  font-weight: 700;
+}
+.platform-step-content { display: grid; min-width: 0; gap: 14px; }
+.platform-step-content > [hidden] { display: none !important; }
+.platform-next { justify-self: start; }
+@media (max-width: 760px) {
+  .platform-step-layout { grid-template-columns: minmax(0, 1fr); }
+  .platform-step-nav { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-step-nav > .platform-help { grid-column: 1 / -1; }
+}
 .platform-card {
   min-width: 0;
   border: 1px solid var(--border);
@@ -3464,7 +3546,7 @@ h1 {
   line-height: 1.8;
   margin: 14px 0;
 }
-.platform-form input,
+.platform-form input:not([type='checkbox']):not([type='radio']),
 .platform-form textarea,
 .platform-form select {
   display: block;
@@ -3478,6 +3560,65 @@ h1 {
 }
 .platform-form > .button {
   margin-top: 13px;
+}
+.publication-chapter-option {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 5px 0 !important;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text) !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  cursor: pointer;
+}
+.publication-chapter-option:hover {
+  background: var(--surface-2);
+}
+.publication-chapter-option input[type='checkbox'] {
+  flex: 0 0 auto;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+.publication-selection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+.publication-selection-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.publication-selection-actions .button {
+  padding: 6px 10px;
+}
+.platform-advanced {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.platform-advanced summary {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.platform-advanced[open] summary {
+  margin-bottom: 12px;
+}
+.platform-advanced .platform-notice {
+  margin: 8px 0;
 }
 .platform-work-toolbar {
   display: flex;

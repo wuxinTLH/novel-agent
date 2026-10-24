@@ -47,6 +47,7 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
   router.use('/platforms', guarded);
   const base = '/projects/:projectId';
   for (const suffix of [
+    'platform-staging',
     'platform-publication-batches',
     'platform-connections',
     'platform-login',
@@ -381,6 +382,10 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
       return { ok: true };
     }),
   );
+  router.post(`${base}/platform-staging/clear`, (req, res) => {
+    z.object({ confirmed: z.literal(true), acknowledgeDuplicateRisk: z.literal(true) }).strict().parse(req.body);
+    res.json(runtime.clearStaging(pid(req)));
+  });
   const batchBase = `${base}/platform-publication-batches`;
   const batchFor = (req: Request) => {
     const batch = runtime.publications.get(String(req.params.batchId));
@@ -406,9 +411,9 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
     res.status(202).json(runtime.publications.start(batch.id, { approvalHash: input.approvalHash, requestId }));
   });
   router.post(`${batchBase}/:batchId/reconcile`, async (req, res) => {
-    z.object({}).strict().parse(req.body ?? {});
+    const input = z.object({ candidates: z.record(identifier, z.string().regex(/^[A-Za-z0-9_-]{2,160}$/)).optional() }).strict().parse(req.body ?? {});
     runtime.assertProjectIdle(pid(req));
-    res.json(await runtime.reconcilePublication(pid(req), batchFor(req).id));
+    res.json(await runtime.reconcilePublication(pid(req), batchFor(req).id, input.candidates));
   });
   router.post(`${batchBase}/:batchId/pause`, (req, res) => {
     z.object({}).strict().parse(req.body);

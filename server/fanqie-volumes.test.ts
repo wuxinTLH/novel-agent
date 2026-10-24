@@ -1,13 +1,42 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chromium, type Route } from 'playwright';
-import { FanqieBrowser, fanqieTitlesEquivalent, reviewReceiptMatches } from './fanqie-browser.js';
+import { FanqieBrowser, fanqieSnapshotTitle, fanqieTitlesEquivalent, reviewReceiptMatches } from './fanqie-browser.js';
 
 const state = { cookies: [], origins: [] };
 const snapshot = { chapterId: 'local', number: 2, revision: 1, title: '第 2 章新标题', content: '新正文', paragraphs: ['新正文'], contentHash: 'unchanged' };
 const bookId = '7123456789012345678';
 const draftId = '8123456789012345678';
 const volumeId = '9123456789012345678';
+
+test('plain titles use saved chapter numbers without accepting conflicting explicit numbers', () => {
+  assert.equal(fanqieSnapshotTitle({ number: 1, title: '血色月 终焉之始1' }), '第1章 血色月 终焉之始1');
+  assert.equal(fanqieSnapshotTitle(snapshot), '第2章 新标题');
+  assert.throws(() => fanqieSnapshotTitle({ number: 1, title: '第2章 不匹配' }));
+});
+
+test('editor waits for delayed initialization before filling plain-title chapters', async () => {
+  const f = await fixture('delayed');
+  try {
+    const result = await f.adapter.overwriteDraft('connection', state, 'author', bookId, draftId,
+      { ...snapshot, title: '新标题' }, volumeId);
+    assert.equal(result.title, '第2章 新标题');
+    assert.equal(f.saves(), 1);
+  } finally { await f.close(); }
+});
+
+test('official save business failure never returns a verified draft or leaks its response', async () => {
+  const f = await fixture('save-rejected');
+  try {
+    await assert.rejects(f.adapter.overwriteDraft('connection', state, 'author', bookId, draftId, snapshot, volumeId), error => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /未收到.*成功保存回执/);
+      assert.equal(error.message.includes('PRIVATE_SECRET'), false);
+      return true;
+    });
+    assert.equal(f.saves(), 1);
+  } finally { await f.close(); }
+});
 
 test('numbered titles compare whitespace canonically without changing snapshots or receipts', () => {
   assert.equal(fanqieTitlesEquivalent('第 2 章新标题', '第2章 新标题'), true);
@@ -34,7 +63,19 @@ async function fixture(mode = 'ok') {
     const url = new URL(route.request().url());
     requests.push(url);
     assert.equal(url.origin, 'https://fanqienovel.com');
-    assert.equal(route.request().method(), 'GET', 'all browser traffic is mocked and no direct write API is allowed');
+    if (url.pathname === '/api/author/article/cover_article/v0/') {
+      assert.equal(route.request().method(), 'POST');
+      const data = route.request().postDataJSON();
+      assert.equal(data.book_id, bookId);
+      assert.equal(data.item_id, draftId);
+      saves++;
+      title = data.title;
+      number = data.number;
+      content = data.content;
+      selectedVolume = data.volume;
+      return mode === 'save-rejected' ? route.fulfill({ contentType: 'application/json', body: '{"code":401,"message":"PRIVATE_SECRET"}' }) : json(route, {});
+    }
+    assert.equal(route.request().method(), 'GET', 'only intercepted exact draft save may POST');
     if (url.pathname === '/api/user/info/v2') return json(route, { id: mode === 'wrong-account' ? 'other' : 'author', name: '作者' });
     if (url.pathname === '/api/author/volume/volume_list/v1') {
       assert.equal(url.searchParams.get('book_id'), bookId);
@@ -87,7 +128,8 @@ async function fixture(mode = 'ok') {
         <a class="muye-link-text" onclick="document.querySelector('.editor-volume').style.display='block'"><span class="publish-header-volume-name">${selectedVolume === volumeId ? '第二卷' : '第一卷'}</span></a>
         <div class="editor-volume" style="display:none"><h2>分卷</h2><div class="editor-volume-list-item-normal"><span onclick="window.selected='${volumeId}'">第二卷</span><i onclick="window.bad=true">编辑</i></div>
         <div class="editor-volume-footer-buttons"><button onclick="document.querySelector('.publish-header-volume-name').textContent='第二卷';this.closest('.editor-volume').style.display='none'">确定</button></div></div>
-        <button class="auto-editor-save-btn" onclick="fetch('/mock-save?'+new URLSearchParams({title:document.querySelector('.serial-editor-input-hint-area').value,number:document.querySelector('.left-input input').value,content:document.querySelector('.ProseMirror').innerText,volume:window.selected||'${selectedVolume}'}))">存草稿</button>
+        <button class="auto-editor-save-btn" onclick="fetch('/api/author/article/cover_article/v0/',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({book_id:'${bookId}',item_id:'${draftId}',title:document.querySelector('.serial-editor-input-hint-area').value,number:document.querySelector('.left-input input').value,content:document.querySelector('.ProseMirror').innerText,volume:window.selected||'${selectedVolume}'})})">存草稿</button>
+        ${mode === 'delayed' ? `<script>const button=document.querySelector('.auto-editor-save-btn');button.disabled=true;setTimeout(()=>{document.querySelector('.serial-editor-input-hint-area').value='缓存旧标题';document.querySelector('.ProseMirror').textContent='缓存旧正文';button.disabled=false;},1800);</script>` : ''}
       </body></html>` });
     }
     return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<html><body><script type="application/json">{"bookList":[{"book_id":"${bookId}","title":"作品"}]}</script></body></html>` });
