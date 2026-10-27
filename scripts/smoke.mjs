@@ -19,7 +19,7 @@ await once(probe, 'listening');
 const port = probe.address().port;
 await new Promise((resolve) => probe.close(resolve));
 const base = `http://127.0.0.1:${port}`;
-const child = spawn(process.execPath, [path.join(root, 'build/server/index.js')], {
+const child = spawn(process.execPath, [path.join(root, 'build/packages/server/src/index.js')], {
   cwd: os.tmpdir(),
   env: {
     ...process.env,

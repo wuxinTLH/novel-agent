@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { Pool, type PoolConfig } from 'pg';
-import { PostgresStorage, PostgresStorageError } from '../server/models/postgres-storage.js';
+import { PostgresStorage, PostgresStorageError } from '../packages/server/src/infrastructure/storage/postgres-storage.js';
 
 // Explicitly invoked live acceptance probe. Never reads credential files or prints
 // connection details, source documents, database errors, or environment values.

@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
-import { runAdmin, parseAdminArguments } from '../build/server/admin.js';
+import { runAdmin, parseAdminArguments } from '../build/packages/server/src/features/administration/admin.js';
 
 // Real production API + browser UI, with disposable data and no database connections.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,7 +33,7 @@ try {
   await new Promise((resolve) => probe.close(resolve));
   const base = `http://127.0.0.1:${port}`;
   const startServer = async () => {
-    child = spawn(process.execPath, [path.join(root, 'build/server/index.js')], {
+    child = spawn(process.execPath, [path.join(root, 'build/packages/server/src/index.js')], {
       cwd: os.tmpdir(),
       env: {
         ...process.env,

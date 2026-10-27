@@ -34,7 +34,7 @@
 
 开发环境直接读取本目录；生产构建会复制到 `dist/themes`。生产部署可更新已部署的该目录后点击“重新加载主题”；只修改源码目录时仍需构建并部署，不能自动改变已有部署。
 
-`src/themes-load.ts` 提供 `themesLoad`、注册表校验与并发安全的样式切换。旧保存值 `system/light/dark/mtf` 自动迁移为对应 `theme-xxx`；已移除或未知的主题选择回退到 `defaultTheme`。非法注册表不会覆盖当前列表和外观。CSS 属于可信本地资源，不应注册未经审查的第三方样式。
+`packages/web/src/lib/themes/themes-load.ts` 提供 `themesLoad`、注册表校验与并发安全的样式切换。旧保存值 `system/light/dark/mtf` 自动迁移为对应 `theme-xxx`；已移除或未知的主题选择回退到 `defaultTheme`。非法注册表不会覆盖当前列表和外观。CSS 属于可信本地资源，不应注册未经审查的第三方样式。
 
 ## 内置资源与作用域
 

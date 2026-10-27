@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { Pool } from 'pg';
 import { sqlConnectConfigSchema } from '../shared/sqlconnect.js';
-import { RelationalStorage, RelationalStorageError } from '../server/models/relational-storage.js';
+import { RelationalStorage, RelationalStorageError } from '../packages/server/src/infrastructure/storage/relational-storage.js';
 
 // Explicit live PostgreSQL acceptance only. Never reads credential files or prints
 // connection details, source documents, environment values, or database errors.

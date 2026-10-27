@@ -2,6 +2,13 @@
 
 ## 未发布
 
+### 工程目录与工作区
+
+- 前后端独立为 npm workspaces：`space.syjx.agent.novel.web` 与 `space.syjx.agent.novel.server`；根目录安装、开发、构建、启动和维护命令保留。
+- 前端按 app、services、styles、lib 分层，components 和 hooks 进一步按功能划分；后端按 core、features、infrastructure 分层，将各业务服务和测试归属对应领域。
+- 更新全部源码引用、Worker / CLI 入口、验收脚本与运行根目录发现，保持根目录 data、shared、public 和构建输出位置兼容；后端构建自动复制四个 SQL 资源，避免生产包遗漏迁移脚本。
+- 修复生产验收发现的外层 SQLconnect 写操作 CSRF 防护缺口：在解析请求前校验租户绑定的真实 Worker token，保持认证 CSRF 与角色校验独立，补充缺失 / 错误 / 跨租户 token 拒绝回归。
+
 ### 工作流与平台界面
 
 - 将新建节点的提示词集中为共享预设，保留作者已保存的提示词；补充节点模型、关联设定和上游上下文展示。
@@ -11,7 +18,7 @@
 
 ### 后端与可选数据库
 
-- 将业务 API 拆分到 `server/models/`，入口保留环境、数据锁、服务装配和关闭管理；延续原 API 路径与本地 JSON 数据。
+- 将业务 API 从入口拆为独立服务，并归类于后端工作区 `core/`、`features/` 和 `infrastructure/`；入口保留环境、数据锁、服务装配和关闭管理，延续原 API 路径与本地 JSON 数据。
 - 增加默认关闭的认证与本地管理 CLI：停服后通过 `npm run admin -- bootstrap-admin --username admin --confirm` 首次引导超级管理员，密码仅来自 `NOVEL_BOOTSTRAP_PASSWORD` 环境变量；显式选择 legacy owner 后才能启用认证，不让首次登录自动接管旧数据。
 - 认证模式按验证后的稳定用户 UUID 装配独立、不可变 owner 的应用上下文，隔离 Store、Runner、模型密钥、平台运行时、发布队列和上传；提供用户创建 / 停用、会话 / CSRF 和管理员 Turnstile 配置，默认单用户行为保留。
 - SQLconnect 保留 `sqlconnect.json` 和原连接探测 / 初始化入口，保存 / 初始化不自动迁移。新增 v3 `storage-profiles.json` 多连接及 owner 映射，MySQL / PostgreSQL / SQL Server 关系适配器；MySQL / SQL Server 目前仅模拟 SQL 单元验证，尚无真实服务器兼容性证明。

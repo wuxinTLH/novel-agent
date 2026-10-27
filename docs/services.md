@@ -1,8 +1,8 @@
-# models 服务与用户边界
+# 后端分层、服务与用户边界
 
 ## 组织方式
 
-[server/index.ts](../server/index.ts) 负责环境、数据锁、服务装配、监听及关闭。业务按模块放在 [server/models/](../server/models/)，当前是一个应用内的控制面、租户 Worker 和数据库 Worker，不是分别部署的分布式微服务。
+[服务入口](../packages/server/src/index.ts) 负责环境、数据锁、服务装配、监听及关闭。后端包名为 `space.syjx.agent.novel.server`，源码分为 [core](../packages/server/src/core/)、[features](../packages/server/src/features/) 和 [infrastructure](../packages/server/src/infrastructure/)，不再将全部服务混放在 models 目录。当前是一个应用内的控制面、租户 Worker 和数据库 Worker，不是分别部署的分布式微服务。具体目录职责见 [后端包说明](../packages/server/README.md)。下列文件名在对应功能目录中定位，API 路径不变。
 
 - `context.ts`：Store、Runner、PlatformRuntime、模型提供方共享上下文，以及 FeatureService 接口。
 - `application.ts` / `registry.ts`：显式注册、服务顺序、重复标识校验。
@@ -18,8 +18,8 @@
 - `sqlconnect.ts` / `sqlconnect-drivers.ts`：原连接探测及预留表初始化；见 [SQLconnect](sqlconnect.md)。
 - `document-storage.ts` / `storage-config.ts` / [shared/storage.ts](../shared/storage.ts)：文档边界、v3 多数据库配置、owner 映射与激活清单。
 - `relational-storage.ts` / `pooled-storage-bridge.ts` / `database-worker.ts`：v3 关系存储、持久连接池及同步持久化桥接。
-- [server/admin.ts](../server/admin.ts)：停服后的身份引导及旧 PostgreSQL v2 迁移 CLI。
-- [server/maintenance-cli.ts](../server/maintenance-cli.ts) / [server/maintenance.ts](../server/maintenance.ts)：离线全量应用备份、恢复、全部租户迁移。
+- [admin.ts](../packages/server/src/features/administration/admin.ts)：停服后的身份引导及旧 PostgreSQL v2 迁移 CLI。
+- [server/maintenance-cli.ts](../packages/server/src/features/administration/maintenance-cli.ts) / [server/maintenance.ts](../packages/server/src/features/administration/maintenance.ts)：离线全量应用备份、恢复、全部租户迁移。
 
 保留现有业务 API 路径及应用文档结构，不自动重写旧数据。扩展使用 FeatureService，并在统一防护后装配；自定义服务须加入入口关闭列表并等待 close 钩子。
 

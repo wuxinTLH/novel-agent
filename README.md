@@ -189,18 +189,24 @@ npm run build
 
 ## 主要代码
 
+项目采用 npm workspaces：前端包 `space.syjx.agent.novel.web`，后端包 `space.syjx.agent.novel.server`。根目录执行 `npm install`，现有 `npm run dev`、`npm run build`、`npm start`、`npm run admin -- ...` 和 `npm run maintenance -- ...` 入口保留。
+
 ```text
-src/App.tsx              页面、工作流、主题与模型界面
-src/styles.scss          全局 SCSS 样式
-src/components/          对话框、生成配置和候选稿组件
-src/themes-load.ts       主题注册表与并发安全的样式切换
-public/themes/           独立主题 CSS 与注册表
-server/index.ts          环境、数据锁、服务装配与生命周期
-server/models/           业务 API、User 边界与 SQLconnect
-server/models/sql/       显式数据库初始化资源（部署时保留）
-shared/node-presets.ts   新建节点的统一提示词预设
-server/engine.ts         模型调用、世界观过滤和章节运行
-server/defaults.ts       默认工作流与世界观工作流
-server/store.ts          本机作品数据
-shared/types.ts          前后端共享类型
+packages/web/
+  src/app/                    应用页面与路由装配
+  src/components/             common/auth/administration/platforms 等二级组件目录
+  src/hooks/                  chapters/generation/workflow/platforms 二级逻辑目录
+  src/services/               浏览器 API 客户端
+  src/lib/themes/             主题加载逻辑
+  src/styles/                 全局与管理样式
+packages/server/
+  src/index.ts                服务入口
+  src/core/                   应用装配、HTTP、安全数据锁和 tenancy 运行时
+  src/features/               auth/administration/projects/assets/chapters/workflow/generation/models/platforms
+  src/infrastructure/         database/storage/security 技术基础设施
+shared/                       前后端共享协议、类型和校验
+public/themes/                可独立扩展的主题资源，保留根目录位置
+scripts/                      跨包构建资源复制与验收脚本
 ```
+
+详细分层见 [前端包说明](packages/web/README.md) 和 [后端包说明](packages/server/README.md)。可单独运行 `npm run typecheck --workspace space.syjx.agent.novel.web` 或 `npm run typecheck --workspace space.syjx.agent.novel.server`。构建继续输出根目录 `dist/`（前端）与 `build/`（后端和共享模块），SQL 资源由构建脚本复制；生产入口为 `build/packages/server/src/index.js`。默认数据仍位于根目录 `data/`，根目录 `.env` 的加载位置不变，与工作区命令的当前目录无关。

@@ -5,7 +5,8 @@ SQLconnect prepares and tests connections to MySQL, PostgreSQL and Microsoft SQL
 ## Integration
 
 ```ts
-import { SQLConnectService, createSQLconnectRouter } from './models/sqlconnect.js';
+// From packages/server/src/index.ts:
+import { SQLConnectService, createSQLconnectRouter } from './infrastructure/database/sqlconnect.js';
 const sqlconnect = new SQLConnectService({ dataDir, appRoot });
 // Apply the application's local-origin, authentication and CSRF guards first.
 app.use('/api/sqlconnect', createSQLconnectRouter(sqlconnect));
@@ -13,7 +14,7 @@ app.use('/api/sqlconnect', createSQLconnectRouter(sqlconnect));
 await sqlconnect.close();
 ```
 
-`dataDir` is the existing private application data directory. `appRoot` is the deployment root containing `server/models/sql`. Constructor loads configuration only; it never opens a database connection or initializes anything. A corrupt config degrades only this optional service: status reports `available:false,errorCode:'SQLCONNECT_CONFIG_UNAVAILABLE'` and the local JSON application may continue. Connection operations and saves fail closed so malformed files are not overwritten. Stop the application, repair or explicitly remove the bad config file, then restart to recover. Dependency injection accepts `drivers: SQLConnectDriverMap`, whose adapters implement `connect(config, signal)` returning `{execute(sql), close()}`. Adapters must honor cancellation and bound their own connection/query/close work.
+`dataDir` is the existing private application data directory. `appRoot` is the deployment root containing the workspace manifest and source or compiled `packages/server/src/infrastructure/storage/sql` resources. Constructor loads configuration only; it never opens a database connection or initializes anything. A corrupt config degrades only this optional service: status reports `available:false,errorCode:'SQLCONNECT_CONFIG_UNAVAILABLE'` and the local JSON application may continue. Connection operations and saves fail closed so malformed files are not overwritten. Stop the application, repair or explicitly remove the bad config file, then restart to recover. Dependency injection accepts `drivers: SQLConnectDriverMap`, whose adapters implement `connect(config, signal)` returning `{execute(sql), close()}`. Adapters must honor cancellation and bound their own connection/query/close work.
 
 Mount the factory behind the same protections as other local settings mutations. The factory does not itself implement sessions or CSRF policy, and must not be exposed directly to the public Internet. It sets `Cache-Control: no-store` and returns only sanitized errors. The application must also use bounded JSON request-body parsing and must not log request bodies containing credentials.
 
@@ -64,7 +65,7 @@ Only one connection operation may run per service instance. Config writes and ov
 
 ## Build and deployment assets
 
-TypeScript does not copy SQL resources. Package **`server/models/sql/init_mysql.sql`, `server/models/sql/init_postgresql.sql`, and `server/models/sql/init_mssql.sql` at the application root alongside `build/`**. `appRoot` makes resolution explicit. Without it, the service locates the same application-root directory both from source `server/models` and compiled `build/server/models`, independent of the current working directory. Deploying only `build/` without those resources permits config/test but explicit initialization fails with a sanitized error; it never falls back to another SQL path.
+TypeScript does not copy SQL resources by itself. The root and server workspace build commands run `scripts/copy-server-assets.mjs`, copying all four bundled SQL files from `packages/server/src/infrastructure/storage/sql/` to `build/packages/server/src/infrastructure/storage/sql/`. Deploy the complete `build/` tree with these resources; do not copy only JavaScript. By default the service resolves the sibling SQL directory from its own module, independently of the current working directory. An explicit `appRoot` resolves source or compiled resources beneath the deployment root. Missing resources fail explicit initialization with a sanitized error; no arbitrary SQL path is accepted.
 
 ## v3 storage-profiles
 
@@ -128,4 +129,4 @@ Restore defaults to new / empty files and an empty v3 application repository. SQ
 
 After `npm run build`, `node scripts/smoke-administration.mjs` exercises the production API / browser administration UI with disposable local data and no real database. Optional live v3 PostgreSQL acceptance is `npx tsx scripts/test-relational-storage.ts`: explicitly provide `PGHOST`, `PGPORT`, `PGDATABASE=novel_test`, `PGUSER`, `PGPASSWORD` securely. TLS verification is the default; `PGSSLMODE=disable` is allowed only for loopback. It creates schema and retains unique `test-v3-*` rows without destructive cleanup, so use the dedicated test DB with schema privileges. This v3 live script has not been executed here; prior v2 PostgreSQL acceptance is not v3 proof, and MySQL / SQL Server remain mock-only.
 
-`npx tsx --test server/models/sqlconnect.test.ts` uses injected adapters and a loopback HTTP server; no live database, credentials or network DB are needed. It checks redaction/persistence, strict validation, aliases, explicit confirmation, dialect script selection/GO splitting, concurrency, deadline cancellation and late close, safe errors, offline startup and absence of arbitrary SQL routes. It does not prove vendor-server syntax/permissions or connectivity in a particular deployment; perform optional integration tests against disposable real databases before production use.
+`npx tsx --test packages/server/src/infrastructure/database/sqlconnect.test.ts` uses injected adapters and a loopback HTTP server; no live database, credentials or network DB are needed. It checks redaction/persistence, strict validation, aliases, explicit confirmation, dialect script selection/GO splitting, concurrency, deadline cancellation and late close, safe errors, offline startup and absence of arbitrary SQL routes. It does not prove vendor-server syntax/permissions or connectivity in a particular deployment; perform optional integration tests against disposable real databases before production use.

@@ -10,7 +10,7 @@ function collect(directory) {
     return entry.isDirectory() ? collect(relative) : entry.name.endsWith('.test.ts') ? [relative] : [];
   });
 }
-const testFiles = ['server', 'src'].flatMap(collect);
+const testFiles = ['packages/server/src', 'packages/web/src'].flatMap(collect);
 const result = spawnSync(
   process.execPath,
   [path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', ...testFiles],
