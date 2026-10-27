@@ -21,11 +21,11 @@ export interface FeatureService {
   close?(): Promise<void>;
 }
 
-export function createServiceContext(dir: string): ServiceContext {
+export function createServiceContext(dir: string, inheritEnvironment = true): ServiceContext {
   const store = new Store(dir);
   const platformRuntime = new PlatformRuntime(store);
   const runner = new Runner(store, (project, run, workflow) =>
     completeWorkflowPublication(store, platformRuntime, project, run, workflow),
   );
-  return { dir, store, platformRuntime, runner, modelProvider: createModelProvider(dir) };
+  return { dir, store, platformRuntime, runner, modelProvider: createModelProvider(dir, inheritEnvironment) };
 }

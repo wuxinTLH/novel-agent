@@ -12,9 +12,13 @@
 ### 后端与可选数据库
 
 - 将业务 API 拆分到 `server/models/`，入口保留环境、数据锁、服务装配和关闭管理；延续原 API 路径与本地 JSON 数据。
-- 增加默认停用的 User 身份边界基础设施，不提供登录认证，不宣称已支持多用户运行。
-- 新增 SQLconnect 设置与 API，支持 MySQL、PostgreSQL、SQL Server 连接测试及经确认显式初始化预留表；不创建数据库，不迁移小说，不切换 JSON 存储。
-- 数据库配置严格校验、响应脱敏，默认验证 TLS；数据库密码明文落盘，需保护数据目录及备份。部署时保留初始化 SQL 脚本。
+- 增加默认关闭的认证与本地管理 CLI：停服后通过 `npm run admin -- bootstrap-admin --username admin --confirm` 首次引导超级管理员，密码仅来自 `NOVEL_BOOTSTRAP_PASSWORD` 环境变量；显式选择 legacy owner 后才能启用认证，不让首次登录自动接管旧数据。
+- 认证模式按验证后的稳定用户 UUID 装配独立、不可变 owner 的应用上下文，隔离 Store、Runner、模型密钥、平台运行时、发布队列和上传；提供用户创建 / 停用、会话 / CSRF 和管理员 Turnstile 配置，默认单用户行为保留。
+- SQLconnect 继续使用数据目录的 `sqlconnect.json` 及原有设置界面。MySQL / SQL Server 仍只有连接探测与预留表基础设施，没有 SQL 业务后端；保存 / 初始化不自动迁移。
+- 新增 PostgreSQL 文档快照后端及显式 `migrate-sql --owner UUID --confirm` v2 迁移：按明确身份导入并回读核对，再写本地激活清单。业务仅存四类 JSON 文档：projects、models、platform-connections、publication-queue；全局认证另存文档，不是全面规范化 SQL 业务表。
+- 运行时 PostgreSQL 同步子进程桥接等待实际 `COMMIT`，但阻塞事件循环、每次操作新开连接；未知结果停止当前存储，不回落旧 JSON。仍只支持单服务进程与本地数据锁，行锁 / revision 不保证跨主机生成或发布安全。
+- 上传、模型秘密 / 密钥、平台凭据与浏览器配置仍在租户本地目录；CLI 自动备份不覆盖完整目录或全部 SQL 租户，须另外备份完整数据目录、密钥和数据库。数据库密码明文落盘，认证密钥本地 `0600`，Windows ACL 仍需手工维护。部署时保留初始化与 v2 迁移 SQL 脚本。
+- Turnstile 需真实 Cloudflare 密钥、匹配 action / hostname 与在线验证，未宣称已通过真实在线验收；认证保留既有可信局域网 HTTP 限制，不代表公网生产部署方案。
 
 ### 主题与文档
 

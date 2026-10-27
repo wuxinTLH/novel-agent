@@ -3,15 +3,18 @@ import path from 'node:path';
 import { type ModelProfile } from '../../shared/types.js';
 import { normalizeProtocol, type RuntimeSettings } from '../engine.js';
 import { ModelSecretStore } from '../secrets.js';
-export function createModelProvider(dir: string) {
+import { readDocumentFile, writeDocumentFile } from './document-storage.js';
+export function createModelProvider(dir: string, inheritEnvironment = true) {
+  const env = inheritEnvironment ? process.env : {};
   const models = new Map<string, RuntimeSettings>();
   const modelSecrets = new ModelSecretStore(dir);
   const defaultModelId = 'default';
   const modelsFile = path.join(dir, 'models.json');
   const savedModelState = (() => {
-    if (!fs.existsSync(modelsFile)) return { models: [] as RuntimeSettings[], activeModelId: '' };
+    const source = readDocumentFile(modelsFile);
+    if (source === null) return { models: [] as RuntimeSettings[], activeModelId: '' };
     try {
-      const parsed = JSON.parse(fs.readFileSync(modelsFile, 'utf8')) as
+      const parsed = JSON.parse(source) as
         RuntimeSettings[] | { models?: RuntimeSettings[]; activeModelId?: string };
       if (Array.isArray(parsed)) return { models: parsed, activeModelId: '' };
       return {
@@ -25,19 +28,18 @@ export function createModelProvider(dir: string) {
   const savedModels = savedModelState.models;
   const savedDefault = savedModels.find((model) => (model.id || defaultModelId) === defaultModelId);
   const settings: RuntimeSettings = {
-    baseUrl: savedDefault?.baseUrl || process.env.MODEL_BASE_URL || 'https://api.openai.com/v1',
-    model: savedDefault?.model || process.env.MODEL_NAME || 'gpt-4.1-mini',
+    baseUrl: savedDefault?.baseUrl || env.MODEL_BASE_URL || 'https://api.openai.com/v1',
+    model: savedDefault?.model || env.MODEL_NAME || 'gpt-4.1-mini',
     apiKey: '',
     hasKey: false,
-    mode: savedDefault?.mode || (process.env.MODEL_API_KEY ? 'live' : 'demo'),
+    mode: savedDefault?.mode || (env.MODEL_API_KEY ? 'live' : 'demo'),
     activeModelId: savedModelState.activeModelId || savedDefault?.id || defaultModelId,
-    protocol: normalizeProtocol(savedDefault?.protocol || process.env.MODEL_PROTOCOL),
+    protocol: normalizeProtocol(savedDefault?.protocol || env.MODEL_PROTOCOL),
   };
   if (!savedModels.length) models.set(defaultModelId, { ...settings, id: defaultModelId, name: '默认模型' });
   for (const model of savedModels) {
     const id = model.id || defaultModelId;
-    const restoredKey =
-      modelSecrets.get(id) || (id === defaultModelId ? process.env.MODEL_API_KEY || '' : '');
+    const restoredKey = modelSecrets.get(id) || (id === defaultModelId ? env.MODEL_API_KEY || '' : '');
     models.set(id, {
       ...model,
       id,
@@ -61,8 +63,7 @@ export function createModelProvider(dir: string) {
       activeModelId: settings.activeModelId,
       models: Array.from(models.values()).map(({ apiKey: _apiKey, ...model }) => model),
     };
-    fs.writeFileSync(modelsFile + '.tmp', JSON.stringify(safe, null, 2));
-    fs.renameSync(modelsFile + '.tmp', modelsFile);
+    writeDocumentFile(modelsFile, JSON.stringify(safe, null, 2));
   };
   const publicModel = (m: RuntimeSettings): ModelProfile => ({
     id: m.id || defaultModelId,

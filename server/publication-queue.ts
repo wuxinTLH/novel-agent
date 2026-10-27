@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { documentStorage, readDocumentFile } from './models/document-storage.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DraftSnapshot } from '../shared/platforms.js';
 import type { PublicationAction, PublicationBatch, PublicationItem, PublicationPreview, PublicationTarget, PublicationChapterRemotePlan } from '../shared/publication.js';
@@ -131,10 +132,15 @@ export class PublicationQueue {
   private persist: (filePath: string, contents: string) => void;
   private now: () => string;
   constructor(private filePath: string, private hooks: PublicationQueueHooks, options: PublicationQueueOptions = {}) {
-    this.persist = options.persist ?? atomicPersist;
+    this.persist = options.persist ?? ((file, contents) => {
+      const backend = documentStorage(path.dirname(file));
+      if (backend) backend.write(path.basename(file), contents);
+      else atomicPersist(file, contents);
+    });
     this.now = options.now ?? (() => new Date().toISOString());
-    if (fs.existsSync(filePath)) {
-      const data = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { version: number; batches: PublicationBatch[] };
+    const source = readDocumentFile(filePath);
+    if (source !== null) {
+      const data = JSON.parse(source) as { version: number; batches: PublicationBatch[] };
       if (data.version !== 1 || !Array.isArray(data.batches)) reject('INVALID_STORE', 'Unsupported publication queue store');
       this.batches = data.batches;
       for (const batch of this.batches) this.checkBatch(batch);

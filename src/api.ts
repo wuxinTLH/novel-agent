@@ -1,5 +1,40 @@
 let csrfToken: string | undefined;
 let sessionRequest: Promise<string> | undefined;
+let authCsrfToken: string | undefined;
+let authCsrfRequest: Promise<string> | undefined;
+let identityEpoch = 0;
+
+/** Invalidate both token domains; old in-flight responses may not repopulate them. */
+export function resetApiSession() {
+  identityEpoch += 1;
+  csrfToken = undefined;
+  sessionRequest = undefined;
+  authCsrfToken = undefined;
+  authCsrfRequest = undefined;
+}
+
+async function authMutationToken() {
+  if (authCsrfToken) return authCsrfToken;
+  if (!authCsrfRequest) {
+    const epoch = identityEpoch;
+    authCsrfRequest = api<{ authenticated: boolean; csrfToken?: string }>('/auth/session')
+      .then((session) =>
+        session.authenticated && session.csrfToken
+          ? { csrfToken: session.csrfToken }
+          : api<{ csrfToken: string }>('/auth/csrf'),
+      )
+      .then((session) => {
+        if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+        if (!session.csrfToken) throw new Error('无法取得登录会话凭据，请刷新后重试。');
+        authCsrfToken = session.csrfToken;
+        return session.csrfToken;
+      })
+      .finally(() => {
+        if (epoch === identityEpoch) authCsrfRequest = undefined;
+      });
+  }
+  return authCsrfRequest;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -25,26 +60,36 @@ export type ApiOptions = RequestInit & { timeoutMs?: number };
 async function mutationToken() {
   if (csrfToken) return csrfToken;
   if (!sessionRequest) {
+    const epoch = identityEpoch;
     sessionRequest = api<{ csrfToken: string }>('/platforms/session')
       .then((session) => {
+        if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
         if (!session.csrfToken) throw new Error('无法取得本地会话凭据，请刷新页面后重试。');
         csrfToken = session.csrfToken;
         return csrfToken;
       })
       .finally(() => {
-        sessionRequest = undefined;
+        if (epoch === identityEpoch) sessionRequest = undefined;
       });
   }
   return sessionRequest;
 }
 export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> {
+  const epoch = identityEpoch;
+  const authRoute = url.startsWith('/auth/');
   const method = (options.method || 'GET').toUpperCase();
   const mutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData) && !headers.has('Content-Type'))
     headers.set('Content-Type', 'application/json');
   headers.set('X-Requested-With', 'XMLHttpRequest');
-  if (mutation && !headers.has('X-Platform-CSRF')) headers.set('X-Platform-CSRF', await mutationToken());
+  if (mutation && authRoute && !headers.has('x-csrf-token'))
+    headers.set('x-csrf-token', await authMutationToken());
+  if (mutation && !authRoute) {
+    if (authCsrfToken && !headers.has('x-csrf-token')) headers.set('x-csrf-token', authCsrfToken);
+    if (!headers.has('X-Platform-CSRF')) headers.set('X-Platform-CSRF', await mutationToken());
+  }
+  if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
   if (options.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
   const timeoutMs = options.timeoutMs ?? (mutation ? 30_000 : 15_000);
   const controller = new AbortController();
@@ -62,6 +107,7 @@ export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> 
       signal: controller.signal,
       headers,
       credentials: 'same-origin',
+      ...(authRoute ? { cache: 'no-store' as const } : {}),
     });
     text = await response.text();
   } catch (error) {
@@ -91,7 +137,12 @@ export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> 
   if (!response.ok) {
     const data = body as
       { error?: unknown; code?: string; retryable?: boolean; requestId?: string; runId?: string } | undefined;
-    if (response.status === 403 && mutation) csrfToken = undefined;
+    if (response.status === 403 && mutation && epoch === identityEpoch) {
+      if (authRoute) authCsrfToken = undefined;
+      else csrfToken = undefined;
+    }
+    if (response.status === 401 && !authRoute && epoch === identityEpoch)
+      window.dispatchEvent(new Event('novel-auth-expired'));
     const message = typeof data?.error === 'string' ? data.error : '请求失败，请稍后重试。';
     throw new ApiError(
       message +
@@ -106,6 +157,12 @@ export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> 
       },
     );
   }
+  if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+  if (url === '/auth/session' || url === '/auth/csrf') {
+    const token = (body as { csrfToken?: string } | undefined)?.csrfToken;
+    if (token) authCsrfToken = token;
+  }
+  if (url === '/auth/login' || url === '/auth/logout') resetApiSession();
   if (url === '/platforms/session') {
     const token = (body as { csrfToken?: string } | undefined)?.csrfToken;
     if (token) csrfToken = token;

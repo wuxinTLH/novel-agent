@@ -6,8 +6,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { GenerationError } from '../generation.js';
 import type { ServiceContext } from './context.js';
-export function installHttpPolicy(app: express.Express, context: ServiceContext, port: number) {
-  const { dir, platformRuntime } = context;
+export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number) {
   const privateHost = (hostname: string) =>
     hostname === 'localhost' ||
     hostname === '127.0.0.1' ||
@@ -37,8 +36,9 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext,
     if (req.path.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
       if (
+        context &&
         !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
-        req.get('X-Platform-CSRF') !== platformRuntime.csrfToken
+        req.get('X-Platform-CSRF') !== context.platformRuntime.csrfToken
       )
         return res
           .status(403)
@@ -49,7 +49,7 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext,
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'",
     );
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     next();
@@ -68,14 +68,17 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext,
     next();
   });
   app.use(express.json({ limit: '16mb' }));
-  app.use(
-    '/uploads',
-    express.static(path.join(dir, 'uploads'), {
-      setHeaders(res) {
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-      },
-    }),
-  );
+  if (context)
+    app.use(
+      '/uploads',
+      express.static(path.join(context.dir, 'uploads'), {
+        setHeaders(res) {
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cache-Control', 'private, no-store');
+        },
+      }),
+      (_req, res) => res.status(404).json({ code: 'UPLOAD_NOT_FOUND', error: '文件不存在。' }),
+    );
 }
 export function installHttpFallbacks(app: express.Express, root: string) {
   const staticDir = path.join(root, 'dist');

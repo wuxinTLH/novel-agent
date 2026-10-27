@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { readDocumentFile, writeDocumentFile } from './models/document-storage.js';
 import { z } from 'zod';
 import type {
   DraftOperation,
@@ -262,11 +263,11 @@ export class PlatformStore {
   constructor(dir: string) {
     this.file = path.join(dir, 'platform-connections.json');
     fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(this.file)) {
+    const raw = readDocumentFile(this.file);
+    if (raw === null) {
       this.data = empty();
       return;
     }
-    const raw = fs.readFileSync(this.file, 'utf8');
     let input: unknown;
     try {
       input = JSON.parse(raw);
@@ -330,8 +331,7 @@ export class PlatformStore {
     if (changed) this.persist(this.data);
   }
   private persist(next: PlatformData) {
-    fs.writeFileSync(this.file + '.tmp', JSON.stringify(next, null, 2), { mode: 0o600 });
-    fs.renameSync(this.file + '.tmp', this.file);
+    writeDocumentFile(this.file, JSON.stringify(next, null, 2));
   }
   private change(fn: (data: PlatformData) => void) {
     const next = structuredClone(this.data);

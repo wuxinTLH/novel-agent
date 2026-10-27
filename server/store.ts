@@ -5,6 +5,7 @@ import { chapterRequirementsSchema, MAX_CHAPTER_NUMBER, requirementsSchema } fro
 import type { Project, Step } from '../shared/types.js';
 import { normalizeWorkflow, starterProject, syncActiveWorkflow } from './defaults.js';
 import { validateGraph } from './workflow-graph.js';
+import { readDocumentFile, writeDocumentFile } from './models/document-storage.js';
 
 export const PROJECT_DATA_VERSION = 2;
 const stepSchema = z
@@ -268,13 +269,13 @@ export class Store {
     this.dir = path.resolve(dir);
     fs.mkdirSync(path.join(this.dir, 'uploads'), { recursive: true });
     const file = path.join(this.dir, 'projects.json');
-    if (fs.existsSync(file)) {
-      const original = fs.readFileSync(file, 'utf8');
+    const original = readDocumentFile(file);
+    if (original !== null) {
       this.projects = migrateProjects(JSON.parse(original));
       const next = JSON.stringify(this.projects, null, 2);
       if (next !== original) {
         const backup = path.join(this.dir, `projects.pre-generation-v${PROJECT_DATA_VERSION}.json.bak`);
-        if (!fs.existsSync(backup)) fs.writeFileSync(backup, original, { flag: 'wx' });
+        if (!fs.existsSync(backup)) fs.writeFileSync(backup, original, { flag: 'wx', mode: 0o600 });
         this.save();
       }
     } else {
@@ -288,8 +289,7 @@ export class Store {
   save() {
     const file = path.join(this.dir, 'projects.json');
     try {
-      fs.writeFileSync(file + '.tmp', JSON.stringify(this.projects, null, 2));
-      fs.renameSync(file + '.tmp', file);
+      writeDocumentFile(file, JSON.stringify(this.projects, null, 2));
     } catch (error) {
       try {
         fs.rmSync(file + '.tmp', { force: true });

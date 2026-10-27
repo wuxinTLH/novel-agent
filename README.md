@@ -1,6 +1,6 @@
 # Novel Agent
 
-本机单用户小说创作工作台，版本 `v0.0.2a`。支持多作品、多工作流、世界观编写、章节创作、资料管理、模型库、主题和本机数据保存。
+面向本机和可信局域网的小说创作工作台，版本 `v0.0.2a`。支持多作品、多工作流、世界观编写、章节创作、资料管理、模型库、主题和数据保存；默认仍为免登录单用户，可通过本地管理 CLI 显式启用认证与租户隔离。不是面向公网的生产部署方案。
 
 ## 快速开始
 
@@ -27,7 +27,7 @@ npm start
 
 - [完整操作手册](docs/使用手册.md)：安装、正文添加、登录绑定、草稿送审与全自动工作流。
 - [番茄平台接入说明](docs/番茄平台接入.md)：能力边界、状态、接口及故障排查。
-- [服务模块与用户边界](docs/services.md)：后端模块组织、扩展注册和未启用的多用户边界。
+- [服务模块与用户边界](docs/services.md)：后端模块组织、认证与租户隔离、PostgreSQL 文档快照存储及限制。
 - [SQLconnect 说明](docs/sqlconnect.md)：可选数据库连接、显式建表、凭据保护和部署资源。
 - [主题扩展说明](public/themes/README.md)：主题注册表、独立 CSS 与生产部署。
 - [更新记录](CHANGELOG.md)：功能变更与验证边界。
@@ -71,7 +71,7 @@ npm start
 
 - 可添加多个模型，并在列表中切换当前模型。
 - 支持 Chat Completions、Responses API 和 Anthropic Messages。
-- 当前模型与运行模式保存在 `data/models.json`，重启后继续使用。
+- 当前模型与运行模式默认保存在数据目录的 `models.json`；显式迁移后由 PostgreSQL 保存该文档快照，重启后继续使用。模型密钥仍在租户本地目录。
 - API Key 加密保存，不返回浏览器，也不写入项目内容。
 - 只有模型库为空时才创建初始“默认模型”。已有模型不会在每次启动时被替换成演示模式。
 
@@ -83,7 +83,19 @@ npm start
 
 ### 可选数据库连接
 
-在设置页保存 SQLconnect 配置后，可测试 MySQL、PostgreSQL 或 SQL Server 连接，并经确认显式初始化预留表。须先自行创建目标数据库；保存配置不自动连接或建表。**小说仍保存为本地 JSON，不自动迁移数据或启用多用户。** 部署时还需保留 SQL 脚本资源，详见 [SQLconnect 说明](docs/sqlconnect.md)。
+设置页沿用数据目录的 `sqlconnect.json` 配置，可测试 MySQL、PostgreSQL 或 SQL Server 连接，并经确认显式初始化预留表；保存或初始化不迁移业务。SQL 业务激活后，界面禁止改写 / 清除连接配置或再次初始化，需停服由本地管理员维护。**只有 PostgreSQL 实现了业务文档快照后端**，MySQL / SQL Server 没有业务存储支持，连接探测成功不代表可迁移。须自行创建数据库，部署时保留 `server/models/sql/` 的初始化及 v2 迁移脚本。
+
+停服并完整备份数据目录，先用下节本地 CLI 引导管理员（认证仍关闭），再通过 `npm run admin -- migrate-sql --owner <UUID> --confirm` 显式执行 PostgreSQL v2 迁移、导入、回读核对并激活；`<UUID>` 必须替换为已有且未禁用身份的 UUID，不能随意生成。建议先迁移再启用认证；首次迁移拒绝额外本地租户目录，不自动汇总其他用户数据。迁移保留旧 JSON，但激活后它们不再是权威数据源，也不会在 SQL 失败时自动回退。操作顺序、认证启用和恢复边界见 [使用手册](docs/使用手册.md#认证与本地管理-cli)；原有连接配置细节见 [SQLconnect 说明](docs/sqlconnect.md)。
+
+### 可选认证
+
+认证默认关闭；首次超级管理员仅能停服后本地创建，不提供公开注册或 HTTP 引导接口。预先通过安全方式注入环境变量 `NOVEL_BOOTSTRAP_PASSWORD`（至少 12 个字符、最多 1024 字节），然后执行：
+
+```powershell
+npm run admin -- bootstrap-admin --username admin --confirm
+```
+
+不要把密码放进命令参数、文档或 Git。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
 
 ### 界面
 
@@ -129,11 +141,13 @@ MODEL_PROTOCOL=chat-completions
 MODEL_API_KEY=your-api-key
 ```
 
-- `data/` 保存作品、章节、资料和模型配置，不提交到 Git。
+- 默认业务数据保存在 `data/`，不提交到 Git。PostgreSQL 仅接管 `projects.json`、`models.json`、`platform-connections.json`、`publication-queue.json` 四类 JSON 文档快照（及全局认证状态），不是规范化 SQL 业务表实现。
+- 上传文件、模型密钥与加密密钥、平台凭据和浏览器配置仍在各租户本地目录；必须停服备份完整数据目录、独立密钥及 PostgreSQL 数据库。CLI 自动备份仅覆盖部分文件 / 指定 owner 的 SQL 快照，不是完整备份。
+- 认证密钥 `auth.key` 保留在本地，按 `0600` 创建 / 收紧；Windows 仍需手工配置 ACL。丢失密钥会影响加密认证配置的解密。
 - SQLconnect 数据库密码以明文保存在数据目录的 `sqlconnect.json`，不属于模型密钥的加密范围；保护操作系统账号、目录权限、Windows ACL 和备份。
 - 模型地址不允许指向本机、内网或云元数据地址。
-- API 修改请求需要当前进程的 `X-Platform-CSRF`。
-- 同一数据目录只允许一个服务实例。
+- 业务 API 修改请求仍需当前租户进程上下文的 `X-Platform-CSRF`；启用认证后另需有效会话及 `X-CSRF-Token`，原有来源 / 私网 HTTP 限制不因登录而解除。
+- 同一数据目录只允许一个服务实例。PostgreSQL 运行时通过同步子进程桥接，实际 `COMMIT` 完成后才返回，但阻塞事件循环且每次操作新开连接，不适合高并发。SQL 行锁 / 版本冲突检测不提供跨主机运行时安全，不能多实例共享数据库运行发布任务。
 - 平台登录必须由用户在隔离浏览器中完成，应用不会代填密码或验证码，也不要求粘贴 Cookie、session 或 token。点击核验会自动进入作者首页，读取实时登录身份后保存会话。
 - 固定配置 `PLATFORM_SECRETS_KEY` 才能加密跨后端重启保存平台会话；未配置时仅保存在内存。同步网站实际更新的浏览器状态，不臆造双 token 刷新接口；失效或验证码要求仍需重新人工登录。
 - 草稿上传、覆盖与送审需要明确操作授权：手动批准，或显式开启自动审批 / 配置全自动工作流。自动审批不关闭账号、正文、版本和幂等校验。删除草稿保留独立确认及只读回查。
