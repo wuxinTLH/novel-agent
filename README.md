@@ -163,6 +163,8 @@ npm run build
 
 `npm test` 使用临时目录和本地测试桩，不会调用真实模型或平台账号。完成生产构建后，可运行 `npm run smoke` 验证默认模式，或运行 `npm run smoke:auth` 在独立临时目录中验证真实 Chromium 登录、超级管理员创建用户、双 CSRF 写入、退出与切换账号、会话刷新、后端重启后的会话 / 作品恢复和跨租户隔离；后者不连接真实 PostgreSQL 或 Cloudflare，不代表这两项在线验收通过。
 
+真实 PostgreSQL 可通过显式 `npm run test:postgres` 验收：仅接受 `PGDATABASE=novel_test`，连接参数由 `PGHOST`、宿主机映射端口 `PGPORT`、`PGUSER`、`PGPASSWORD` 环境变量提供，切勿将密码写入命令参数或 Git。该脚本会执行真实 v2 迁移、写入并保留唯一 `test-pg-*` 测试 owner，不是只读探测。已在测试库通过重复迁移、已有 v1 表行数保持、实际提交读回、跨 owner 隔离、并发 CAS、幂等导入及事务回滚验收；不等同于已迁移用户当前工作目录，也不代表 Cloudflare 或真实平台发布验收。
+
 ## 主要代码
 
 ```text
