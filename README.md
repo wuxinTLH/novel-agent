@@ -161,7 +161,7 @@ npm test
 npm run build
 ```
 
-`npm test` 使用临时目录和本地测试桩，不会调用真实模型或平台账号。完成生产构建后，可运行 `npm run smoke` 验证默认模式，或运行 `npm run smoke:auth` 在独立临时目录中验证真实 Chromium 登录、超级管理员创建用户、双 CSRF 写入、退出与切换账号、会话刷新和跨租户隔离；后者不连接真实 PostgreSQL 或 Cloudflare，不代表这两项在线验收通过。
+`npm test` 使用临时目录和本地测试桩，不会调用真实模型或平台账号。完成生产构建后，可运行 `npm run smoke` 验证默认模式，或运行 `npm run smoke:auth` 在独立临时目录中验证真实 Chromium 登录、超级管理员创建用户、双 CSRF 写入、退出与切换账号、会话刷新、后端重启后的会话 / 作品恢复和跨租户隔离；后者不连接真实 PostgreSQL 或 Cloudflare，不代表这两项在线验收通过。
 
 ## 主要代码
 

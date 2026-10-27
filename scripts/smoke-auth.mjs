@@ -32,27 +32,37 @@ try {
   const port = probe.address().port;
   await new Promise((resolve) => probe.close(resolve));
   const base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, [path.join(root, 'build/server/index.js')], {
-    cwd: os.tmpdir(),
-    env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: data,
-      MODEL_API_KEY: '',
-      MODEL_SECRETS_KEY: '',
-      PLATFORM_SECRETS_KEY: '',
-    },
-    stdio: 'ignore',
-  });
-  let ready = false;
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try {
-      ready = (await fetch(`${base}/api/auth/session`)).ok;
-    } catch {}
-    if (ready || child.exitCode !== null) break;
-    await delay(100);
-  }
-  assert.ok(ready, 'production auth server must start');
+  const startServer = async () => {
+    child = spawn(process.execPath, [path.join(root, 'build/server/index.js')], {
+      cwd: os.tmpdir(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        DATA_DIR: data,
+        MODEL_API_KEY: '',
+        MODEL_SECRETS_KEY: '',
+        PLATFORM_SECRETS_KEY: '',
+      },
+      stdio: 'ignore',
+    });
+    let ready = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        ready = (await fetch(`${base}/api/auth/session`)).ok;
+      } catch {}
+      if (ready || child.exitCode !== null) break;
+      await delay(100);
+    }
+    assert.ok(ready, 'production auth server must start');
+  };
+  const stopServer = async () => {
+    if (child && child.exitCode === null) {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+    }
+  };
+  await startServer();
   assert.equal((await fetch(`${base}/api/projects`)).status, 401);
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -105,6 +115,27 @@ try {
   assert.ok(!isolation.list.includes(privateProject.body.id));
   assert.equal(isolation.detail, 404);
   assert.equal(isolation.users, 403);
+  await stopServer();
+  await startServer();
+  await page.reload();
+  await page.getByRole('button', { name: '退出登录', exact: true }).waitFor();
+  const recovered = await page.evaluate(
+    async (id) => ({
+      session: await (await fetch('/api/auth/session')).json(),
+      foreignStatus: (await fetch(`/api/projects/${id}`)).status,
+    }),
+    privateProject.body.id,
+  );
+  assert.equal(recovered.session.user.username, 'smokewriter');
+  assert.equal(recovered.foreignStatus, 404);
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await login('smokeadmin');
+  const restored = await page.evaluate(async (id) => {
+    const response = await fetch(`/api/projects/${id}`);
+    return { status: response.status, body: await response.json() };
+  }, privateProject.body.id);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.title, 'Admin private browser smoke');
   await page.reload();
   await page.getByRole('button', { name: '退出登录', exact: true }).waitFor();
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
@@ -125,6 +156,8 @@ try {
           'cross-tenant list and detail isolation',
           'ordinary-user administration rejection',
           'session survives reload',
+          'session and tenant isolation survive backend restart',
+          'owner project persists across backend restart',
           'no browser runtime errors',
         ],
       },
