@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useHiddenPlatformRecords } from '../hooks/useHiddenPlatformRecords';
+import { publicationChapterPages } from '../hooks/publicationChapterPages';
 import { useConfirm } from './AppDialog';
 import { api } from '../api';
 import type { PlatformChapterChoice, ProjectPlatformWorkLink } from '../../shared/platforms';
@@ -107,6 +108,7 @@ function ProjectPublicationPanel({
   const [volumeLoading, setVolumeLoading] = useState(false);
   const [volumeError, setVolumeError] = useState('');
   const [chapterIds, setChapterIds] = useState<string[]>([]);
+  const [chapterPage, setChapterPage] = useState(0);
   const [action, setAction] = useState<PublicationAction>('save_draft');
   const [useAi, setUseAi] = useState<'' | '1' | '2'>('');
   const [selectedId, setSelectedId] = useState('');
@@ -125,7 +127,9 @@ function ProjectPublicationPanel({
   const hasUnknown = batches.some(uncertain);
   const selected = batches.find((batch) => batch.id === selectedId);
   const selectedLink = links.find((link) => link.id === linkId && link.projectId === projectId);
-  const savedChapters = [...chapters].sort((a, b) => a.number - b.number || a.id.localeCompare(b.id));
+  const chapterPages = publicationChapterPages(chapters);
+  const savedChapters = chapterPages.flat();
+  const currentChapterPage = chapterPages[chapterPage] ?? [];
   const validIds = new Set(chapters.map((chapter) => chapter.id));
   const selectionValid =
     chapterIds.length > 0 && chapterIds.length <= 50 && chapterIds.every((id) => validIds.has(id));
@@ -140,6 +144,7 @@ function ProjectPublicationPanel({
     setApproval('');
     setSelectedId('');
     setChapterIds([]);
+    setChapterPage(0);
     setAction('save_draft');
     setUseAi('');
   }, [selectionVersion]);
@@ -147,6 +152,7 @@ function ProjectPublicationPanel({
   useEffect(() => {
     setApproval('');
     setChapterIds([]);
+    setChapterPage(0);
   }, [targetLinkId]);
 
   const refresh = useCallback(
@@ -431,14 +437,20 @@ function ProjectPublicationPanel({
         <fieldset disabled={locked}>
           <legend>选择正文（{chapterIds.length}/50）</legend>
           <div className="publication-selection-actions">
-            <span>按章节顺序上传，单批最多 50 章</span>
+            <span>共 {savedChapters.length} 章；按章节顺序上传，单批最多 50 章。切换分组不会上传或清空已选章节。</span>
             <div>
-              <button type="button" className="button secondary" disabled={!savedChapters.length || chapterIds.length === Math.min(savedChapters.length, 50)} onClick={() => setChapterIds(savedChapters.slice(0, 50).map(chapter => chapter.id))}>选择前 50 章</button>
+              {chapterPages.length > 1 && <select aria-label="选择章节分组" value={Math.min(chapterPage, chapterPages.length - 1)} onChange={(event) => setChapterPage(Number(event.target.value))}>
+                {chapterPages.map((page, index) => <option key={index} value={index}>
+                  第 {index * 50 + 1}–{index * 50 + page.length} 项 · 第 {page[0].number}–{page[page.length - 1].number} 章
+                </option>)}
+              </select>}
+              <button type="button" className="button secondary" disabled={!currentChapterPage.length || currentChapterPage.every((chapter) => chapterIds.includes(chapter.id))} onClick={() => setChapterIds(currentChapterPage.map(chapter => chapter.id))}>选择本组 {currentChapterPage.length} 章</button>
               <button type="button" className="button secondary" disabled={!chapterIds.length} onClick={() => setChapterIds([])}>清空选择</button>
             </div>
           </div>
+          {chapterIds.length > 0 && <p className="platform-help">本批已选 {chapterIds.length} 章（第 {savedChapters.find(chapter => chapterIds.includes(chapter.id))?.number}–{[...savedChapters].reverse().find(chapter => chapterIds.includes(chapter.id))?.number} 章，可能不连续）；提交前请在完整预览中核对逐章内容。</p>}
           {!savedChapters.length && <p className="platform-empty">暂无已保存章节。</p>}
-          {savedChapters.map((chapter) => (
+          {currentChapterPage.map((chapter) => (
             <label className="publication-chapter-option" key={chapter.id}>
               <input
                 type="checkbox"

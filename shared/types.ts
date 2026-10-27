@@ -13,11 +13,11 @@ export const DEFAULT_CHARACTER_TEMPLATE = `# 简述
 年龄:
 职业:
 
-## 属性
+## 目标与动机
 
-力量:
-精力:
-san值:
+当前目标:
+内在动机:
+优势与局限:
 
 ## 经历
 

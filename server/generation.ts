@@ -279,6 +279,12 @@ export function prepareRun(
       409,
       'REUSE_OUTPUT_UNAVAILABLE',
     );
+  // Preflight every generated node, including setting-only workflows, before admission.
+  if (settings)
+    for (const step of selected) {
+      if (step.id !== SYSTEM_START_NODE_ID && step.id !== SYSTEM_END_NODE_ID &&
+          !(step.reusePreviousOutput && !isWriter(step))) settingsForStep(step, settings);
+    }
   if (!writingWorkflow && !selectedStep) return resultWithoutWriter();
   if (!selectedStep) {
     if (!writerId) throw new GenerationError('有多个正文节点，请明确选择一个最终正文输出节点。');
@@ -312,10 +318,6 @@ export function prepareRun(
         );
     }
   }
-  if (settings)
-    for (const step of selected) {
-      if (step.id !== SYSTEM_START_NODE_ID && step.id !== SYSTEM_END_NODE_ID) settingsForStep(step, settings);
-    }
   return {
     request: structuredClone({
       ...parsed,

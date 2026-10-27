@@ -1,0 +1,26 @@
+/* Shared light base; system dark overrides come from theme-dark.css. */
+:root[data-theme='theme-light'],
+:root[data-theme='theme-system'] {
+  color-scheme: light;
+  --bg: #fafafa;
+  --text: #202020;
+  --panel: #f3f3f3;
+  --panel-border: #dedede;
+  --surface: #ffffff;
+  --surface-2: #f8f8f8;
+  --line: #e0e0e0;
+  --soft: #ededed;
+  --muted-text: #626262;
+  --faint: #707070;
+  --border: #d0d0d0;
+  --subtle-text: #686868;
+  --accent: #202020;
+  --accent-2: #737373;
+  --on-accent: #ffffff;
+  --accent-hover: #3b3b3b;
+  --green: #444444;
+  --focus: #202020;
+  --shadow: #00000012;
+  --muted: var(--muted-text);
+  --overlay: #00000066;
+}

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { NODE_PRESETS } from '../shared/node-presets.js';
 import {
   SYSTEM_END_NODE_ID,
   SYSTEM_START_NODE_ID,
@@ -37,33 +38,31 @@ export function createSteps(): Step[] {
       id: 'lore',
       title: '世界观解析',
       subtitle: '连接每一条故事线索',
-      prompt:
-        '整理资料中的地理、时代、规则与人物关系，建立统一的故事设定。列出不可违背的事实，以及需要作者补充的设定。',
+      prompt: NODE_PRESETS.world.prompt,
     },
     {
       id: 'outline',
       title: '剧情编排',
       subtitle: '让故事有迹可循',
-      prompt:
-        '根据世界观和用户的剧情走向，规划三幕式故事大纲。包含核心冲突、人物弧光、关键转折与伏笔回收，尊重已有设定。',
+      prompt: NODE_PRESETS.outline.prompt,
     },
     {
       id: 'plan',
       title: '章节规划',
       subtitle: '把灵感拆解为章节',
-      prompt: CURRENT_PROMPTS.plan,
+      prompt: NODE_PRESETS.plan.prompt,
     },
     {
       id: 'draft',
       title: '正文生成',
       subtitle: '从第一句，走进故事',
-      prompt: CURRENT_PROMPTS.draft,
+      prompt: NODE_PRESETS.writer.prompt,
     },
     {
       id: 'review',
       title: '一致性审校',
       subtitle: '守住故事的每处细节',
-      prompt: CURRENT_PROMPTS.review,
+      prompt: NODE_PRESETS.audit.prompt,
     },
   ].map((s, i) => ({
     ...s,
@@ -134,8 +133,7 @@ export function createCharacterWorkflowGraph(name = '人物编写'): WorkflowGra
       id: 'character-draft',
       title: '人物编写',
       subtitle: '建立鲜活可信的人物档案',
-      prompt:
-        '根据作品简介、世界观和作者提供的资料，编写人物档案。姓名、性别、性格、经历等字段按节点配置执行，留空字段可以随机生成；有世界设定时必须遵守世界设定。若提供模板，保持模板标题和字段结构并补全内容。只输出可保存的人物档案，不生成章节正文。',
+      prompt: NODE_PRESETS.character.prompt,
       status: 'idle',
       output: '',
       position: { x: 250, y: 170 },

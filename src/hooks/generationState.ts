@@ -64,10 +64,12 @@ export type GraphSnapshot = {
   steps: Pick<
     Step,
     'id' | 'title' | 'subtitle' | 'prompt' | 'position' | 'kind' | 'modelId' | 'assetIds' | 'enabled'
+    | 'outputName' | 'reusePreviousOutput' | 'characterName' | 'characterGender'
+    | 'characterPersonality' | 'characterExperience' | 'characterCount' | 'characterTemplate'
   >[];
   workflow: Pick<
     WorkflowSettings,
-    'name' | 'edges' | 'auditNodeId' | 'chapterCount' | 'autoGenerate' | 'automationMode' | 'publication' | 'outputWriterNodeId'
+    'name' | 'edges' | 'auditNodeId' | 'chapterCount' | 'autoGenerate' | 'automationMode' | 'publication' | 'outputWriterNodeId' | 'outputName'
   >;
 };
 export function graphSnapshot(project: Project): GraphSnapshot {
@@ -75,7 +77,9 @@ export function graphSnapshot(project: Project): GraphSnapshot {
     identity: projectIdentity(project),
     workflowId: workflowIdOf(project),
     steps: project.steps.map(
-      ({ id, title, subtitle, prompt, position, kind, modelId, assetIds, enabled }) => ({
+      ({ id, title, subtitle, prompt, position, kind, modelId, assetIds, enabled,
+        outputName, reusePreviousOutput, characterName, characterGender,
+        characterPersonality, characterExperience, characterCount, characterTemplate }) => ({
         id,
         title,
         subtitle,
@@ -85,6 +89,14 @@ export function graphSnapshot(project: Project): GraphSnapshot {
         modelId: modelId || '',
         assetIds,
         enabled,
+        outputName: outputName || '',
+        reusePreviousOutput: reusePreviousOutput || false,
+        characterName: characterName || '',
+        characterGender: characterGender || '',
+        characterPersonality: characterPersonality || '',
+        characterExperience: characterExperience || '',
+        characterCount: characterCount || 1,
+        characterTemplate: characterTemplate || '',
       }),
     ),
     workflow: {
@@ -96,6 +108,7 @@ export function graphSnapshot(project: Project): GraphSnapshot {
       automationMode: project.workflow?.automationMode || 'manual',
       publication: project.workflow?.publication,
       outputWriterNodeId: project.workflow?.outputWriterNodeId || '',
+      outputName: project.workflow?.outputName || '',
     },
   });
 }

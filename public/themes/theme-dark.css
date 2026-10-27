@@ -1,0 +1,80 @@
+:root[data-theme='theme-dark'] {
+  color-scheme: dark;
+  --bg: #141414;
+  --text: #ededed;
+  --panel: #191919;
+  --panel-border: #383838;
+  --surface: #1e1e1e;
+  --surface-2: #242424;
+  --line: #3b3b3b;
+  --soft: #2c2c2c;
+  --muted-text: #b3b3b3;
+  --faint: #a3a3a3;
+  --border: #484848;
+  --subtle-text: #ababab;
+  --accent: #ededed;
+  --accent-2: #a3a3a3;
+  --on-accent: #171717;
+  --accent-hover: #d4d4d4;
+  --green: #d4d4d4;
+  --focus: #ededed;
+  --shadow: #00000026;
+  --muted: var(--muted-text);
+  --overlay: #00000066;
+}
+:root[data-theme='theme-dark'] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23b3b3b3' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+:root[data-theme='theme-dark'] .theme-menu > button,
+:root[data-theme='theme-dark'] .theme-submenu,
+:root[data-theme='theme-dark'] .theme-submenu button {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+:root[data-theme='theme-dark'] .theme-submenu button:hover,
+:root[data-theme='theme-dark'] .theme-submenu button.active {
+  background: var(--soft);
+}
+
+/* Only system mode responds to OS changes; explicit theme-dark stays dark. */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='theme-system'] {
+    color-scheme: dark;
+    --bg: #141414;
+    --text: #ededed;
+    --panel: #191919;
+    --panel-border: #383838;
+    --surface: #1e1e1e;
+    --surface-2: #242424;
+    --line: #3b3b3b;
+    --soft: #2c2c2c;
+    --muted-text: #b3b3b3;
+    --faint: #a3a3a3;
+    --border: #484848;
+    --subtle-text: #ababab;
+    --accent: #ededed;
+    --accent-2: #a3a3a3;
+    --on-accent: #171717;
+    --accent-hover: #d4d4d4;
+    --green: #d4d4d4;
+    --focus: #ededed;
+    --shadow: #00000026;
+    --muted: var(--muted-text);
+    --overlay: #00000066;
+  }
+  :root[data-theme='theme-system'] select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23b3b3b3' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+  :root[data-theme='theme-system'] .theme-menu > button,
+  :root[data-theme='theme-system'] .theme-submenu,
+  :root[data-theme='theme-system'] .theme-submenu button {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+  }
+  :root[data-theme='theme-system'] .theme-submenu button:hover,
+  :root[data-theme='theme-system'] .theme-submenu button.active {
+    background: var(--soft);
+  }
+}

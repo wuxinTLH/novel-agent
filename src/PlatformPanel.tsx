@@ -1,6 +1,7 @@
 import type { Project, WorkflowSettings } from '../shared/types';
 import { useHiddenPlatformRecords } from './hooks/useHiddenPlatformRecords';
 import { accessiblePlatformStep, platformStepAccess, type PlatformStep } from './hooks/platformSteps';
+import { platformWorkChoices } from './hooks/platformWorkChoices';
 import PublicationPanel, { ensureAutoApprovedBatchStarted } from './components/PublicationPanel';
 import type { PublicationBatch } from '../shared/publication';
 import { useConfirm } from './components/AppDialog';
@@ -65,6 +66,7 @@ export default function PlatformPanel({
   const [receipts, setReceipts] = useState<DraftReceipt[]>([]);
   const [connectionId, setConnectionId] = useState('');
   const [linkId, setLinkId] = useState('');
+  const [pendingWorkId, setPendingWorkId] = useState('');
   const [chapterId, setChapterId] = useState(selectedChapterId || '');
   const [works, setWorks] = useState<PlatformWork[]>([]);
   const [login, setLogin] = useState<PlatformLogin | null>(null);
@@ -105,6 +107,7 @@ export default function PlatformPanel({
     setBatchSelectionVersion((value) => value + 1);
     setConnectionId('');
     setLinkId('');
+    setPendingWorkId('');
     setWorks([]);
     setPreview(null);
     setApproved(false);
@@ -119,6 +122,7 @@ export default function PlatformPanel({
   useEffect(() => {
     setConnectionId('');
     setLinkId('');
+    setPendingWorkId('');
     setWorks([]);
     setIncomingBatch(undefined);
     setStep('account');
@@ -281,6 +285,7 @@ export default function PlatformPanel({
     setConnections((items) => [...items.filter((item) => item.id !== value.id), value]);
     // No automatic account selection or account work lookup after login.
     setWorks([]);
+    setPendingWorkId('');
     resetPreview();
   };
   const startLogin = (id?: string) =>
@@ -303,7 +308,10 @@ export default function PlatformPanel({
       'GET',
       undefined,
       (value) => {
-        if (version === selectionVersion.current) setWorks(value);
+        if (version === selectionVersion.current) {
+          setWorks(value);
+          setPendingWorkId((id) => value.some((work) => work.id === id) ? id : '');
+        }
       },
       '已只读获取所选账号的作品；尚未打开编辑器。',
     );
@@ -414,6 +422,9 @@ export default function PlatformPanel({
   const selectedProvider = providers.find((item) => item.id === selectedPlatform);
   const platformConnections = connections.filter((item) => item.providerId === selectedPlatform);
   const platformLinks = links.filter((item) => item.providerId === selectedPlatform);
+  const workChoices = platformWorkChoices(connectionId, works, platformLinks);
+  const workSelection = selectedLink ? `link:${selectedLink.id}`
+    : workChoices.some((choice) => choice.value === `work:${pendingWorkId}`) ? `work:${pendingWorkId}` : '';
   const supportsDrafts = selectedPlatform === 'tomato';
   const stepAccess = platformStepAccess({
     connected: platformConnections.some((item) => item.hasCredential && item.status === 'connected'),
@@ -669,6 +680,7 @@ export default function PlatformPanel({
                 setConnectionId(event.target.value);
                 setWorks([]);
                 setLinkId('');
+                setPendingWorkId('');
                 resetPreview();
               }}
             >
@@ -741,7 +753,12 @@ export default function PlatformPanel({
                     '/platform-links',
                     'POST',
                     { connectionId, remoteWorkId: work.id },
-                    (link) => setLinks((items) => [...items.filter((item) => item.id !== link.id), link]),
+                    (link) => {
+                      setLinks((items) => [...items.filter((item) => item.id !== link.id), link]);
+                      setLinkId(link.id);
+                      setPendingWorkId('');
+                      resetPreview();
+                    },
                     '已显式绑定所选作品；未上传章节。',
                   )
                 }
@@ -754,13 +771,33 @@ export default function PlatformPanel({
         </div>
         <label className="platform-form">
           本次操作的目标作品
-          <select value={linkId} disabled={mutateDisabled} onChange={(event) => { setLinkId(event.target.value); resetPreview(); }}>
-            <option value="">请选择已绑定作品，再进入章节步骤</option>
-            {platformLinks.filter((item) => item.connectionId === connectionId).map((item) => (
-              <option value={item.id} key={item.id}>{item.title} · {item.remoteWorkId}</option>
+          <select value={workSelection} disabled={mutateDisabled} onChange={(event) => {
+            const value = event.target.value;
+            setLinkId(value.startsWith('link:') ? value.slice(5) : '');
+            setPendingWorkId(value.startsWith('work:') ? value.slice(5) : '');
+            resetPreview();
+          }}>
+            <option value="">请选择作品；未绑定的作品需先绑定才能进入章节步骤</option>
+            {workChoices.map((choice) => (
+              <option value={choice.value} key={choice.value}>{choice.label}</option>
             ))}
           </select>
         </label>
+        {pendingWorkId && works.some((work) => work.id === pendingWorkId) && (
+          <button type="button" className="button secondary" disabled={mutateDisabled || !canRead}
+            onClick={() => void action<ProjectPlatformWorkLink>(
+              '/platform-links', 'POST', { connectionId, remoteWorkId: pendingWorkId },
+              (link) => {
+                setLinks((items) => [...items.filter((item) => item.id !== link.id), link]);
+                setLinkId(link.id);
+                setPendingWorkId('');
+                resetPreview();
+              },
+              '已显式绑定所选作品；未上传章节。',
+            )}>
+            <Link2 size={14} /> 绑定所选作品
+          </button>
+        )}
         <div className="platform-list">
           {platformLinks
             .filter((item) => item.connectionId === connectionId)

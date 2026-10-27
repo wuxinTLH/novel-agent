@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "defaultTheme": "theme-system",
+  "themes": [
+    { "id": "theme-system", "name": "跟随系统", "css": "theme-system.css" },
+    { "id": "theme-light", "name": "极简白", "css": "theme-light.css" },
+    { "id": "theme-dark", "name": "极简黑", "css": "theme-dark.css" },
+    { "id": "theme-mtf", "name": "蓝粉白", "css": "theme-mtf.css" }
+  ]
+}

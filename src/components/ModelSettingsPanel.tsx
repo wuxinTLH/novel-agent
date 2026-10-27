@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../api';
+import DatabaseSettings from './DatabaseSettings';
 import { useConfirm } from './AppDialog';
 import type { ModelProtocol, ModelSettings } from '../../shared/types';
 import { protocolLabels } from '../../shared/types';
@@ -248,6 +249,7 @@ export default function ModelSettingsPanel({
         </div>
         {mode !== settings.mode && activeModel && <button type="button" className="button primary model-mode-save" onClick={() => onSave({ mode, baseUrl: activeModel.baseUrl, model: activeModel.model, protocol: activeModel.protocol, activeModelId: activeModel.id })} disabled={busy || modelBusy}><Check size={15} /> 保存运行模式</button>}
       </section>
+      <DatabaseSettings />
     </div>
   );
 }

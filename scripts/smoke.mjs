@@ -124,6 +124,121 @@ try {
   await page.route('https://fonts.googleapis.com/**', (route) => route.abort());
   await page.route('https://fonts.gstatic.com/**', (route) => route.abort());
   await page.goto(base);
+  await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });
+  const assertNeutralTheme = async () => {
+    const colors = await page.evaluate(() => {
+      const style = getComputedStyle(document.documentElement);
+      return ['--bg', '--text', '--accent', '--green', '--surface'].map((name) => style.getPropertyValue(name).trim());
+    });
+    for (const color of colors) {
+      assert.match(color, /^#([0-9a-f]{6})$/i);
+      assert.equal(color.slice(1, 3), color.slice(3, 5), color);
+      assert.equal(color.slice(3, 5), color.slice(5, 7), color);
+    }
+  };
+  await page.getByRole('button', { name: '主题 · 跟随系统' }).waitFor();
+  await assertNeutralTheme();
+  for (const label of ['极简黑', '极简白', '跟随系统']) {
+    await page.getByRole('button', { name: /主题 ·/ }).click();
+    await page.getByRole('menuitem', { name: label, exact: true }).click();
+    await page.getByRole('button', { name: `主题 · ${label}`, exact: true }).waitFor();
+    await assertNeutralTheme();
+    if (label !== '跟随系统') assert.equal(
+      await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()),
+      label === '极简黑' ? '#141414' : '#fafafa',
+    );
+    if (label !== '跟随系统') await page.screenshot({ path: path.join(artifacts, label === '极简黑' ? 'minimal-dark.png' : 'minimal-light.png'), fullPage: true });
+  }
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await assertNeutralTheme();
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()), '#141414');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await assertNeutralTheme();
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()), '#fafafa');
+  await page.getByRole('button', { name: /主题 ·/ }).click();
+  await page.getByRole('menuitem', { name: '蓝粉白', exact: true }).click();
+  await page.getByRole('button', { name: '主题 · 蓝粉白', exact: true }).waitFor();
+  assert.match(await page.evaluate(() => getComputedStyle(document.body).backgroundImage), /linear-gradient/);
+  await page.getByRole('button', { name: /主题 ·/ }).click();
+  await page.getByRole('menuitem', { name: '跟随系统', exact: true }).click();
+  await page.getByRole('button', { name: '主题 · 跟随系统', exact: true }).waitFor();
+  // Registry-driven additions require no React change; failed resources keep the active theme.
+  const shippedThemes = await (await fetch(`${base}/themes/themes.json`)).json();
+  await page.route('**/themes/themes.json', route => route.fulfill({ json: {
+    ...shippedThemes,
+    themes: [...shippedThemes.themes,
+      { id: 'theme-smoke', name: '注册测试主题', css: 'theme-smoke.css' },
+      { id: 'theme-broken', name: '失效测试主题', css: 'theme-broken.css' }],
+  } }));
+  await page.route('**/themes/theme-smoke.css', route => route.fulfill({ contentType: 'text/css', body: ':root[data-theme="theme-smoke"] { --bg: #123456; }' }));
+  await page.route('**/themes/theme-broken.css', route => route.fulfill({ status: 404, body: '' }));
+  await page.getByRole('button', { name: /主题 ·/ }).click();
+  await page.getByRole('menuitem', { name: '重新加载主题', exact: true }).click();
+  await page.getByRole('menuitem', { name: '注册测试主题', exact: true }).click();
+  await page.getByRole('button', { name: '主题 · 注册测试主题', exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()), '#123456');
+  await page.getByRole('button', { name: /主题 ·/ }).click();
+  await page.getByRole('menuitem', { name: '失效测试主题', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: '样式加载失败' }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'theme-smoke');
+  await page.unroute('**/themes/themes.json');
+  await page.getByRole('menuitem', { name: '重新加载主题', exact: true }).click();
+  await page.getByRole('button', { name: '主题 · 跟随系统', exact: true }).waitFor();
+  await page.getByRole('button', { name: /主题 ·/ }).click();
+  await page.evaluate(() => localStorage.setItem('novel-theme', 'dark'));
+  await page.reload();
+  await page.getByRole('button', { name: '主题 · 极简黑', exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('novel-theme')), 'theme-dark');
+  await page.getByRole('button', { name: /主题 ·/ }).click();
+  await page.getByRole('menuitem', { name: '跟随系统', exact: true }).click();
+  await page.getByRole('button', { name: '主题 · 跟随系统', exact: true }).waitFor();
+  const assetProjectId = (await (await fetch(`${base}/api/projects`)).json())[0].id;
+  const originalAssetCount = (await (await fetch(`${base}/api/projects/${assetProjectId}`)).json()).assets.length;
+  for (const [name, category] of [['烟雨城', 'world'], ['巡夜人', 'characters'], ['城门地图', 'world']]) {
+    const created = await fetch(`${base}/api/projects/${assetProjectId}/assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Platform-CSRF': isolationSession.csrfToken },
+      body: JSON.stringify({ name, category, content: '测试设定内容' }),
+    });
+    assert.equal(created.status, 201);
+  }
+  const assetsBeforeDelete = (await (await fetch(`${base}/api/projects/${assetProjectId}`)).json()).assets;
+  const badDelete = await fetch(`${base}/api/projects/${assetProjectId}/assets/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Platform-CSRF': isolationSession.csrfToken },
+    body: JSON.stringify({ ids: [assetsBeforeDelete[0].id, crypto.randomUUID()] }),
+  });
+  assert.equal(badDelete.status, 409);
+  assert.equal((await (await fetch(`${base}/api/projects/${assetProjectId}`)).json()).assets.length, assetsBeforeDelete.length);
+  await page.reload();
+  await page.getByRole('button', { name: /小说设定库/ }).click();
+  await page.getByRole('button', { name: '世界与地图' }).click();
+  await page.getByLabel('选择当前列表全部资料').check();
+  assert.match(await page.locator('.asset-bulk-toolbar').innerText(), /已选择 3 \/ /);
+  await page.getByLabel('选择当前列表全部资料').uncheck();
+  await page.getByRole('button', { name: /全部资料/ }).click();
+  await page.getByLabel('选择 烟雨城').check();
+  await page.getByLabel('选择 巡夜人').check();
+  assert.match(await page.locator('.asset-bulk-toolbar').innerText(), new RegExp(`已选择 2 / ${originalAssetCount + 3} 份`));
+  await page.getByRole('button', { name: '删除所选' }).click();
+  await page.getByRole('alertdialog', { name: '请确认' }).getByText(/已选中的 2 份资料/).waitFor();
+  await page.getByRole('alertdialog', { name: '请确认' }).getByRole('button', { name: '确定' }).click();
+  await page.getByLabel('选择 烟雨城').waitFor({ state: 'detached' });
+  assert.equal((await (await fetch(`${base}/api/projects/${assetProjectId}`)).json()).assets.length, originalAssetCount + 1);
+  await page.getByRole('button', { name: '删除全部' }).click();
+  await page.getByRole('alertdialog', { name: '请确认' }).getByText(new RegExp(`全部 ${originalAssetCount + 1} 份资料`)).waitFor();
+  await page.getByRole('alertdialog', { name: '请确认' }).getByRole('button', { name: '确定' }).click();
+  await page.getByLabel('选择 城门地图').waitFor({ state: 'detached' });
+  assert.equal((await (await fetch(`${base}/api/projects/${assetProjectId}`)).json()).assets.length, 0);
+  await page.getByRole('button', { name: /^创作工作流$/ }).click();
+  await page.locator('.react-flow__node[data-id="outline"]').click();
+  await page.getByLabel('结果名称', { exact: false }).fill('剧情结果测试');
+  await page.getByLabel('结果名称', { exact: false }).press('Tab');
+  await page.getByText('结果名称已更新', { exact: true }).waitFor();
+  await page.locator('.react-flow__node[data-id="plan"]').click();
+  assert.equal(await page.locator('#node-output-name').inputValue(), '');
+  await page.locator('.react-flow__node[data-id="outline"]').click();
+  assert.equal(await page.locator('#node-output-name').inputValue(), '剧情结果测试');
   await page.getByRole('button', { name: '工作流设置', exact: true }).click();
   await page
     .getByRole('dialog', { name: '自动化小说工作流' })
@@ -258,6 +373,33 @@ try {
   assert.equal(tomato.capabilities.saveDraft, true);
   assert.equal(tomato.capabilities.readDraft, true);
   assert.equal(tomato.capabilities.deleteDraft, true);
+  const userService = await (await fetch(`${base}/api/services/user`)).json();
+  assert.equal(userService.enabled, false);
+  const sqlStatus = await (await fetch(`${base}/api/sqlconnect/status`)).json();
+  assert.equal(sqlStatus.storage, 'local-json');
+  assert.equal(sqlStatus.configured, false);
+  const sqlDrivers = await (await fetch(`${base}/api/sqlconnect/drivers`)).json();
+  assert.deepEqual(sqlDrivers.drivers.map(driver => driver.id).sort(), ['mysql', 'postgresql', 'sqlserver']);
+  const sqlRejected = await fetch(`${base}/api/sqlconnect/initialize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(sqlRejected.status, 403);
+  const assertNoDocumentOverflow = async () => assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
+  await page.getByRole('button', { name: /^创作工作流$/ }).click();
+  await page.getByRole('button', { name: /主题 ·/ }).click();
+  await page.getByRole('menuitem', { name: '蓝粉白', exact: true }).click();
+  await page.getByRole('button', { name: '主题 · 蓝粉白', exact: true }).waitFor();
+  await page.setViewportSize({ width: 1270, height: 1000 });
+  await assertNoDocumentOverflow();
+  await page.screenshot({ path: path.join(artifacts, 'desktop-mtf.png'), fullPage: true });
+  for (const width of [390, 360, 768]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const navigation of [/^创作工作流$/, /^小说设定库(?:\s*\d+)?$/, /^章节书稿(?:\s*\d+)?$/, /^平台作品$/, /^模型设置$/]) {
+      await page.getByRole('button', { name: navigation }).click();
+      await assertNoDocumentOverflow();
+      if (width === 390) await page.screenshot({ path: path.join(artifacts, `mobile-${navigation.source.includes('创作') ? 'workflow' : navigation.source.includes('设定库') ? 'assets' : navigation.source.includes('章节') ? 'chapters' : navigation.source.includes('平台') ? 'platforms' : 'settings'}.png`), fullPage: true });
+    }
+  }
+  await page.getByRole('heading', { name: 'SQLconnect · 数据库连接' }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '初始化数据库', exact: true }).isDisabled(), true);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(badResponses, []);
   console.log(
@@ -270,6 +412,14 @@ try {
           'hashed static asset cache headers',
           'CSRF rejection',
           'isolated multi-workflow switching',
+          'setting-library filtered multi-select and confirmed batch/delete-all',
+          'batch asset deletion rejects unknown IDs without partial changes',
+          'neutral light/dark/system themes and OS color-scheme switching',
+          'editable node result name persists and stays isolated when switching nodes',
+          'registry-driven theme loading, legacy migration and failed CSS preservation',
+          'editable result name persists across node selection',
+          'registered dormant User service and SQLconnect drivers behind CSRF guards',
+          'desktop blue/pink/white composition and mobile 360/390/768px no-overflow pages',
           'workflow settings',
           'single chapter 5',
           'persisted global and chapter requirements',

@@ -402,8 +402,9 @@ export function buildContext(
         predecessors.has(s.id) &&
         s.status === 'done' &&
         s.output.trim() &&
-        matchesContext(s.generationContext, context, p, context.mode) &&
-        (context.allowPreviousRun || s.generationContext?.runId === context.runId),
+        ((s.reusePreviousOutput && !isWriter(s)) ||
+          (matchesContext(s.generationContext, context, p, context.mode) &&
+            (context.allowPreviousRun || s.generationContext?.runId === context.runId))),
     )
     .map(
       (s) =>
@@ -452,10 +453,10 @@ function demo(p: Project, id: StepId, context: GenerationContext): string {
     const index = context.characterIndex || 1;
     const profile = context.characterProfile || {};
     const names = ['沈知微', '顾临川', '陆星河', '苏晚晴', '程砚秋', '叶归鸿'];
-    const name = profile.name || `${names[(index - 1) % names.length]}${index > names.length ? index : ''}`;
-    const gender = profile.gender || (index % 2 ? '男' : '女');
-    const personality = profile.personality || (index % 2 ? '谨慎、坚韧，习惯先观察再行动' : '敏锐、热烈，愿意为同伴承担风险');
-    const experience = profile.experience || '来自作品设定的经历待补充；连接模型后会结合世界观完成补全。';
+    const name = profile.name || step.characterName || `${names[(index - 1) % names.length]}${index > names.length ? index : ''}`;
+    const gender = profile.gender || step.characterGender || (index % 2 ? '男' : '女');
+    const personality = profile.personality || step.characterPersonality || (index % 2 ? '谨慎、坚韧，习惯先观察再行动' : '敏锐、热烈，愿意为同伴承担风险');
+    const experience = profile.experience || step.characterExperience || '来自作品设定的经历待补充；连接模型后会结合世界观完成补全。';
     const template = profile.template || step.characterTemplate || DEFAULT_CHARACTER_TEMPLATE;
     return `${prefix}${template
       .replace(/姓名\s*[:：].*/u, `姓名: ${name}`)
@@ -732,20 +733,23 @@ export class Runner {
             delete step.lastError;
             persist();
             const stepSettings = settingsForStep(step, settings);
-            const output =
-              step.kind === 'character' && (context.characterCount || 1) > 1
-                ? (
-                    await Promise.all(
-                      Array.from({ length: context.characterCount || 1 }, (_, index) =>
-                        generate(p, step.id, stepSettings, this.store.dir, controller.signal, {
-                          ...context,
-                          characterCount: 1,
-                          characterIndex: index + 1,
-                        }),
-                      ),
-                    )
-                  ).join('\n\n---\n\n')
-                : await generate(p, step.id, stepSettings, this.store.dir, controller.signal, context);
+            const characterCount = context.characterCount || step.characterCount || 1;
+            let output: string;
+            if (step.kind === 'character' && characterCount > 1) {
+              // Avoid bursts of paid requests; cancellation must stop the next admission.
+              const profiles: string[] = [];
+              for (let index = 0; index < characterCount; index++) {
+                controller.signal.throwIfAborted();
+                profiles.push(await generate(p, step.id, stepSettings, this.store.dir, controller.signal, {
+                  ...context,
+                  characterCount: 1,
+                  characterIndex: index + 1,
+                }));
+              }
+              output = profiles.join('\n\n---\n\n');
+            } else {
+              output = await generate(p, step.id, stepSettings, this.store.dir, controller.signal, context);
+            }
             controller.signal.throwIfAborted();
             if (!output.trim())
               throw new GenerationError('模型未返回完整正文。', 502, 'EMPTY_OUTPUT', undefined, true);

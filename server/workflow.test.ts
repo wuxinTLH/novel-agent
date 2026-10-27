@@ -467,6 +467,34 @@ test(
         p.steps.some((s) => s.id === endId),
         true,
       );
+      assert.equal((await request(url, 'PATCH', { workflow: { chapterCount: 101 } })).status, 400);
+      // Every creatable kind must also survive edit and graph restoration validation.
+      for (const kind of ['agent', 'audit', 'writer', 'custom', 'world', 'outline', 'plan', 'expand', 'character', 'dialogue', 'scene', 'continuity']) {
+        response = await request(`${url}/nodes`, 'POST', { id: `config-${kind}`, title: kind, kind });
+        assert.equal(response.status, 201, `${kind} creation`);
+        p = await response.json() as Project;
+        assert.ok(p.steps.find(s => s.id === `config-${kind}`)!.prompt.length > 0);
+        response = await request(url, 'PATCH', { steps: [{ id: `config-${kind}`, kind, prompt: `saved-${kind}` }] });
+        assert.equal(response.status, 200, `${kind} editing`);
+      }
+      response = await request(url, 'PATCH', { steps: [{
+        id: 'config-character', outputName: '人物设定输出名', reusePreviousOutput: true,
+        characterName: '保存姓名', characterGender: '保存性别', characterPersonality: '保存性格',
+        characterExperience: '保存经历', characterCount: 3, characterTemplate: '# 作者模板',
+      }] });
+      assert.equal(response.status, 200);
+      p = await response.json() as Project;
+      const savedCharacter = p.steps.find(s => s.id === 'config-character')!;
+      response = await request(`${url}/graph`, 'PUT', {
+        workflowId: p.activeWorkflowId,
+        expectedGraphRevision: p.workflow!.graphRevision || 0,
+        steps: p.steps.map(({ status: _status, output: _output, generationContext: _context, lastError: _error, ...step }) => step),
+        workflow: { edges: p.workflow!.edges },
+      });
+      assert.equal(response.status, 200, 'all node kinds restore');
+      p = await response.json() as Project;
+      for (const step of p.steps.filter(s => s.id.startsWith('config-'))) assert.equal(step.prompt, `saved-${step.kind}`);
+      assert.deepEqual(p.steps.find(s => s.id === 'config-character'), savedCharacter);
       const createdWorkflow = await request(`${url}/workflows`, 'POST', {
         name: '第二工作流',
         template: true,
