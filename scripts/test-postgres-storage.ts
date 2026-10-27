@@ -40,6 +40,15 @@ try {
   };
   storage = new PostgresStorage(config);
   pool = new Pool(config);
+  // Preflight is read-only and reports only fixed permission labels, never server errors.
+  // Migration scripts use public explicitly; database CONNECT alone is insufficient.
+  const permissions = await pool.query(
+    "SELECT has_schema_privilege(current_user, 'public', 'USAGE') AS schema_usage, has_schema_privilege(current_user, 'public', 'CREATE') AS schema_create",
+  );
+  if (!permissions.rows[0]?.schema_usage || !permissions.rows[0]?.schema_create) {
+    console.error('POSTGRES_SCHEMA_PERMISSION_REQUIRED: public schema USAGE and CREATE are required.');
+    throw new Error('TEST_SCHEMA_PERMISSION_REQUIRED');
+  }
   // Table identifiers below come only from the static allowlist, never the environment.
   const before = new Map<string, string>();
   for (const table of v1Tables) {
