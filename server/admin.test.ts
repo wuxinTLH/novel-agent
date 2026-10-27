@@ -180,6 +180,29 @@ test('migration rejects structurally invalid legacy docs before any database cal
   }
 });
 
+test('no-legacy authenticated migration requires owner assignment before database writes', async (t) => {
+  const dir = temporary();
+  const migrate = t.mock.method(PostgresStorage.prototype, 'migrate', async () => {
+    throw new Error('UNEXPECTED_DATABASE_CALL');
+  });
+  try {
+    const bootstrap = await runAdmin(options('bootstrap-admin', dir, '--username', 'admin'), {
+      NOVEL_BOOTSTRAP_PASSWORD: 'private-fixture-123',
+    });
+    await runAdmin(options('enable-auth', dir, '--no-legacy'));
+    const before = fs.readFileSync(path.join(dir, 'auth-enabled.json'), 'utf8');
+    await assert.rejects(
+      runAdmin(options('migrate-sql', dir, '--owner', bootstrap.ownerId!)),
+      /ADMIN_SQL_AUTH_OWNER_ASSIGNMENT_REQUIRED/,
+    );
+    assert.equal(migrate.mock.callCount(), 0);
+    assert.equal(fs.existsSync(path.join(dir, 'business-storage.json')), false);
+    assert.equal(fs.readFileSync(path.join(dir, 'auth-enabled.json'), 'utf8'), before);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('no-legacy cannot orphan uploads or unknown secret files', async () => {
   const dir = temporary();
   try {

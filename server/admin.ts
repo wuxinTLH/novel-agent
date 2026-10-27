@@ -386,6 +386,12 @@ export async function runAdmin(
         !config.legacyOwnerId || config.legacyOwnerId === owner,
         'ADMIN_LEGACY_OWNER_CONFLICT',
       );
+      // Startup requires an explicit legacy owner for enabled SQL deployments.
+      // Refuse before any database writes rather than activating an unbootable manifest.
+      requireCondition(
+        !config.enabled || config.legacyOwnerId === owner,
+        'ADMIN_SQL_AUTH_OWNER_ASSIGNMENT_REQUIRED',
+      );
       // Moving an enabled auth deployment must never strand its existing users.
       const localAuth = readOptional(path.join(options.dataDir, 'auth.json'));
       requireCondition(!!manifest || localAuth !== null, 'ADMIN_BOOTSTRAP_REQUIRED');

@@ -12,6 +12,7 @@
     "test:postgres": "tsx scripts/test-postgres-storage.ts",
     "browser:install": "playwright install chromium",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:auth": "node scripts/smoke-auth.mjs",
     "test": "node scripts/test.mjs",
     "typecheck": "tsc -b",
     "format": "prettier --write .",

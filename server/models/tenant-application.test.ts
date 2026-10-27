@@ -216,6 +216,31 @@ test('tenant outer policy precedes authentication and anonymous APIs/uploads nev
   assert.equal(fs.existsSync(path.join(f.dir, 'users')), false);
 });
 
+test('mixed-case API and upload paths retain authentication and SQLconnect role guards', async (t) => {
+  const f = await fixture(t);
+  for (const route of ['/API/projects', '/Api/health', '/UPLOADS/private.png']) {
+    assert.equal((await f.request('GET', route)).status, 401, route);
+  }
+  const { writer } = await f.users();
+  const runtime = await f.runtime(writer);
+  for (const prefix of ['/api/sqlconnect', '/api/SQLconnect', '/API/SQLCONNECT']) {
+    for (const [method, suffix] of [
+      ['GET', '/status'],
+      ['PUT', '/config'],
+      ['POST', '/initialize'],
+    ]) {
+      const response = await f.request(
+        method,
+        prefix + suffix,
+        method === 'GET' ? undefined : {},
+        f.headers(writer, runtime),
+      );
+      assert.equal(response.status, 403, `${method} ${prefix}${suffix}`);
+      assert.equal(response.body.code, 'AUTH_FORBIDDEN');
+    }
+  }
+});
+
 test('authenticated tenants keep projects, lists, uploads and immutable runtime contexts separate', async (t) => {
   const f = await fixture(t);
   const { admin, writer } = await f.users();

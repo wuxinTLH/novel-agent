@@ -30,14 +30,20 @@ export function createTenantApplication(options: TenantApplicationOptions) {
     res.json({ id: 'User', enabled: true, authenticationReady: true, mode: 'verified-user' }),
   );
   app.use(async (req, res, next) => {
-    if (!(req.path.startsWith('/api/') || req.path === '/uploads' || req.path.startsWith('/uploads/')))
+    // Express mounts are case-insensitive by default; authorization must match them.
+    const requestPath = req.path.toLowerCase();
+    if (!(
+      requestPath.startsWith('/api/') ||
+      requestPath === '/uploads' ||
+      requestPath.startsWith('/uploads/')
+    ))
       return next();
     try {
       const principal = await options.auth.resolve(req);
       if (!principal) return res.status(401).json({ code: 'AUTH_REQUIRED', error: '请先登录。' });
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !options.auth.requireCsrf(req))
         return res.status(403).json({ code: 'AUTH_CSRF_REQUIRED', error: '会话校验失败。' });
-      if (req.path.startsWith('/api/sqlconnect') && principal.role !== 'superadmin')
+      if (requestPath.startsWith('/api/sqlconnect') && principal.role !== 'superadmin')
         return res.status(403).json({ code: 'AUTH_FORBIDDEN', error: '需要超级管理员权限。' });
       let tenant = contexts.get(principal.id);
       if (!tenant) {
