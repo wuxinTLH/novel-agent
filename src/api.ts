@@ -3,6 +3,20 @@ let sessionRequest: Promise<string> | undefined;
 let authCsrfToken: string | undefined;
 let authCsrfRequest: Promise<string> | undefined;
 let identityEpoch = 0;
+let adminCsrfToken: string | undefined;
+let adminCsrfRequest: Promise<{ mode: string; csrfToken?: string }> | undefined;
+async function adminMutationToken() {
+  if (adminCsrfToken) return { mode: 'local', csrfToken: adminCsrfToken };
+  if (!adminCsrfRequest) {
+    const epoch = identityEpoch;
+    adminCsrfRequest = api<{ mode: string; csrfToken?: string }>('/admin/session').then(session => {
+      if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+      adminCsrfToken = session.csrfToken;
+      return session;
+    }).finally(() => { if (epoch === identityEpoch) adminCsrfRequest = undefined; });
+  }
+  return adminCsrfRequest;
+}
 
 /** Invalidate both token domains; old in-flight responses may not repopulate them. */
 export function resetApiSession() {
@@ -11,6 +25,8 @@ export function resetApiSession() {
   sessionRequest = undefined;
   authCsrfToken = undefined;
   authCsrfRequest = undefined;
+  adminCsrfToken = undefined;
+  adminCsrfRequest = undefined;
 }
 
 async function authMutationToken() {
@@ -77,6 +93,7 @@ async function mutationToken() {
 export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> {
   const epoch = identityEpoch;
   const authRoute = url.startsWith('/auth/');
+  const adminRoute = url.startsWith('/admin/');
   const method = (options.method || 'GET').toUpperCase();
   const mutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
   const headers = new Headers(options.headers);
@@ -85,7 +102,12 @@ export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> 
   headers.set('X-Requested-With', 'XMLHttpRequest');
   if (mutation && authRoute && !headers.has('x-csrf-token'))
     headers.set('x-csrf-token', await authMutationToken());
-  if (mutation && !authRoute) {
+  if (mutation && adminRoute) {
+    const session = await adminMutationToken();
+    if (session.mode === 'local' && session.csrfToken) headers.set('x-admin-csrf', session.csrfToken);
+    else headers.set('x-csrf-token', await authMutationToken());
+  }
+  if (mutation && !authRoute && !adminRoute) {
     if (authCsrfToken && !headers.has('x-csrf-token')) headers.set('x-csrf-token', authCsrfToken);
     if (!headers.has('X-Platform-CSRF')) headers.set('X-Platform-CSRF', await mutationToken());
   }
@@ -138,8 +160,9 @@ export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> 
     const data = body as
       { error?: unknown; code?: string; retryable?: boolean; requestId?: string; runId?: string } | undefined;
     if (response.status === 403 && mutation && epoch === identityEpoch) {
-      if (authRoute) authCsrfToken = undefined;
-      else csrfToken = undefined;
+      if (authRoute || adminRoute) authCsrfToken = undefined;
+      if (adminRoute) adminCsrfToken = undefined;
+      if (!authRoute && !adminRoute) csrfToken = undefined;
     }
     if (response.status === 401 && !authRoute && epoch === identityEpoch)
       window.dispatchEvent(new Event('novel-auth-expired'));

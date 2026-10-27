@@ -17,6 +17,7 @@ import type {
   AuthUser,
   AuthPrincipal,
   AuthSession,
+  AuthSessionInfo,
   AuthStatus,
   TurnstileAdminSettings,
 } from '../../shared/auth.js';
@@ -53,6 +54,7 @@ export type AuthDocument = z.infer<typeof documentSchema>;
 export interface AuthPersistence {
   read(): unknown;
   write(value: AuthDocument): void;
+  close?(): Promise<void>;
 }
 export interface AuthServiceOptions {
   dataDir: string;
@@ -189,13 +191,16 @@ export class AuthService {
   readonly router: Router;
   private state: AuthDocument = empty();
   private readonly persistence: AuthPersistence;
-  private readonly key: Buffer;
+  private key: Buffer;
+  private initialized = false;
+  private readonly options: AuthServiceOptions;
   private readonly clock: () => number;
   private readonly fetcher: typeof fetch;
   private readonly secure: boolean;
   private readonly ttl: number;
   private readonly attempts = new Map<string, { count: number; until: number }>();
   constructor(options: AuthServiceOptions) {
+    this.options = options;
     this.enabled = options.enabled === true;
     this.clock = options.now ?? Date.now;
     this.fetcher = options.fetch ?? fetch;
@@ -204,25 +209,29 @@ export class AuthService {
     if (!Number.isSafeInteger(this.ttl) || this.ttl < 1000 || this.ttl > 30 * 86400000)
       fail(400, 'AUTH_TTL_INVALID');
     this.persistence = options.persistence ?? localPersistence(options.dataDir);
-    this.key = this.enabled ? Buffer.from(options.secretKey ?? loadKey(options.dataDir)) : Buffer.alloc(32);
-    if (this.key.length !== 32) fail(503, 'AUTH_KEY_INVALID');
-    if (this.enabled) {
-      try {
-        const saved = this.persistence.read();
-        this.state = saved == null ? empty() : documentSchema.parse(saved);
-        const ids = new Set(this.state.users.map((u) => u.id));
-        if (
-          ids.size !== this.state.users.length ||
-          new Set(this.state.users.map((u) => u.username)).size !== this.state.users.length ||
-          this.state.sessions.some((s) => !ids.has(s.userId))
-        )
-          throw new Error('invalid identity');
-        if (this.state.turnstile.encryptedSecret) this.decrypt(this.state.turnstile.encryptedSecret);
-      } catch {
-        fail(503, 'AUTH_STORAGE_UNAVAILABLE');
-      }
-    }
+    this.key = Buffer.alloc(32);
+    if (this.enabled) this.initialize();
     this.router = this.makeRouter();
+  }
+  private initialize() {
+    if (this.initialized) return;
+    this.key = Buffer.from(this.options.secretKey ?? loadKey(this.options.dataDir));
+    if (this.key.length !== 32) fail(503, 'AUTH_KEY_INVALID');
+    try {
+      const saved = this.persistence.read();
+      this.state = saved == null ? empty() : documentSchema.parse(saved);
+      const ids = new Set(this.state.users.map((u) => u.id));
+      if (
+        ids.size !== this.state.users.length ||
+        new Set(this.state.users.map((u) => u.username)).size !== this.state.users.length ||
+        this.state.sessions.some((s) => !ids.has(s.userId))
+      )
+        throw new Error('invalid identity');
+      if (this.state.turnstile.encryptedSecret) this.decrypt(this.state.turnstile.encryptedSecret);
+    } catch {
+      fail(503, 'AUTH_STORAGE_UNAVAILABLE');
+    }
+    this.initialized = true;
   }
   private save(next: AuthDocument) {
     try {
@@ -245,6 +254,18 @@ export class AuthService {
     const decipher = createDecipheriv('aes-256-gcm', this.key, bytes.subarray(0, 12));
     decipher.setAuthTag(bytes.subarray(-16));
     return Buffer.concat([decipher.update(bytes.subarray(12, -16)), decipher.final()]).toString('utf8');
+  }
+  /** Call only after management authorization; public auth-off status stays side-effect free. */
+  managementConfigured(): boolean {
+    if (!this.initialized) {
+      try {
+        if (this.persistence.read() == null) return false;
+      } catch {
+        return fail(503, 'AUTH_STORAGE_UNAVAILABLE');
+      }
+      this.initialize();
+    }
+    return this.hasSuperadmin();
   }
   hasSuperadmin(): boolean {
     return this.state.users.some((user) => user.role === 'superadmin' && !user.disabled);
@@ -369,93 +390,182 @@ export class AuthService {
     this.save({ ...this.state, users: [...this.state.users, user] });
     return publicUser(user);
   }
-  private makeRouter(): Router {
+  /** Owner-only management surface. The caller must enforce local transport and CSRF, not client identity headers. */
+  createManagementRouter(authorize: (req: Request) => boolean): Router {
+    return this.makeRouter(authorize);
+  }
+  private sessionId(tokenHash: string): string {
+    return createHmac('sha256', this.key).update(`session-id:${tokenHash}`).digest('hex');
+  }
+  private makeRouter(authorize?: (req: Request) => boolean): Router {
     const router = Router();
+    const requireAdmin = (req: Request) => {
+      if (authorize) {
+        if (!authorize(req)) return fail(403, 'AUTH_MANAGEMENT_FORBIDDEN');
+      } else {
+        if (!this.session(req)) return fail(401, 'AUTH_REQUIRED');
+        if (this.session(req)?.user.role !== 'superadmin') return fail(403, 'AUTH_SUPERADMIN_REQUIRED');
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !this.requireCsrf(req))
+          return fail(403, 'AUTH_CSRF_INVALID');
+      }
+    };
+    const requireSelf = (req: Request) => {
+      const session = this.session(req);
+      if (!session) return fail(401, 'AUTH_REQUIRED');
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !this.requireCsrf(req))
+        return fail(403, 'AUTH_CSRF_INVALID');
+      return session;
+    };
+    const listSessions = (req: Request, userId: string): AuthSessionInfo[] =>
+      this.state.sessions
+        .filter((s) => s.userId === userId && s.expiresAt > this.clock())
+        .map((s) => ({
+          id: this.sessionId(s.tokenHash),
+          expiresAt: new Date(s.expiresAt).toISOString(),
+          current: !authorize && s.tokenHash === hash(cookie(req, SESSION_COOKIE)),
+        }));
+    const revokeSessions = (req: Request, res: Response, userId: string) => {
+      const id = req.params.sessionId;
+      const matches = (s: AuthDocument['sessions'][number]) =>
+        s.userId === userId && (!id || this.sessionId(s.tokenHash) === id);
+      if (id && !this.state.sessions.some((s) => matches(s) && s.expiresAt > this.clock()))
+        return fail(404, 'AUTH_SESSION_NOT_FOUND');
+      const revokesCurrent =
+        !authorize &&
+        this.state.sessions.some((s) => matches(s) && s.tokenHash === hash(cookie(req, SESSION_COOKIE)));
+      this.save({ ...this.state, sessions: this.state.sessions.filter((s) => !matches(s)) });
+      if (revokesCurrent) this.setCookie(res, SESSION_COOKIE, '', 0);
+      return res.json({ ok: true });
+    };
     router.use((req, res, next) => {
       res.set('Cache-Control', 'no-store');
       res.set('Pragma', 'no-cache');
-      if (!this.enabled && !(req.method === 'GET' && req.path === '/session')) {
+      if (authorize) {
+        requireAdmin(req);
+        this.initialize();
+      }
+      if (!authorize && !this.enabled && !(req.method === 'GET' && req.path === '/session')) {
         res.status(404).json({ error: 'AUTH_DISABLED' });
         return;
       }
       next();
     });
-    router.get('/csrf', (req, res) => {
-      if (!this.sameOrigin(req)) return res.status(403).json({ error: 'AUTH_CSRF_INVALID' });
-      const nonce = randomBytes(32).toString('hex'),
-        expiry = this.clock() + 600000;
-      const payload = `${nonce}.${expiry}`;
-      this.setCookie(
-        res,
-        PREFLIGHT_COOKIE,
-        `${payload}.${createHmac('sha256', this.key).update(payload).digest('hex')}`,
-        600000,
-      );
-      return res.json({ ...this.status(req), csrfToken: nonce });
-    });
-    router.get('/session', (req, res) => res.json(this.status(req)));
-    router.post('/login', async (req, res) => {
-      if (!this.prelogin(req)) return fail(403, 'AUTH_CSRF_INVALID');
-      const body = req.body as Record<string, unknown> | undefined;
-      const name = typeof body?.username === 'string' ? body.username.trim().toLowerCase().slice(0, 128) : '';
-      this.rateLimit(req.socket.remoteAddress ?? 'unknown', name);
-      const supplied =
-        typeof body?.password === 'string' && Buffer.byteLength(body.password) <= 1024 ? body.password : '';
-      const verifiedSettings = this.state.turnstile;
-      await this.validateTurnstile(body?.turnstileToken);
-      const user = this.state.users.find((u) => u.username === name);
-      const [, salt, stored] = (user?.passwordHash ?? `scrypt$${'0'.repeat(32)}$${'0'.repeat(128)}`).split(
-        '$',
-      );
-      const actual = await derive(supplied, salt);
-      const currentUser = user && this.state.users.find((u) => u.id === user.id);
-      if (
-        !user ||
-        !currentUser ||
-        currentUser.disabled ||
-        currentUser.passwordHash !== user.passwordHash ||
-        this.state.turnstile !== verifiedSettings ||
-        !equal(actual.toString('hex'), stored)
-      )
-        return fail(401, 'AUTH_LOGIN_FAILED');
-      const token = randomBytes(32).toString('hex'),
-        csrfToken = randomBytes(32).toString('hex'),
-        expiresAt = this.clock() + this.ttl;
-      // Keep a bounded number of active sessions and rotate the current browser's old token.
-      const oldHash = hash(cookie(req, SESSION_COOKIE));
-      const active = this.state.sessions.filter((s) => s.expiresAt > this.clock() && s.tokenHash !== oldHash);
-      if (active.length >= 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
-      this.save({
-        ...this.state,
-        sessions: [...active, { tokenHash: hash(token), userId: user.id, csrfToken, expiresAt }],
+    if (!authorize) {
+      router.get('/csrf', (req, res) => {
+        if (!this.sameOrigin(req)) return res.status(403).json({ error: 'AUTH_CSRF_INVALID' });
+        const nonce = randomBytes(32).toString('hex'),
+          expiry = this.clock() + 600000;
+        const payload = `${nonce}.${expiry}`;
+        this.setCookie(
+          res,
+          PREFLIGHT_COOKIE,
+          `${payload}.${createHmac('sha256', this.key).update(payload).digest('hex')}`,
+          600000,
+        );
+        return res.json({ ...this.status(req), csrfToken: nonce });
       });
-      this.setCookie(res, SESSION_COOKIE, token, this.ttl);
-      this.setCookie(res, PREFLIGHT_COOKIE, '', 0);
-      return res.json({
-        user: publicUser(user),
-        csrfToken,
-        expiresAt: new Date(expiresAt).toISOString(),
-      } satisfies AuthSession);
-    });
-    router.post('/logout', (req, res) => {
-      if (!this.requireCsrf(req)) return fail(403, 'AUTH_CSRF_INVALID');
-      this.save({
-        ...this.state,
-        sessions: this.state.sessions.filter((s) => s.tokenHash !== hash(cookie(req, SESSION_COOKIE))),
+      router.get('/session', (req, res) => res.json(this.status(req)));
+      router.post('/login', async (req, res) => {
+        if (!this.prelogin(req)) return fail(403, 'AUTH_CSRF_INVALID');
+        const body = req.body as Record<string, unknown> | undefined;
+        const name =
+          typeof body?.username === 'string' ? body.username.trim().toLowerCase().slice(0, 128) : '';
+        this.rateLimit(req.socket.remoteAddress ?? 'unknown', name);
+        const supplied =
+          typeof body?.password === 'string' && Buffer.byteLength(body.password) <= 1024 ? body.password : '';
+        const verifiedSettings = this.state.turnstile;
+        await this.validateTurnstile(body?.turnstileToken);
+        const user = this.state.users.find((u) => u.username === name);
+        const [, salt, stored] = (user?.passwordHash ?? `scrypt$${'0'.repeat(32)}$${'0'.repeat(128)}`).split(
+          '$',
+        );
+        const actual = await derive(supplied, salt);
+        const currentUser = user && this.state.users.find((u) => u.id === user.id);
+        if (
+          !user ||
+          !currentUser ||
+          currentUser.disabled ||
+          currentUser.passwordHash !== user.passwordHash ||
+          this.state.turnstile !== verifiedSettings ||
+          !equal(actual.toString('hex'), stored)
+        )
+          return fail(401, 'AUTH_LOGIN_FAILED');
+        const token = randomBytes(32).toString('hex'),
+          csrfToken = randomBytes(32).toString('hex'),
+          expiresAt = this.clock() + this.ttl;
+        // Keep a bounded number of active sessions and rotate the current browser's old token.
+        const oldHash = hash(cookie(req, SESSION_COOKIE));
+        const active = this.state.sessions.filter(
+          (s) => s.expiresAt > this.clock() && s.tokenHash !== oldHash,
+        );
+        if (active.length >= 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
+        this.save({
+          ...this.state,
+          sessions: [...active, { tokenHash: hash(token), userId: user.id, csrfToken, expiresAt }],
+        });
+        this.setCookie(res, SESSION_COOKIE, token, this.ttl);
+        this.setCookie(res, PREFLIGHT_COOKIE, '', 0);
+        return res.json({
+          user: publicUser(user),
+          csrfToken,
+          expiresAt: new Date(expiresAt).toISOString(),
+        } satisfies AuthSession);
       });
-      this.setCookie(res, SESSION_COOKIE, '', 0);
-      res.json({ ok: true });
-    });
+      router.post('/logout', (req, res) => {
+        if (!this.requireCsrf(req)) return fail(403, 'AUTH_CSRF_INVALID');
+        this.save({
+          ...this.state,
+          sessions: this.state.sessions.filter((s) => s.tokenHash !== hash(cookie(req, SESSION_COOKIE))),
+        });
+        this.setCookie(res, SESSION_COOKIE, '', 0);
+        res.json({ ok: true });
+      });
+      router.post('/password', async (req, res) => {
+        const session = requireSelf(req);
+        const input = z
+          .object({ currentPassword: z.string().max(1024), newPassword: z.string() })
+          .strict()
+          .parse(req.body);
+        const value = password(input.newPassword);
+        this.rateLimit(req.socket.remoteAddress ?? 'unknown', session.user.username);
+        const user = this.state.users.find((u) => u.id === session.user.id)!;
+        const [, oldSalt, stored] = user.passwordHash.split('$');
+        const actual = await derive(input.currentPassword, oldSalt);
+        requireSelf(req);
+        if (
+          this.state.users.find((u) => u.id === user.id)?.passwordHash !== user.passwordHash ||
+          !equal(actual.toString('hex'), stored)
+        )
+          return fail(401, 'AUTH_PASSWORD_INCORRECT');
+        const salt = randomBytes(16).toString('hex');
+        const derived = await derive(value, salt);
+        requireSelf(req);
+        const current = this.state.users.find((u) => u.id === user.id);
+        if (!current || current.passwordHash !== user.passwordHash)
+          return fail(401, 'AUTH_PASSWORD_INCORRECT');
+        this.save({
+          ...this.state,
+          users: this.state.users.map((u) =>
+            u.id === user.id ? { ...u, passwordHash: `scrypt$${salt}$${derived.toString('hex')}` } : u,
+          ),
+          sessions: this.state.sessions.filter((s) => s.userId !== user.id),
+        });
+        this.setCookie(res, SESSION_COOKIE, '', 0);
+        res.json({ ok: true });
+      });
+      router.get('/sessions', (req, res) =>
+        res.json({ sessions: listSessions(req, requireSelf(req).user.id) }),
+      );
+      router.delete('/sessions', (req, res) => revokeSessions(req, res, requireSelf(req).user.id));
+      router.delete('/sessions/:sessionId', (req, res) => revokeSessions(req, res, requireSelf(req).user.id));
+    }
     router.use((req, _res, next) => {
-      const session = this.session(req);
-      if (!session) return next(new AuthError(401, 'AUTH_REQUIRED'));
-      if (session.user.role !== 'superadmin') return next(new AuthError(403, 'AUTH_SUPERADMIN_REQUIRED'));
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !this.requireCsrf(req))
-        return next(new AuthError(403, 'AUTH_CSRF_INVALID'));
+      requireAdmin(req);
       next();
     });
     router.get('/users', (_req, res) => res.json({ users: this.state.users.map(publicUser) }));
     router.post('/users', async (req, res) => {
+      if (!this.hasSuperadmin()) return fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
       const input = z
         .object({
           username: z.string(),
@@ -471,8 +581,8 @@ export class AuthService {
       const salt = randomBytes(16).toString('hex'),
         derived = await derive(value, salt);
       // Recheck authorization after async derivation: an administrator may have been disabled meanwhile.
-      if (this.session(req)?.user.role !== 'superadmin' || !this.requireCsrf(req))
-        return fail(403, 'AUTH_SUPERADMIN_REQUIRED');
+      requireAdmin(req);
+      if (!this.hasSuperadmin()) return fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
       if (this.state.users.length >= 10000) return fail(409, 'AUTH_USER_CAPACITY');
       // Recheck after async password derivation so concurrent requests cannot create duplicates.
       if (this.state.users.some((u) => u.username === name)) return fail(409, 'AUTH_USERNAME_EXISTS');
@@ -488,25 +598,79 @@ export class AuthService {
       res.status(201).json({ user: publicUser(user) });
     });
     router.patch('/users/:id', (req, res) => {
-      const input = z.object({ disabled: z.boolean() }).strict().parse(req.body);
+      const input = z
+        .object({ disabled: z.boolean().optional(), role: z.enum(['user', 'superadmin']).optional() })
+        .strict()
+        .refine((value) => value.disabled !== undefined || value.role !== undefined)
+        .parse(req.body);
       const user = this.state.users.find((u) => u.id === req.params.id);
       if (!user) return fail(404, 'AUTH_USER_NOT_FOUND');
+      const updated = { ...user, ...input };
       if (
-        input.disabled &&
+        (updated.disabled || updated.role !== 'superadmin') &&
         user.role === 'superadmin' &&
+        !user.disabled &&
         !this.state.users.some((u) => u.id !== user.id && u.role === 'superadmin' && !u.disabled)
       )
         return fail(409, 'AUTH_LAST_SUPERADMIN');
-      const updated = { ...user, disabled: input.disabled };
       this.save({
         ...this.state,
         users: this.state.users.map((u) => (u.id === user.id ? updated : u)),
-        sessions: input.disabled
-          ? this.state.sessions.filter((s) => s.userId !== user.id)
-          : this.state.sessions,
+        sessions:
+          updated.disabled || updated.role !== user.role
+            ? this.state.sessions.filter((s) => s.userId !== user.id)
+            : this.state.sessions,
       });
       res.json({ user: publicUser(updated) });
     });
+    router.post('/users/:id/password', async (req, res) => {
+      const input = z
+        .object({ currentPassword: z.string().max(1024).optional(), newPassword: z.string() })
+        .strict()
+        .parse(req.body);
+      const value = password(input.newPassword);
+      const target = this.state.users.find((u) => u.id === req.params.id);
+      if (!target) return fail(404, 'AUTH_USER_NOT_FOUND');
+      const actor = !authorize
+        ? this.state.users.find((u) => u.id === this.session(req)?.user.id)
+        : undefined;
+      if (!authorize) {
+        if (!actor || input.currentPassword === undefined) return fail(401, 'AUTH_PASSWORD_INCORRECT');
+        this.rateLimit(req.socket.remoteAddress ?? 'unknown', actor.username);
+        const [, oldSalt, stored] = actor.passwordHash.split('$');
+        const actual = await derive(input.currentPassword, oldSalt);
+        requireAdmin(req);
+        if (
+          this.state.users.find((u) => u.id === actor.id)?.passwordHash !== actor.passwordHash ||
+          !equal(actual.toString('hex'), stored)
+        )
+          return fail(401, 'AUTH_PASSWORD_INCORRECT');
+      }
+      const salt = randomBytes(16).toString('hex');
+      const derived = await derive(value, salt);
+      requireAdmin(req);
+      if (actor && this.state.users.find((u) => u.id === actor.id)?.passwordHash !== actor.passwordHash)
+        return fail(401, 'AUTH_PASSWORD_INCORRECT');
+      if (this.state.users.find((u) => u.id === target.id)?.passwordHash !== target.passwordHash)
+        return fail(409, 'AUTH_USER_CHANGED');
+      this.save({
+        ...this.state,
+        users: this.state.users.map((u) =>
+          u.id === target.id ? { ...u, passwordHash: `scrypt$${salt}$${derived.toString('hex')}` } : u,
+        ),
+        sessions: this.state.sessions.filter((s) => s.userId !== target.id),
+      });
+      if (actor?.id === target.id) this.setCookie(res, SESSION_COOKIE, '', 0);
+      res.json({ ok: true });
+    });
+    const targetId = (req: Request): string => {
+      const user = this.state.users.find((u) => u.id === req.params.id);
+      if (!user) return fail(404, 'AUTH_USER_NOT_FOUND');
+      return user.id;
+    };
+    router.get('/users/:id/sessions', (req, res) => res.json({ sessions: listSessions(req, targetId(req)) }));
+    router.delete('/users/:id/sessions', (req, res) => revokeSessions(req, res, targetId(req)));
+    router.delete('/users/:id/sessions/:sessionId', (req, res) => revokeSessions(req, res, targetId(req)));
     const settings = (): TurnstileAdminSettings => {
       const { encryptedSecret, ...rest } = this.state.turnstile;
       return { ...rest, hasSecret: !!encryptedSecret };
@@ -538,15 +702,9 @@ export class AuthService {
     });
     router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
       const known = error instanceof AuthError;
-      res
-        .status(known ? error.status : error instanceof z.ZodError ? 400 : 503)
-        .json({
-          error: known
-            ? error.code
-            : error instanceof z.ZodError
-              ? 'AUTH_INVALID_REQUEST'
-              : 'AUTH_UNAVAILABLE',
-        });
+      res.status(known ? error.status : error instanceof z.ZodError ? 400 : 503).json({
+        error: known ? error.code : error instanceof z.ZodError ? 'AUTH_INVALID_REQUEST' : 'AUTH_UNAVAILABLE',
+      });
     });
     return router;
   }

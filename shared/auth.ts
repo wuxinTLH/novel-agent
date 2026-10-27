@@ -14,6 +14,20 @@ export interface AuthSession {
   csrfToken: string;
   expiresAt: string;
 }
+/** Non-bearer handle; never exposes a session cookie, token hash or CSRF token. */
+export interface AuthSessionInfo {
+  id: string;
+  expiresAt: string;
+  current: boolean;
+}
+export interface AuthPasswordChange {
+  currentPassword: string;
+  newPassword: string;
+}
+export interface AuthUserUpdate {
+  disabled?: boolean;
+  role?: AuthRole;
+}
 export interface TurnstilePublicSettings {
   enabled: boolean;
   siteKey: string;

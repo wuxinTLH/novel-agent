@@ -1,6 +1,6 @@
 # SQLconnect: optional SQL connection infrastructure
 
-SQLconnect prepares and tests connections to MySQL, PostgreSQL and Microsoft SQL Server (`mssql` is an alias for `sqlserver`). **Novel projects and chapters still use the existing local JSON storage.** Saving a connection or initializing the schema does not migrate data, change the active storage backend, enable account management, or upload existing novels. The prepared tables are infrastructure for a future explicitly implemented storage adapter.
+SQLconnect prepares and tests connections to MySQL, PostgreSQL and Microsoft SQL Server (`mssql` is an alias for `sqlserver`). **Local JSON remains the default.** Saving this legacy connection or initializing its reserved schema does not migrate data, switch storage or enable authentication. The current v3 relational repository is configured separately with `storage-profiles.json` and activated only by offline `maintenance migrate-all` below. The old PostgreSQL v2 `admin migrate-sql` command remains legacy. MySQL / SQL Server repository adapters currently have mocked coverage only, not proven live-server compatibility.
 
 ## Integration
 
@@ -66,6 +66,66 @@ Only one connection operation may run per service instance. Config writes and ov
 
 TypeScript does not copy SQL resources. Package **`server/models/sql/init_mysql.sql`, `server/models/sql/init_postgresql.sql`, and `server/models/sql/init_mssql.sql` at the application root alongside `build/`**. `appRoot` makes resolution explicit. Without it, the service locates the same application-root directory both from source `server/models` and compiled `build/server/models`, independent of the current working directory. Deploying only `build/` without those resources permits config/test but explicit initialization fails with a sanitized error; it never falls back to another SQL path.
 
+## v3 storage-profiles
+
+The private data directory's `storage-profiles.json` is a version 3 configuration. For example (passwords are placeholders; supply real credentials locally, never commit them):
+
+```json
+{
+  "version": 3,
+  "defaultProfileId": "primary",
+  "profiles": [
+    {
+      "id": "primary",
+      "label": "Primary PostgreSQL",
+      "connection": {
+        "driver": "postgresql",
+        "host": "localhost",
+        "port": 5432,
+        "database": "novel_db",
+        "user": "novel_user",
+        "password": "REPLACE_LOCALLY_NOT_A_REAL_PASSWORD",
+        "tls": "verify",
+        "timeoutMs": 10000
+      }
+    }
+  ],
+  "ownerProfiles": [
+    { "ownerId": "REPLACE_WITH_EXISTING_OWNER_UUID", "profileId": "primary" }
+  ]
+}
+```
+
+Profile IDs and explicit owner bindings must be unique and reference existing profiles; unmapped owners use `defaultProfileId`. Add further profiles with the same connection shape and driver `mysql` / `sqlserver` as needed (usual ports 3306 / 1433). These credentials are plaintext secrets: protect ACLs and backups. The administration database view redacts passwords; omitting a saved password preserves it only when the connection identity is unchanged. Active storage configuration cannot be changed online. A connection check is not migration or live acceptance of a repository adapter.
+
+Create databases separately. Stop **all** runtimes sharing the targets, choose a nonexistent backup destination outside the data tree, and explicitly run:
+
+```powershell
+npm run maintenance -- migrate-all --owner <UUID> --destination <EXTERNAL_BACKUP> --confirm
+```
+
+Append `--data-dir <PATH>` for a nondefault directory. The maintenance CLI loads the application-root `.env`, but does not infer the service's `DATA_DIR`; explicitly select nondefault data with `--data-dir`. The destination safety backup is mandatory. The operation checks all tenant mappings, imports into empty v3 targets, verifies readback, then activates; no automatic switch and no fallback to JSON after activation. It does not enable authentication. See [the operating guide](使用手册.md#全量迁移到-v3-关系存储) for legacy-owner and recovery precautions.
+
+The `novel_agent_v3_*` repository uses canonical project / chapter / asset / workflow entity tables, document structure and revisions, owner revisions and import receipts. Reading / snapshot export reconstructs complete project documents from entities rather than treating duplicate whole-project JSON as a second canonical copy. Commits use transactions and revision CAS. Database Workers retain persistent pools. A tenant Worker synchronously waits for acknowledged COMMIT, preserving same-tenant ordering while isolating other tenant / control-plane event loops; the runtime cap is 32. A per-profile repository gate serializes snapshot-related operations and writes for consistency, trading throughput for correctness. Authentication control-plane SQL persistence still uses a bounded synchronous wait on the main thread. External platform-account locks are runtime-local, not a global cross-tenant lock: avoid using the same real account concurrently from multiple tenants. This is still single-application-instance infrastructure, not distributed scheduling, cross-host publication safety or a measured performance claim.
+
+### Full application backup and restore
+
+```powershell
+npm run maintenance -- backup --destination <PATH> --confirm
+# Local-only backup restore: no database-config needed
+npm run maintenance -- restore --source <PATH> --data-dir <NEW> --confirm
+# SQL backup restore: explicit trusted target profiles are mandatory
+npm run maintenance -- restore --source <PATH> --database-config <EXPLICIT_TARGET_PROFILES> --data-dir <NEW> --confirm
+```
+
+A backup contains the safe complete data tree (binary files and empty directories included), plus all configured v3 repositories' owners, documents, reconstructed entities, revisions and receipts. **It is not an entire database dump**: unrelated tables, DB users / grants and server configuration are outside scope. At every tree level it excludes `.instance.lock`, `.instance.lock.recovery`, `admin-backups`, `.maintenance-journal.json`, `*.tmp` and `.maintenance-*`; symlinks, hardlinks and unsafe paths are rejected. External environment secrets `MODEL_SECRETS_KEY` / `PLATFORM_SECRETS_KEY` are not included: retain and supply them securely. Local secrets and browser state inside the backup still require strict ACLs.
+
+A legacy version 1 SQL activation manifest is explicitly unsupported by maintenance backup: independently use `pg_dump` plus the entire local data directory and external keys. The old partial `admin-backups` facility is not a replacement.
+
+Restore defaults to new / empty files and an empty v3 application repository. SQL restore never trusts backed-up database addresses: provide explicit target profiles covering the source profile IDs / owner mappings. Existing local files have a rollback copy, but multiple database commits are not automatically rolled back. A failure journal `.maintenance-journal.json` blocks startup until manual safe reconciliation of files, committed DB states and backup; do not simply delete it or assume cross-database atomic rollback. Restore revokes authentication sessions, does not replay remote publication, and does not lift the single-instance restriction.
+
 ## Verification
+
+After `npm run build`, `node scripts/smoke-administration.mjs` exercises the production API / browser administration UI with disposable local data and no real database. Optional live v3 PostgreSQL acceptance is `npx tsx scripts/test-relational-storage.ts`: explicitly provide `PGHOST`, `PGPORT`, `PGDATABASE=novel_test`, `PGUSER`, `PGPASSWORD` securely. TLS verification is the default; `PGSSLMODE=disable` is allowed only for loopback. It creates schema and retains unique `test-v3-*` rows without destructive cleanup, so use the dedicated test DB with schema privileges. This v3 live script has not been executed here; prior v2 PostgreSQL acceptance is not v3 proof, and MySQL / SQL Server remain mock-only.
 
 `npx tsx --test server/models/sqlconnect.test.ts` uses injected adapters and a loopback HTTP server; no live database, credentials or network DB are needed. It checks redaction/persistence, strict validation, aliases, explicit confirmation, dialect script selection/GO splitting, concurrency, deadline cancellation and late close, safe errors, offline startup and absence of arbitrary SQL routes. It does not prove vendor-server syntax/permissions or connectivity in a particular deployment; perform optional integration tests against disposable real databases before production use.

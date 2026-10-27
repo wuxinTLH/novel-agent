@@ -79,13 +79,17 @@ try {
     await page.getByRole('button', { name: '退出登录', exact: true }).waitFor();
   };
   await login('smokeadmin');
-  await page.getByRole('button', { name: '用户与登录安全' }).click();
-  await page.getByText('服务端密钥未配置', { exact: false }).waitFor();
+  await page.getByRole('button', { name: '管理控制台', exact: true }).click();
+  await page.getByRole('tab', { name: '系统与安全', exact: true }).click();
   assert.equal(await page.getByLabel('启用登录人机验证').isChecked(), false);
-  await page.getByLabel('新用户名', { exact: true }).fill('smokewriter');
-  await page.getByLabel('初始密码', { exact: true }).fill(password);
-  await page.getByRole('button', { name: '创建用户', exact: true }).click();
-  await page.getByText('smokewriter · user · 正常', { exact: false }).waitFor();
+  await page.getByRole('tab', { name: /用户/ }).click();
+  const userPanel = page.getByRole('tabpanel').filter({ visible: true });
+  await userPanel.getByLabel('用户名', { exact: true }).fill('smokewriter');
+  await userPanel.getByLabel(/^初始密码/).fill(password);
+  await userPanel.getByRole('button', { name: '创建账号', exact: true }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认创建', exact: true }).click();
+  await page.getByRole('row').filter({ hasText: 'smokewriter' }).waitFor();
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click();
   // Use the same browser's real session and both CSRF tokens to create private content.
   const privateProject = await page.evaluate(async () => {
     const session = await (await fetch('/api/auth/session')).json();
@@ -105,7 +109,7 @@ try {
   await page.reload();
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await login('smokewriter');
-  assert.equal(await page.getByRole('button', { name: '用户与登录安全' }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '管理控制台', exact: true }).count(), 0);
   const isolation = await page.evaluate(async (id) => {
     const list = await fetch('/api/projects');
     const detail = await fetch(`/api/projects/${id}`);

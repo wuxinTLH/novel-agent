@@ -8,7 +8,14 @@ import type { Request } from 'express';
 import { AuthService, bootstrapSuperadmin, type AuthDocument, type AuthPersistence } from './auth.js';
 
 const password = 'a long test password 123!';
-async function setup(options: { ttl?: number; fetch?: typeof fetch; persistence?: AuthPersistence } = {}) {
+async function setup(
+  options: {
+    ttl?: number;
+    fetch?: typeof fetch;
+    persistence?: AuthPersistence;
+    authorize?: (req: Request) => boolean;
+  } = {},
+) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-auth-'));
   let now = Date.now();
   const service = new AuthService({
@@ -22,6 +29,7 @@ async function setup(options: { ttl?: number; fetch?: typeof fetch; persistence?
   service.bootstrapSuperadmin('admin', password);
   const app = express();
   app.use(express.json());
+  if (options.authorize) app.use('/api/auth/management', service.createManagementRouter(options.authorize));
   app.use('/api/auth', service.router);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -225,6 +233,173 @@ test('roles, disabling revokes all sessions, and final superadmin is protected',
     await s.close();
   }
 });
+test('password change verifies current password, revokes every session and persists across restart', async () => {
+  const s = await setup();
+  try {
+    const first = await s.login(),
+      second = await s.login();
+    const body = { currentPassword: password, newPassword: 'a different strong password!' };
+    assert.equal((await s.request('/password', 'POST', body, first.cookie, 'wrong')).status, 403);
+    assert.equal(
+      (await s.request('/password', 'POST', { ...body, currentPassword: 'wrong' }, first.cookie, first.csrf))
+        .status,
+      401,
+    );
+    assert.equal(
+      (await s.request('/password', 'POST', { ...body, newPassword: 'short' }, first.cookie, first.csrf))
+        .status,
+      400,
+    );
+    const response = await s.request('/password', 'POST', body, first.cookie, first.csrf);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.match(response.headers.getSetCookie()[0], /Max-Age=0/);
+    const restarted = new AuthService({ dataDir: s.dir, enabled: true });
+    for (const auth of [first, second]) {
+      const req = { headers: { cookie: auth.cookie } } as Request;
+      assert.equal(await s.service.resolve(req), null);
+      assert.equal(await restarted.resolve(req), null);
+    }
+    assert.equal((await s.login()).response.status, 401);
+    assert.equal((await s.login('admin', body.newPassword)).response.status, 200);
+    assert.ok(!fs.readFileSync(path.join(s.dir, 'auth.json'), 'utf8').includes(body.newPassword));
+  } finally {
+    await s.close();
+  }
+});
+test('admin password reset requires admin reauth, revokes target only and redacts credentials', async () => {
+  const s = await setup();
+  try {
+    const admin = await s.login();
+    const created = await s.request(
+      '/users',
+      'POST',
+      { username: 'writer', password },
+      admin.cookie,
+      admin.csrf,
+    );
+    const { user } = await created.json();
+    const writer = await s.login('writer'),
+      other = await s.login('writer');
+    const route = `/users/${user.id}/password`;
+    const body = { currentPassword: password, newPassword: 'new writer password 123!' };
+    assert.equal((await s.request(route, 'POST', body)).status, 401);
+    assert.equal((await s.request(route, 'POST', body, writer.cookie, writer.csrf)).status, 403);
+    assert.equal(
+      (await s.request(route, 'POST', { newPassword: body.newPassword }, admin.cookie, admin.csrf)).status,
+      401,
+    );
+    assert.equal(
+      (await s.request(route, 'POST', { ...body, currentPassword: 'incorrect' }, admin.cookie, admin.csrf))
+        .status,
+      401,
+    );
+    const response = await s.request(route, 'POST', body, admin.cookie, admin.csrf);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.equal((await s.request('/users', 'GET', undefined, admin.cookie)).status, 200);
+    for (const auth of [writer, other])
+      assert.equal((await s.request('/sessions', 'GET', undefined, auth.cookie)).status, 401);
+    assert.equal((await s.login('writer')).response.status, 401);
+    assert.equal((await s.login('writer', body.newPassword)).response.status, 200);
+    assert.equal(
+      (await s.request('/users/missing/password', 'POST', body, admin.cookie, admin.csrf)).status,
+      404,
+    );
+  } finally {
+    await s.close();
+  }
+});
+test('role updates protect last active superadmin, reject invalid patches and revoke affected sessions', async () => {
+  const s = await setup();
+  try {
+    const admin = await s.login();
+    const patch = (id: string, body: unknown) =>
+      s.request(`/users/${id}`, 'PATCH', body, admin.cookie, admin.csrf);
+    assert.equal((await patch(admin.result.user.id, { role: 'user' })).status, 409);
+    assert.equal((await patch(admin.result.user.id, {})).status, 400);
+    assert.equal((await patch(admin.result.user.id, { role: 'bogus' })).status, 400);
+    const created = await s.request(
+      '/users',
+      'POST',
+      { username: 'other', password },
+      admin.cookie,
+      admin.csrf,
+    );
+    const { user } = await created.json();
+    const other = await s.login('other');
+    assert.equal((await patch(user.id, { role: 'superadmin' })).status, 200);
+    assert.equal((await s.request('/sessions', 'GET', undefined, other.cookie)).status, 401);
+    assert.equal((await patch(user.id, { disabled: true })).status, 200);
+    assert.equal((await patch(admin.result.user.id, { role: 'user' })).status, 409);
+    assert.equal((await patch(user.id, { disabled: false })).status, 200);
+    assert.equal((await patch(admin.result.user.id, { role: 'user' })).status, 200);
+    assert.equal((await s.request('/sessions', 'GET', undefined, admin.cookie)).status, 401);
+    const restarted = new AuthService({ dataDir: s.dir, enabled: true });
+    assert.equal(await restarted.resolve({ headers: { cookie: admin.cookie } } as Request), null);
+    assert.equal((await s.login()).result.user.role, 'user');
+  } finally {
+    await s.close();
+  }
+});
+test('session listing redacts secrets and own/admin revocation enforces ownership and CSRF', async () => {
+  const s = await setup();
+  try {
+    const admin = await s.login();
+    const created = await s.request(
+      '/users',
+      'POST',
+      { username: 'writer', password },
+      admin.cookie,
+      admin.csrf,
+    );
+    const { user } = await created.json();
+    const first = await s.login('writer'),
+      second = await s.login('writer');
+    const own = await s.request('/sessions', 'GET', undefined, first.cookie).then((r) => r.json());
+    assert.equal(own.sessions.length, 2);
+    const current = own.sessions.find((v: { current: boolean }) => v.current);
+    assert.deepEqual(Object.keys(current).sort(), ['current', 'expiresAt', 'id']);
+    assert.notEqual(current.id, first.cookie.split('=')[1]);
+    assert.ok(!JSON.stringify(own).includes(first.csrf));
+    assert.equal(
+      (await s.request(`/sessions/${current.id}`, 'DELETE', {}, admin.cookie, admin.csrf)).status,
+      404,
+    );
+    assert.equal((await s.request(`/users/${user.id}/sessions`, 'GET', undefined, first.cookie)).status, 403);
+    assert.equal((await s.request(`/sessions/${current.id}`, 'DELETE', {}, first.cookie, 'bad')).status, 403);
+    assert.equal(
+      (await s.request(`/sessions/${current.id}`, 'DELETE', {}, first.cookie, first.csrf)).status,
+      200,
+    );
+    assert.equal((await s.request('/sessions', 'GET', undefined, first.cookie)).status, 401);
+    const target = await s
+      .request(`/users/${user.id}/sessions`, 'GET', undefined, admin.cookie)
+      .then((r) => r.json());
+    assert.equal(target.sessions.length, 1);
+    assert.equal(
+      (
+        await s.request(
+          `/users/${user.id}/sessions/${target.sessions[0].id}`,
+          'DELETE',
+          {},
+          admin.cookie,
+          admin.csrf,
+        )
+      ).status,
+      200,
+    );
+    assert.equal((await s.request('/sessions', 'GET', undefined, second.cookie)).status, 401);
+    const again = await s.login('writer');
+    assert.equal((await s.request('/sessions', 'DELETE', {}, again.cookie, again.csrf)).status, 200);
+    assert.equal(
+      (await s.request(`/users/${user.id}/sessions`, 'DELETE', {}, admin.cookie, admin.csrf)).status,
+      200,
+    );
+  } finally {
+    await s.close();
+  }
+});
 test('rate limit bounds password attempts without trusting forwarded address', async () => {
   const s = await setup();
   try {
@@ -286,6 +461,172 @@ test('Turnstile encrypts and redacts secrets; fixed endpoint checks hostname/act
     assert.doesNotThrow(() => new AuthService({ dataDir: s.dir, enabled: true }));
   } finally {
     await s.close();
+  }
+});
+test('lifecycle failed writes leave passwords, roles and sessions unchanged', async () => {
+  let document: AuthDocument | null = null;
+  let broken = false;
+  const persistence: AuthPersistence = {
+    read: () => document,
+    write(value) {
+      if (broken) throw new Error('disk failed');
+      document = structuredClone(value);
+    },
+  };
+  const s = await setup({ persistence });
+  try {
+    const admin = await s.login();
+    const response = await s.request(
+      '/users',
+      'POST',
+      { username: 'writer', password },
+      admin.cookie,
+      admin.csrf,
+    );
+    const { user } = await response.json();
+    const writer = await s.login('writer');
+    const before = structuredClone(document);
+    broken = true;
+    for (const [route, method, body] of [
+      ['/password', 'POST', { currentPassword: password, newPassword: 'a changed admin password!' }],
+      [
+        `/users/${user.id}/password`,
+        'POST',
+        { currentPassword: password, newPassword: 'a changed writer password!' },
+      ],
+      [`/users/${user.id}`, 'PATCH', { role: 'superadmin' }],
+      [`/users/${user.id}/sessions`, 'DELETE', {}],
+    ] as const) {
+      assert.equal((await s.request(route, method, body, admin.cookie, admin.csrf)).status, 503);
+      assert.deepEqual(document, before);
+      assert.equal((await s.request('/sessions', 'GET', undefined, writer.cookie)).status, 200);
+    }
+    assert.equal((await s.request('/sessions', 'DELETE', {}, writer.cookie, writer.csrf)).status, 503);
+    broken = false;
+    assert.equal((await s.login('writer')).response.status, 200);
+    const restarted = new AuthService({ dataDir: s.dir, enabled: true, persistence });
+    assert.equal((await restarted.resolve({ headers: { cookie: writer.cookie } } as Request))?.role, 'user');
+  } finally {
+    await s.close();
+  }
+});
+test('concurrent password changes cannot commit using revoked authorization', async () => {
+  const s = await setup();
+  try {
+    const first = await s.login(),
+      second = await s.login();
+    const bodies = [
+      { currentPassword: password, newPassword: 'first competing password 123!' },
+      { currentPassword: password, newPassword: 'second competing password 123!' },
+    ];
+    const responses = await Promise.all(
+      [first, second].map((auth, index) =>
+        s.request('/password', 'POST', bodies[index], auth.cookie, auth.csrf),
+      ),
+    );
+    assert.deepEqual(responses.map((r) => r.status).sort(), [200, 401]);
+    const winner = responses.findIndex((r) => r.status === 200);
+    assert.equal((await s.login('admin', bodies[winner].newPassword)).response.status, 200);
+    assert.equal((await s.login('admin', bodies[1 - winner].newPassword)).response.status, 401);
+    const restarted = new AuthService({ dataDir: s.dir, enabled: true });
+    assert.equal(await restarted.resolve({ headers: { cookie: first.cookie } } as Request), null);
+    assert.equal(await restarted.resolve({ headers: { cookie: second.cookie } } as Request), null);
+  } finally {
+    await s.close();
+  }
+});
+test('management authorization is required again after async password hashing', async () => {
+  let checks = 0;
+  const s = await setup({ authorize: () => ++checks <= 2 });
+  try {
+    const response = await s.request('/management/users', 'POST', { username: 'blocked', password });
+    assert.equal(response.status, 403);
+    assert.equal(checks, 3);
+    const saved = JSON.parse(fs.readFileSync(path.join(s.dir, 'auth.json'), 'utf8')) as AuthDocument;
+    assert.equal(saved.users.length, 1);
+    checks = 0;
+    const reset = await s.request(`/management/users/${saved.users[0].id}/password`, 'POST', {
+      newPassword: 'another secure password!',
+    });
+    assert.equal(reset.status, 403);
+    assert.equal(checks, 3);
+    assert.equal((await s.login()).response.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+test('management works independently while auth stays off, rejects untrusted callers and cannot bootstrap', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-management-'));
+  let allowed = false;
+  let document: AuthDocument | null = null;
+  let writes = 0;
+  const persistence: AuthPersistence = {
+    read: () => document,
+    write(value) {
+      writes++;
+      document = structuredClone(value);
+    },
+  };
+  const service = new AuthService({ dataDir: dir, persistence, secretKey: Buffer.alloc(32, 1) });
+  const app = express();
+  app.use(express.json());
+  app.use(
+    '/admin',
+    service.createManagementRouter(() => allowed),
+  );
+  app.use('/auth', service.router);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}`;
+  const request = (route: string, body?: unknown) =>
+    fetch(
+      `${base}${route}`,
+      body === undefined
+        ? {}
+        : {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+    );
+  try {
+    assert.equal((await request('/admin/users')).status, 403);
+    assert.equal(writes, 0);
+    assert.equal(fs.existsSync(path.join(dir, 'auth.key')), false);
+    allowed = true;
+    assert.equal((await request('/admin/users')).status, 200);
+    assert.equal(
+      (await request('/admin/users', { username: 'admin', password, role: 'superadmin' })).status,
+      409,
+    );
+    assert.equal(writes, 0);
+    bootstrapSuperadmin({
+      dataDir: dir,
+      persistence,
+      secretKey: Buffer.alloc(32, 1),
+      username: 'admin',
+      password,
+    });
+    // A running single-writer instance does not reload out-of-band writes; restart after CLI bootstrap.
+    const restarted = new AuthService({ dataDir: dir, persistence, secretKey: Buffer.alloc(32, 1) });
+    app.use(
+      '/restarted',
+      restarted.createManagementRouter(() => allowed),
+    );
+    assert.equal((await request('/restarted/users', { username: 'writer', password })).status, 201);
+    assert.equal(restarted.enabled, false);
+    assert.equal((await request('/auth/users')).status, 404);
+    assert.equal((await request('/auth/session').then((r) => r.json())).enabled, false);
+    assert.equal((await request('/admin/login', { username: 'admin', password })).status, 404);
+    assert.equal((await request('/restarted/users').then((r) => r.json())).users.length, 2);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeAllConnections();
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 test('corrupt persistence fails closed and failed write never installs a session', async () => {

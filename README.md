@@ -71,7 +71,7 @@ npm start
 
 - 可添加多个模型，并在列表中切换当前模型。
 - 支持 Chat Completions、Responses API 和 Anthropic Messages。
-- 当前模型与运行模式默认保存在数据目录的 `models.json`；显式迁移后由 PostgreSQL 保存该文档快照，重启后继续使用。模型密钥仍在租户本地目录。
+- 当前模型与运行模式默认保存在数据目录的 `models.json`；显式迁移后由选定 SQL profile 保存，重启后继续使用。模型密钥仍在租户本地目录。
 - API Key 加密保存，不返回浏览器，也不写入项目内容。
 - 只有模型库为空时才创建初始“默认模型”。已有模型不会在每次启动时被替换成演示模式。
 
@@ -83,9 +83,15 @@ npm start
 
 ### 可选数据库连接
 
-设置页沿用数据目录的 `sqlconnect.json` 配置，可测试 MySQL、PostgreSQL 或 SQL Server 连接，并经确认显式初始化预留表；保存或初始化不迁移业务。SQL 业务激活后，界面禁止改写 / 清除连接配置或再次初始化，需停服由本地管理员维护。**只有 PostgreSQL 实现了业务文档快照后端**，MySQL / SQL Server 没有业务存储支持，连接探测成功不代表可迁移。须自行创建数据库，部署时保留 `server/models/sql/` 的初始化及 v2 迁移脚本。
+原 SQLconnect 设置继续使用数据目录的 `sqlconnect.json`，可测试 MySQL、PostgreSQL、SQL Server 并显式初始化预留表，但保存 / 初始化不迁移业务。新的 v3 关系存储通过 `storage-profiles.json` 支持多连接及 owner 映射，使用项目、章节、设定、工作流 canonical 实体表和带 revision 的文档 / 导入回执。三种方言已有适配器，**MySQL / SQL Server 目前仅模拟验证，真实服务器兼容性尚待验收**，不把连接探测或测试桩当作在线证明。
 
-停服并完整备份数据目录，先用下节本地 CLI 引导管理员（认证仍关闭），再通过 `npm run admin -- migrate-sql --owner <UUID> --confirm` 显式执行 PostgreSQL v2 迁移、导入、回读核对并激活；`<UUID>` 必须替换为已有且未禁用身份的 UUID，不能随意生成。建议先迁移再启用认证；首次迁移拒绝额外本地租户目录，不自动汇总其他用户数据。迁移保留旧 JSON，但激活后它们不再是权威数据源，也不会在 SQL 失败时自动回退。操作顺序、认证启用和恢复边界见 [使用手册](docs/使用手册.md#认证与本地管理-cli)；原有连接配置细节见 [SQLconnect 说明](docs/sqlconnect.md)。
+默认仍是本地 JSON。先自行创建目标数据库，配置 [安全 profiles 样例](docs/sqlconnect.md#v3-storage-profiles)，停止全部共享目标数据库的运行时，再执行（UUID 为明确的原目录 owner；命令不会开启认证）：
+
+```powershell
+npm run maintenance -- migrate-all --owner <UUID> --destination <EXTERNAL_BACKUP> --confirm
+```
+
+该命令持锁先创建外部完整应用备份，再校验全部租户映射、导入空目标、回读验证并激活；不是在线自动切换。激活后 SQL 出错不回落旧 JSON，连接配置须离线维护。旧 `npm run admin -- migrate-sql --owner <UUID> --confirm` 仍保留为 **legacy PostgreSQL v2** 单 owner 迁移，不是 v3 多租户迁移。详见 [使用手册](docs/使用手册.md#全量迁移到-v3-关系存储) 和 [服务边界](docs/services.md)。
 
 ### 可选认证
 
@@ -95,7 +101,7 @@ npm start
 npm run admin -- bootstrap-admin --username admin --confirm
 ```
 
-不要把密码放进命令参数、文档或 Git。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
+不要把密码放进命令参数、文档或 Git。创建身份不会开启认证。管理界面提供用户、数据库、备份与维护、系统与安全；认证关闭时仅真实 socket 回环 + 本机 Host / Origin 可管理，写操作还需管理 CSRF，局域网免登录用户不是管理员。首次超级管理员仍仅 CLI 引导；之后可创建 / 启停用户、变更角色、重置密码和撤销会话，保护最后一个有效超级管理员。认证开启后普通用户可在账号安全中改密、查看 / 撤销自己的会话；改密、重置、停用及角色变更撤销相关会话。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
 
 ### 界面
 
@@ -141,17 +147,31 @@ MODEL_PROTOCOL=chat-completions
 MODEL_API_KEY=your-api-key
 ```
 
-- 默认业务数据保存在 `data/`，不提交到 Git。PostgreSQL 仅接管 `projects.json`、`models.json`、`platform-connections.json`、`publication-queue.json` 四类 JSON 文档快照（及全局认证状态），不是规范化 SQL 业务表实现。
-- 上传文件、模型密钥与加密密钥、平台凭据和浏览器配置仍在各租户本地目录；必须停服备份完整数据目录、独立密钥及 PostgreSQL 数据库。CLI 自动备份仅覆盖部分文件 / 指定 owner 的 SQL 快照，不是完整备份。
+- 默认业务数据保存在 `data/`，不提交到 Git；v3 显式迁移后由 SQL 接管业务文档及 canonical 项目 / 章节 / 设定 / 工作流实体，全局认证另存 owner 文档。本地仍保留上传、密钥、加密凭据及浏览器资料。
+- 新维护 CLI 提供完整应用备份 / 恢复，包含全部配置的 v3 应用仓库 owners、文档 / 实体内容、revision、receipts，以及安全数据树的二进制 / 空目录；**不是全数据库 dump**。锁、临时文件、旧 admin-backups 和维护产物排除；外部环境密钥不包含，须独立保存。旧 v1 SQL 后端明确不支持此备份，须独立 `pg_dump` 加目录备份。详见 [恢复边界与排除项](docs/使用手册.md#全量应用备份与恢复)。
 - 认证密钥 `auth.key` 保留在本地，按 `0600` 创建 / 收紧；Windows 仍需手工配置 ACL。丢失密钥会影响加密认证配置的解密。
 - SQLconnect 数据库密码以明文保存在数据目录的 `sqlconnect.json`，不属于模型密钥的加密范围；保护操作系统账号、目录权限、Windows ACL 和备份。
 - 模型地址不允许指向本机、内网或云元数据地址。
 - 业务 API 修改请求仍需当前租户进程上下文的 `X-Platform-CSRF`；启用认证后另需有效会话及 `X-CSRF-Token`，原有来源 / 私网 HTTP 限制不因登录而解除。
-- 同一数据目录只允许一个服务实例。PostgreSQL 运行时通过同步子进程桥接，实际 `COMMIT` 完成后才返回，但阻塞事件循环且每次操作新开连接，不适合高并发。SQL 行锁 / 版本冲突检测不提供跨主机运行时安全，不能多实例共享数据库运行发布任务。
+- 同一数据目录只允许一个应用实例。v3 数据库 Worker 使用持久连接池；隔离租户内保留同步 COMMIT 屏障，同租户等待仍阻塞，主控制面及其他租户事件循环隔离，最多 32 个租户运行时。同一 profile 的 repository 快照门锁串行化相关操作，是一致性 / 吞吐取舍，非分布式服务或性能基准声明。SQL 行锁 / 版本冲突检测不保证跨主机运行时安全，不能多实例共享 owner 运行发布任务。认证控制面同步 SQL 写入仍可能有界阻塞主线程；平台账号锁也仅运行时内生效，不防止不同租户同时使用同一外部账号。
 - 平台登录必须由用户在隔离浏览器中完成，应用不会代填密码或验证码，也不要求粘贴 Cookie、session 或 token。点击核验会自动进入作者首页，读取实时登录身份后保存会话。
 - 固定配置 `PLATFORM_SECRETS_KEY` 才能加密跨后端重启保存平台会话；未配置时仅保存在内存。同步网站实际更新的浏览器状态，不臆造双 token 刷新接口；失效或验证码要求仍需重新人工登录。
 - 草稿上传、覆盖与送审需要明确操作授权：手动批准，或显式开启自动审批 / 配置全自动工作流。自动审批不关闭账号、正文、版本和幂等校验。删除草稿保留独立确认及只读回查。
 - 不提交平台会话、模型密钥、作品数据、公开站点研究缓存或个人截图。自动化测试不是对真实账号送审成功的证明。
+
+### 离线备份与恢复
+
+先停服（包括共享所选数据库的所有运行时），明确数据目录；目的备份目录必须在数据目录外且尚不存在：
+
+```powershell
+npm run maintenance -- backup --destination <PATH> --confirm
+# 纯本地备份恢复：不传 --database-config
+npm run maintenance -- restore --source <PATH> --data-dir <NEW> --confirm
+# SQL 备份恢复：必须显式指定可信目标 profiles 文件，不使用备份中的源地址
+npm run maintenance -- restore --source <PATH> --database-config <EXPLICIT_TARGET_PROFILES> --data-dir <NEW> --confirm
+```
+
+默认拒绝覆盖非空目录 / 非空应用数据库；保留旧目录 rollback 副本，但无跨数据库自动回滚。失败残留 `.maintenance-journal.json` 会阻止启动，须人工安全核对协调，不能简单删日志重试。恢复撤销认证会话，不重放远端发布；外部 `MODEL_SECRETS_KEY` / `PLATFORM_SECRETS_KEY` 须安全提供，备份自身也含秘密，请保护 ACL。
 
 ## 验证
 
@@ -164,6 +184,8 @@ npm run build
 `npm test` 使用临时目录和本地测试桩，不会调用真实模型或平台账号。完成生产构建后，可运行 `npm run smoke` 验证默认模式，或运行 `npm run smoke:auth` 在独立临时目录中验证真实 Chromium 登录、超级管理员创建用户、双 CSRF 写入、退出与切换账号、会话刷新、后端重启后的会话 / 作品恢复和跨租户隔离；后者不连接真实 PostgreSQL 或 Cloudflare，不代表这两项在线验收通过。
 
 真实 PostgreSQL 可通过显式 `npm run test:postgres` 验收：仅接受 `PGDATABASE=novel_test`，连接参数由 `PGHOST`、宿主机映射端口 `PGPORT`、`PGUSER`、`PGPASSWORD` 环境变量提供，切勿将密码写入命令参数或 Git。该脚本会执行真实 v2 迁移、写入并保留唯一 `test-pg-*` 测试 owner，不是只读探测。已在测试库通过重复迁移、已有 v1 表行数保持、实际提交读回、跨 owner 隔离、并发 CAS、幂等导入及事务回滚验收；不等同于已迁移用户当前工作目录，也不代表 Cloudflare 或真实平台发布验收。
+
+构建后还可运行 `node scripts/smoke-administration.mjs`，使用临时目录和真实浏览器检查默认关闭认证的严格本机管理入口及管理界面，不连接真实数据库。新 v3 的可选真实 PostgreSQL 验收使用 `npx tsx scripts/test-relational-storage.ts`，要求显式安全提供 `PGHOST`、`PGPORT`、`PGDATABASE=novel_test`、`PGUSER`、`PGPASSWORD`；默认验证 TLS，`PGSSLMODE=disable` 仅允许回环。该脚本会建 v3 结构、写入并保留唯一 `test-v3-*` 测试 owner，不清理既有数据，不是只读探测。尚未执行该 v3 在线验收，前述真实 v2 结果不证明 v3 或 MySQL / SQL Server 在线通过。
 
 ## 主要代码
 

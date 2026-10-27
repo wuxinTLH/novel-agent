@@ -1,14 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { api, resetApiSession } from './api';
-import Modal from './components/Modal';
+import Administration from './Administration';
+import AccountSecurity from './AccountSecurity';
+import type { AuthStatus as Session, TurnstilePublicSettings as TurnstilePublic } from '../shared/auth';
 
-import type {
-  AuthStatus as Session,
-  AuthUser as User,
-  AuthRole,
-  TurnstilePublicSettings as TurnstilePublic,
-  TurnstileAdminSettings as TurnstileSettings,
-} from '../shared/auth';
 type TurnstileApi = {
   render: (element: HTMLElement, options: Record<string, unknown>) => string;
   remove: (id: string) => void;
@@ -25,6 +20,16 @@ const card: CSSProperties = {
   background: 'var(--surface)',
 };
 const stack: CSSProperties = { display: 'grid', gap: 12 };
+const toolbar: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 12,
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  padding: '8px 16px',
+  background: 'var(--surface)',
+  borderBottom: '1px solid var(--line)',
+};
 function message(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请重试。';
 }
@@ -191,201 +196,12 @@ function Login({ session }: { session: Session }) {
   );
 }
 
-function Administration({ close }: { close: () => void }) {
-  const [users, setUsers] = useState<User[]>([]);
-  const [config, setConfig] = useState<TurnstileSettings>();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [secretKey, setSecretKey] = useState('');
-  const [role, setRole] = useState<AuthRole>('user');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const load = async () => {
-    const [result, settings] = await Promise.all([
-      api<User[] | { users: User[] }>('/auth/users'),
-      api<TurnstileSettings>('/auth/turnstile'),
-    ]);
-    setUsers(Array.isArray(result) ? result : result.users);
-    setConfig(settings);
-  };
-  useEffect(() => {
-    void load().catch((error) => setError(message(error)));
-  }, []);
-  const run = async (operation: () => Promise<unknown>) => {
-    if (busy) return;
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      await operation();
-      await load();
-      setNotice('已保存。');
-    } catch (error) {
-      setError(message(error));
-    } finally {
-      setBusy(false);
-      setPassword('');
-      setSecretKey('');
-    }
-  };
-  return (
-    <Modal title="用户与登录安全" close={close} busy={busy} error={error} wide>
-      <div style={stack}>
-        {notice && <p role="status">{notice}</p>}
-        <h3>用户管理</h3>
-        <p>新用户使用独立数据空间；超级管理员不能在此停用。</p>
-        <ul style={{ paddingLeft: 20 }}>
-          {users.map((user) => (
-            <li key={user.id} style={{ marginBottom: 10 }}>
-              {user.username} · {user.role} · {user.disabled ? '已停用' : '正常'}{' '}
-              {user.role !== 'superadmin' && (
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(() =>
-                      api(`/auth/users/${encodeURIComponent(user.id)}`, {
-                        method: 'PATCH',
-                        body: JSON.stringify({ disabled: !user.disabled }),
-                      }),
-                    )
-                  }
-                >
-                  {user.disabled ? '启用' : '停用'}
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-        <form
-          style={stack}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void run(async () => {
-              await api('/auth/users', {
-                method: 'POST',
-                body: JSON.stringify({ username, password, role }),
-              });
-              setUsername('');
-            });
-          }}
-        >
-          <label style={stack}>
-            新用户名
-            <input
-              value={username}
-              autoComplete="off"
-              onChange={(event) => setUsername(event.target.value)}
-              required
-              disabled={busy}
-            />
-          </label>
-          <label style={stack}>
-            初始密码
-            <input
-              type="password"
-              value={password}
-              autoComplete="new-password"
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              disabled={busy}
-            />
-          </label>
-          <label style={stack}>
-            角色
-            <select
-              value={role}
-              onChange={(event) => setRole(event.target.value as AuthRole)}
-              disabled={busy}
-            >
-              <option value="user">普通用户</option>
-              <option value="superadmin">超级管理员</option>
-            </select>
-          </label>
-          <button disabled={busy}>创建用户</button>
-        </form>
-        <h3>Cloudflare Turnstile</h3>
-        {config ? (
-          <form
-            style={stack}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(() =>
-                api('/auth/turnstile', {
-                  method: 'PUT',
-                  body: JSON.stringify({
-                    enabled: config.enabled,
-                    siteKey: config.siteKey,
-                    action: config.action || '',
-                    hostname: config.hostname || '',
-                    ...(secretKey ? { secret: secretKey } : {}),
-                  }),
-                }),
-              );
-            }}
-          >
-            <label>
-              <input
-                type="checkbox"
-                checked={config.enabled}
-                onChange={(event) => setConfig({ ...config, enabled: event.target.checked })}
-                disabled={busy}
-              />{' '}
-              启用登录人机验证
-            </label>
-            <label style={stack}>
-              Site Key
-              <input
-                value={config.siteKey || ''}
-                onChange={(event) => setConfig({ ...config, siteKey: event.target.value })}
-                disabled={busy}
-              />
-            </label>
-            <label style={stack}>
-              Secret Key（留空保留现有值）
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={secretKey}
-                onChange={(event) => setSecretKey(event.target.value)}
-                disabled={busy}
-              />
-            </label>
-            <p>服务端密钥{config.hasSecret ? '已配置' : '未配置'}；密钥不会回显或写入浏览器存储。</p>
-            <label style={stack}>
-              预期 Action
-              <input
-                value={config.action || ''}
-                onChange={(event) => setConfig({ ...config, action: event.target.value })}
-                disabled={busy}
-              />
-            </label>
-            <label style={stack}>
-              预期 Hostname
-              <input
-                value={config.hostname || ''}
-                onChange={(event) => setConfig({ ...config, hostname: event.target.value })}
-                disabled={busy}
-              />
-            </label>
-            <p>
-              请先在 Cloudflare 配置合法域名，并确认 Site Key、Secret Key、Action 和 Hostname
-              相互匹配，避免无法登录。
-            </p>
-            <button disabled={busy}>保存验证设置</button>
-          </form>
-        ) : (
-          <p role="status">正在加载设置…</p>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session>();
   const [error, setError] = useState('');
   const [admin, setAdmin] = useState(false);
+  const [security, setSecurity] = useState(false);
+  const [localAdmin, setLocalAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const refresh = async () => {
     setError('');
@@ -415,6 +231,19 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       window.removeEventListener('storage', switched);
     };
   }, []);
+  useEffect(() => {
+    setLocalAdmin(false);
+    if (!session || session.enabled) return;
+    const controller = new AbortController();
+    void api<{ available: boolean; mode: string }>('/admin/session', { signal: controller.signal })
+      .then((result) => {
+        if (!controller.signal.aborted) setLocalAdmin(result.available === true && result.mode === 'local');
+      })
+      .catch(() => {
+        /* Unavailable or non-local administration must not disrupt normal local usage. */
+      });
+    return () => controller.abort();
+  }, [session]);
   if (!session)
     return (
       <main style={{ ...card, margin: '10vh auto', maxWidth: 480 }}>
@@ -422,7 +251,21 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         {error && <button onClick={() => void refresh()}>重试</button>}
       </main>
     );
-  if (!session.enabled) return <>{children}</>;
+  if (!session.enabled)
+    return (
+      <>
+        {localAdmin && (
+          <div style={toolbar}>
+            <span>本机模式 · 登录认证关闭</span>
+            <button type="button" onClick={() => setAdmin(true)}>
+              管理控制台
+            </button>
+          </div>
+        )}
+        {children}
+        {localAdmin && admin && <Administration close={() => setAdmin(false)} mode="local" />}
+      </>
+    );
   if (!session.authenticated || !session.user) return <Login session={session} />;
   const user = session.user;
   const logout = async () => {
@@ -439,28 +282,26 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   };
   return (
     <div key={user.id}>
-      <div
-        style={{
-          display: 'flex',
-          gap: 12,
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          padding: '8px 16px',
-          background: 'var(--surface)',
-          borderBottom: '1px solid var(--line)',
-        }}
-      >
+      <div style={toolbar}>
         <span>
           {user.username} · {user.role}
         </span>
-        {user.role === 'superadmin' && <button onClick={() => setAdmin(true)}>用户与登录安全</button>}
-        <button onClick={() => void logout()} disabled={busy}>
+        {user.role === 'superadmin' && (
+          <button type="button" onClick={() => setAdmin(true)}>
+            管理控制台
+          </button>
+        )}
+        <button type="button" onClick={() => setSecurity(true)}>
+          账号安全
+        </button>
+        <button type="button" onClick={() => void logout()} disabled={busy}>
           退出登录
         </button>
         {error && <span role="alert">{error}</span>}
       </div>
       {children}
-      {admin && <Administration close={() => setAdmin(false)} />}
+      {admin && <Administration close={() => setAdmin(false)} mode="authenticated" />}
+      {security && <AccountSecurity close={() => setSecurity(false)} />}
     </div>
   );
 }

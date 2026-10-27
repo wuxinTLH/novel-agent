@@ -1,0 +1,426 @@
+.administration {
+  width: min(1120px, calc(100vw - 40px));
+  color: var(--text);
+
+  .modal-description {
+    margin-bottom: 20px;
+  }
+  h3,
+  h4,
+  p {
+    margin: 0;
+  }
+  h3 {
+    font-size: 17px;
+    font-weight: 650;
+    line-height: 1.5;
+  }
+  h4 {
+    font-size: 14px;
+    font-weight: 650;
+    line-height: 1.6;
+  }
+  p {
+    color: var(--muted-text);
+    line-height: 1.8;
+  }
+  header > p,
+  h3 + p,
+  h4 + p {
+    margin-top: 5px;
+  }
+  small {
+    display: block;
+    color: var(--muted-text);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.6;
+  }
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    font-weight: 500;
+    line-height: 1.5;
+  }
+  button:hover:not(:disabled) {
+    background: var(--soft);
+    border-color: var(--accent-2);
+  }
+  button.is-primary {
+    background: var(--accent);
+    color: var(--on-accent);
+    border-color: var(--accent);
+  }
+  button.is-primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  [tabindex='0']:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  input,
+  select {
+    min-width: 0;
+  }
+  label {
+    display: grid;
+    align-content: start;
+    gap: 7px;
+    min-width: 0;
+    color: var(--text);
+    font-weight: 500;
+  }
+  fieldset {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  [role='tabpanel'] {
+    padding: 24px 0 8px;
+  }
+  [hidden] {
+    display: none !important;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 12px;
+  }
+  th,
+  td {
+    padding: 13px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  thead th {
+    color: var(--muted-text);
+    background: var(--surface-2);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  tbody tr:last-child > * {
+    border-bottom: 0;
+  }
+  th[scope='row'] {
+    min-width: 170px;
+    overflow-wrap: anywhere;
+    font-weight: 500;
+  }
+  th strong {
+    font-weight: 600;
+  }
+  td select {
+    min-width: 132px;
+  }
+  pre {
+    margin: 12px 0 0;
+    padding: 16px;
+    overflow-x: auto;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+
+  .administration-mode {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding: 13px 15px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .administration-mode p {
+    font-size: 12px;
+  }
+  .administration-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 3px 9px;
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    background: var(--soft);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .administration-badge.is-muted {
+    color: var(--muted-text);
+    background: var(--surface-2);
+  }
+  .administration-tabs {
+    display: flex;
+    gap: 4px;
+    margin-top: 20px;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+  }
+  .administration-tabs button {
+    position: relative;
+    flex: 1;
+    gap: 8px;
+    min-height: 46px;
+    padding: 10px 14px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 6px 6px 0 0;
+    background: transparent;
+    color: var(--muted-text);
+    white-space: nowrap;
+  }
+  .administration-tabs button[aria-selected='true'] {
+    color: var(--text);
+    background: var(--surface-2);
+    border-bottom-color: var(--accent);
+    font-weight: 650;
+  }
+  .administration-tab-count {
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--soft);
+    font-size: 10px;
+  }
+  .administration-stack {
+    display: grid;
+    gap: 20px;
+  }
+  .administration-section-heading {
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .administration-section-heading > button {
+    flex-shrink: 0;
+  }
+  .administration-card {
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--surface);
+  }
+  .administration-card > .administration-fields {
+    margin-top: 18px;
+  }
+  .administration-card > .administration-stack {
+    margin: 16px 0;
+  }
+  .administration-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 20px;
+  }
+  .administration-full {
+    grid-column: 1 / -1;
+  }
+  .administration-checkbox {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 9px;
+  }
+  .administration-checkbox input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+  }
+  .administration-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+  }
+  .administration-fields > .administration-actions {
+    align-self: end;
+    min-height: 36px;
+  }
+  .administration-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .administration-empty {
+    padding: 22px;
+    text-align: center;
+    border-radius: 6px;
+    background: var(--surface-2);
+  }
+  .administration-callout {
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-2);
+    border-radius: 7px;
+    background: var(--surface-2);
+  }
+  .administration-callout strong {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 13px;
+  }
+  .administration-callout button {
+    margin-top: 10px;
+  }
+  .administration-callout ol {
+    margin: 10px 0;
+    padding-left: 22px;
+    color: var(--muted-text);
+    line-height: 1.9;
+  }
+  .administration-feedback {
+    padding: 12px 15px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-2);
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .administration-feedback.is-error {
+    border-left: 3px solid var(--accent);
+    font-weight: 500;
+  }
+  .administration-feedback button {
+    margin-top: 8px;
+  }
+  .administration-sessions {
+    list-style: none;
+    margin: 12px 0;
+    padding: 0;
+  }
+  .administration-sessions li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .administration-sessions li:last-child {
+    border: 0;
+  }
+  .administration-sessions code {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    color: var(--muted-text);
+    font-size: 11px;
+  }
+  .administration-mapping {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 12px;
+  }
+  .administration-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+  }
+  .administration-stats > div {
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+  .administration-stats dt {
+    margin-bottom: 7px;
+    color: var(--muted-text);
+    font-size: 11px;
+  }
+  .administration-stats dd {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .administration-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--muted-text);
+    font-size: 11px;
+  }
+  .administration-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  @media (max-width: 720px) {
+    width: calc(100vw - 24px);
+    .administration-mode {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .administration-fields {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+    }
+    .administration-stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .administration-tabs button {
+      flex: 0 0 auto;
+      padding: 10px 12px;
+    }
+    .administration-card {
+      padding: 16px;
+    }
+    .administration-section-heading {
+      align-items: flex-start;
+    }
+    .administration-mapping {
+      grid-template-columns: minmax(0, 1fr);
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .administration-mapping button {
+      justify-self: start;
+    }
+    .administration-footer {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    [role='tabpanel'] {
+      padding-top: 20px;
+    }
+  }
+}

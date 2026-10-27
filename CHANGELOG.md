@@ -14,10 +14,13 @@
 - 将业务 API 拆分到 `server/models/`，入口保留环境、数据锁、服务装配和关闭管理；延续原 API 路径与本地 JSON 数据。
 - 增加默认关闭的认证与本地管理 CLI：停服后通过 `npm run admin -- bootstrap-admin --username admin --confirm` 首次引导超级管理员，密码仅来自 `NOVEL_BOOTSTRAP_PASSWORD` 环境变量；显式选择 legacy owner 后才能启用认证，不让首次登录自动接管旧数据。
 - 认证模式按验证后的稳定用户 UUID 装配独立、不可变 owner 的应用上下文，隔离 Store、Runner、模型密钥、平台运行时、发布队列和上传；提供用户创建 / 停用、会话 / CSRF 和管理员 Turnstile 配置，默认单用户行为保留。
-- SQLconnect 继续使用数据目录的 `sqlconnect.json` 及原有设置界面。MySQL / SQL Server 仍只有连接探测与预留表基础设施，没有 SQL 业务后端；保存 / 初始化不自动迁移。
-- 新增 PostgreSQL 文档快照后端及显式 `migrate-sql --owner UUID --confirm` v2 迁移：按明确身份导入并回读核对，再写本地激活清单。业务仅存四类 JSON 文档：projects、models、platform-connections、publication-queue；全局认证另存文档，不是全面规范化 SQL 业务表。
-- 运行时 PostgreSQL 同步子进程桥接等待实际 `COMMIT`，但阻塞事件循环、每次操作新开连接；未知结果停止当前存储，不回落旧 JSON。仍只支持单服务进程与本地数据锁，行锁 / revision 不保证跨主机生成或发布安全。
-- 上传、模型秘密 / 密钥、平台凭据与浏览器配置仍在租户本地目录；CLI 自动备份不覆盖完整目录或全部 SQL 租户，须另外备份完整数据目录、密钥和数据库。数据库密码明文落盘，认证密钥本地 `0600`，Windows ACL 仍需手工维护。部署时保留初始化与 v2 迁移 SQL 脚本。
+- SQLconnect 保留 `sqlconnect.json` 和原连接探测 / 初始化入口，保存 / 初始化不自动迁移。新增 v3 `storage-profiles.json` 多连接及 owner 映射，MySQL / PostgreSQL / SQL Server 关系适配器；MySQL / SQL Server 目前仅模拟 SQL 单元验证，尚无真实服务器兼容性证明。
+- v3 项目 / 章节 / 设定 / 工作流使用 canonical 实体表，文档结构、owner / 文档 revisions 及导入 receipts 同事务持久化。停服 `npm run maintenance -- migrate-all --owner UUID --destination EXTERNAL_BACKUP --confirm` 先完整备份、校验全部租户、导入空目标、回读再激活；不自动开启认证。旧 `admin migrate-sql` PostgreSQL v2 单 owner 迁移仍保留为 legacy。
+- 数据库 Worker 改用持久连接池；每租户隔离 Worker 保留同步 COMMIT 屏障，同租户等待仍阻塞，其他租户 / 主控制面业务事件循环隔离，最多 32 个租户运行时。同 profile repository 快照门锁串行化相关读写是吞吐取舍，不是无锁性能或分布式服务保证；认证控制面同步 SQL 持久化仍可能短时阻塞主线程。未知提交失败关闭、不回落 JSON，单实例限制不变。
+- 新增离线 `npm run maintenance -- backup --destination PATH --confirm` 与 `restore --source PATH --data-dir NEW --confirm`；仅 SQL 恢复额外必须显式 `--database-config EXPLICIT_TARGET_PROFILES`。完整应用备份含全部配置 v3 仓库 owners / 文档 / 实体内容 / revisions / receipts 和安全本地文件树（含二进制、空目录），不是整个数据库 dump；排除锁、临时文件、admin-backups 和维护产物，拒绝不安全链接。外部环境秘密不入包，需独立保管。
+- 恢复默认新 / 空本地和数据库目标，不连接备份源地址；保留文件 rollback 副本，不能自动跨数据库回滚。失败 `.maintenance-journal.json` 阻止启动，需人工安全协调；恢复撤销认证会话，不重放远端发布。旧 version 1 SQL 后端不支持 maintenance backup，须独立 `pg_dump` 加完整目录 / 外部密钥备份。
+- 增加管理中心用户 / 数据库 / 维护 / 安全区域、角色 / 密码 / 会话管理和普通用户账号安全；认证仍默认关闭，本机管理需严格 socket 回环、Host / Origin 与管理 CSRF，局域网访问不授予管理员。首次超级管理员仍 CLI，最后一个有效超级管理员受保护；改密、重置、停用及角色变更撤销目标会话。
+- 上传、模型秘密 / 密钥、平台凭据与浏览器资料仍本地。数据库密码明文落盘，认证密钥本地 `0600`，Windows ACL 仍需手工维护；备份本身也含秘密。部署继续保留旧初始化与 v2 迁移 SQL 资源。
 - Turnstile 需真实 Cloudflare 密钥、匹配 action / hostname 与在线验证，未宣称已通过真实在线验收；认证保留既有可信局域网 HTTP 限制，不代表公网生产部署方案。
 - 修复大小写混合 API 路径绕过 SQLconnect 超级管理员检查的问题；认证与角色检查使用和 Express 路由一致的大小写规则，补充读写回归。
 - 已启用认证但尚未分配 legacy owner 时，SQL 迁移在连接数据库前拒绝激活，避免生成下次启动无法加载的 owner 配置。

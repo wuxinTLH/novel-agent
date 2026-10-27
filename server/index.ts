@@ -1,16 +1,13 @@
 import path from 'node:path';
+import fs from 'node:fs';
+import express from 'express';
+import { createAdministrationRouter } from './models/administration.js';
+import { createIsolatedTenantApplication } from './models/isolated-tenant-application.js';
 import { acquireDataLock, appRoot } from './local-runtime.js';
-import { createApplication } from './models/application.js';
-import { createServiceContext, type FeatureService } from './models/context.js';
+import type { IsolatedTenantService } from './models/isolated-tenant-application.js';
 import { SQLConnectService, createSQLconnectRouter } from './models/sqlconnect.js';
 import { AuthService } from './models/auth.js';
-import { createTenantApplication } from './models/tenant-application.js';
-import {
-  activateScopedStorage,
-  createAuthPersistence,
-  readAuthMode,
-  readStorageManifest,
-} from './models/storage-config.js';
+import { createAuthPersistence, readAuthMode, readStorageManifest } from './models/storage-config.js';
 try {
   process.loadEnvFile(path.join(appRoot, '.env'));
 } catch (error) {
@@ -18,33 +15,34 @@ try {
 }
 const port = Number(process.env.PORT || 3001);
 const dir = path.resolve(appRoot, process.env.DATA_DIR || 'data');
+if (fs.existsSync(path.join(dir, '.maintenance-journal.json')))
+  throw new Error('MAINTENANCE_RECOVERY_REQUIRED');
 const releaseDataLock = acquireDataLock(dir);
 process.once('exit', releaseDataLock);
 const mode = readAuthMode(dir);
 const manifest = readStorageManifest(dir);
 if (mode.enabled && manifest && mode.legacyOwnerId !== manifest.ownerId)
   throw new Error('SQL_AUTH_OWNER_MISMATCH');
+const authPersistence = createAuthPersistence(dir);
 const auth = new AuthService({
   dataDir: dir,
   enabled: mode.enabled,
-  persistence: mode.enabled ? createAuthPersistence(dir) : undefined,
+  persistence: authPersistence,
 });
 if (mode.enabled && !auth.hasSuperadmin()) throw new Error('AUTH_BOOTSTRAP_REQUIRED');
 const sqlconnect = new SQLConnectService({ dataDir: dir, appRoot });
-const services: FeatureService[] = [
+const services: IsolatedTenantService[] = [
   {
-    id: 'SQLconnect',
     register(app) {
       app.use(
         '/api/sqlconnect',
+        express.json({ limit: '1mb' }),
         (req, res, next) => {
           if (manifest && !['GET', 'HEAD', 'OPTIONS'].includes(req.method))
-            return res
-              .status(409)
-              .json({
-                code: 'ACTIVE_STORAGE_CONFIG_LOCKED',
-                error: '业务 SQL 已启用；请停机并通过本机管理流程修改连接或迁移。',
-              });
+            return res.status(409).json({
+              code: 'ACTIVE_STORAGE_CONFIG_LOCKED',
+              error: '业务 SQL 已启用；请停机并通过本机管理流程修改连接或迁移。',
+            });
           next();
         },
         createSQLconnectRouter(sqlconnect),
@@ -53,46 +51,36 @@ const services: FeatureService[] = [
     close: () => sqlconnect.close(),
   },
 ];
-let closeRuntime: () => Promise<void>;
-let app;
-if (mode.enabled) {
-  const tenants = createTenantApplication({ dir, port, appRoot, auth, services });
-  app = tenants.app;
-  closeRuntime = tenants.close;
-} else {
-  const scoped = activateScopedStorage(dir, dir);
-  const context = createServiceContext(dir);
-  app = createApplication(context, {
-    port,
-    appRoot,
-    assertStorageHealthy: () => scoped.storage?.assertHealthy(),
-    services: [
-      ...services,
-      {
+services.unshift({
+  register(application) {
+    application.use(
+      '/api/admin',
+      createAdministrationRouter({
+        dir,
+        auth,
+        tenantCount: () => tenants.contexts.size,
+      }),
+    );
+    application.get('/api/services/user', (_req, res) =>
+      res.json({
         id: 'User',
-        register(application) {
-          application.get('/api/auth/session', (_req, res) =>
-            res.json({
-              enabled: false,
-              configured: false,
-              authenticated: false,
-              turnstile: { enabled: false, siteKey: '', action: 'login' },
-            }),
-          );
-          application.get('/api/services/user', (_req, res) =>
-            res.json({ id: 'User', enabled: false, authenticationReady: false, mode: 'single-user' }),
-          );
-        },
-      },
-    ],
-  });
-  closeRuntime = async () => {
-    for (const controller of context.runner.controllers.values()) controller.abort();
-    await context.platformRuntime.close();
-    while (context.runner.controllers.size) await new Promise((resolve) => setTimeout(resolve, 25));
-    scoped.unbind();
-  };
-}
+        enabled: mode.enabled,
+        authenticationReady: mode.enabled,
+        mode: mode.enabled ? 'verified-user' : 'single-user',
+      }),
+    );
+  },
+});
+const tenants = createIsolatedTenantApplication({
+  dir,
+  port,
+  appRoot,
+  auth,
+  services,
+  enabled: mode.enabled,
+});
+const app = tenants.app;
+const closeRuntime = tenants.close;
 const server = app.listen(port, '0.0.0.0', () => console.log(`Novel Agent API: http://0.0.0.0:${port}`));
 let closing = false;
 async function shutdown() {
@@ -103,7 +91,7 @@ async function shutdown() {
   deadline.unref();
   try {
     await closeRuntime();
-    await Promise.all(services.map((service) => service.close?.()));
+    await authPersistence?.close?.();
     releaseDataLock();
     clearTimeout(deadline);
     process.exit(0);
