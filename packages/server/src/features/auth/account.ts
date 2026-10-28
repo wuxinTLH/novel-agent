@@ -29,7 +29,7 @@ export interface AccountHost {
   decrypt(value: string): string;
   prelogin(req: Request): boolean;
   self(req: Request): { user: { id: string } };
-  admin(req: Request): void;
+  admin(req: Request, permission: 'security.read' | 'security.manage'): void;
   rate(req: Request, key: string): void;
   turnstile(value: unknown): Promise<void>;
   issue(req: Request, res: Response, id: string): unknown;
@@ -254,7 +254,7 @@ export class AccountExtension {
               id,
               username: t.payload.username,
               passwordHash: t.payload.passwordHash,
-              role: 'user',
+              role: 'writer',
               disabled: false,
               createdAt: new Date(h.now()).toISOString(),
             },
@@ -431,11 +431,11 @@ export class AccountExtension {
     }
     this.installOidc(router, management);
     router.get('/account/config', (req, res) => {
-      h.admin(req);
+      h.admin(req, 'security.read');
       res.json(this.publicConfig());
     });
     router.put('/account/config', (req, res) => {
-      h.admin(req);
+      h.admin(req, 'security.manage');
       const input = z
         .object({
           registration: z.boolean(),
@@ -609,7 +609,7 @@ export class AccountExtension {
       });
     }
     router.put('/account/oidc/users/:id', (req, res) => {
-      h.admin(req);
+      h.admin(req, 'security.manage');
       const { issuer, subject } = z
         .object({ issuer: z.string().max(2048), subject: z.string().min(1).max(512) })
         .strict()

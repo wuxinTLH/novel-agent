@@ -225,7 +225,7 @@ test('tenant authorization and superadmin protection run before outer services',
   assert.equal((await f.request('GET', '/UPLOADS/private')).status, 401);
   const principal = {
     id: '11111111-1111-4111-8111-111111111111',
-    role: 'user' as const,
+    role: 'writer' as const,
     username: 'writer',
     disabled: false,
     createdAt: new Date().toISOString(),
@@ -246,7 +246,7 @@ test('independent tenant runtimes are concurrently responsive and a poisoned wor
   const b = '22222222-2222-4222-8222-222222222222';
   f.auth.resolve = async (req) => ({
     id: String(req.headers['x-test-owner']),
-    role: 'user',
+    role: 'writer',
     username: 'writer',
     disabled: false,
     createdAt: new Date().toISOString(),

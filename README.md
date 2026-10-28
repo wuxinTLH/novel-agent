@@ -28,6 +28,7 @@ npm start
 - [完整操作手册](docs/使用手册.md)：安装、正文添加、登录绑定、草稿送审与全自动工作流。
 - [番茄平台接入说明](docs/番茄平台接入.md)：能力边界、状态、接口及故障排查。
 - [服务模块与用户边界](docs/services.md)：后端模块组织、认证与租户隔离、PostgreSQL 文档快照存储及限制。
+- [角色与模块权限](docs/roles-permissions.md)：四种角色、精确权重、运维安全边界与旧账号兼容。
 - [SQLconnect 说明](docs/sqlconnect.md)：可选数据库连接、显式建表、凭据保护和部署资源。
 - [主题扩展说明](public/themes/README.md)：主题注册表、独立 CSS 与生产部署。
 - [更新记录](CHANGELOG.md)：功能变更与验证边界。

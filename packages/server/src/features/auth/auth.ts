@@ -24,10 +24,21 @@ import type {
   TurnstileAdminSettings,
 } from '../../../../../shared/auth.js';
 
+import {
+  ROLE_IDS,
+  normalizeRole,
+  hasPermission,
+  canManageUser,
+  type Permission,
+  type RoleId,
+} from '../../../../../shared/permissions.js';
+
+// Only persisted identities accept the legacy role; request schemas require canonical roles.
+const storedRoleSchema = z.preprocess((value) => normalizeRole(value) ?? value, z.enum(ROLE_IDS));
 const userSchema = z.object({
   id: z.string().uuid(),
   username: z.string().regex(/^[a-z0-9][a-z0-9_.-]{2,63}$/),
-  role: z.enum(['superadmin', 'user']),
+  role: storedRoleSchema,
   disabled: z.boolean(),
   createdAt: z.string().datetime(),
   passwordHash: z.string().regex(/^scrypt\$[a-f0-9]{32}\$[a-f0-9]{128}$/),
@@ -478,15 +489,29 @@ export class AuthService {
   }
   private makeRouter(authorize?: (req: Request) => boolean): Router {
     const router = Router();
-    const requireAdmin = (req: Request) => {
+    const requirePermission = (req: Request, permission: Permission) => {
       if (authorize) {
         if (!authorize(req)) return fail(403, 'AUTH_MANAGEMENT_FORBIDDEN');
       } else {
-        if (!this.session(req)) return fail(401, 'AUTH_REQUIRED');
-        if (this.session(req)?.user.role !== 'superadmin') return fail(403, 'AUTH_SUPERADMIN_REQUIRED');
+        const session = this.session(req);
+        if (!session) return fail(401, 'AUTH_REQUIRED');
+        if (!hasPermission(session.user.role, permission)) return fail(403, 'AUTH_PERMISSION_DENIED');
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !this.requireCsrf(req))
           return fail(403, 'AUTH_CSRF_INVALID');
       }
+    };
+    const requireTarget = (req: Request, user: AuthDocument['users'][number]) => {
+      requirePermission(req, 'users.manage');
+      if (!authorize) {
+        const actor = this.session(req)!.user;
+        if ((actor.id === user.id && actor.role !== 'superadmin') || !canManageUser(actor.role, user.role))
+          return fail(403, 'AUTH_USER_FORBIDDEN');
+      }
+    };
+    const requireCreation = (req: Request, role: RoleId) => {
+      requirePermission(req, 'users.manage');
+      if (!authorize && !canManageUser(this.session(req)!.user.role, role))
+        return fail(403, 'AUTH_USER_FORBIDDEN');
     };
     const requireSelf = (req: Request) => {
       const session = this.session(req);
@@ -524,7 +549,7 @@ export class AuthService {
       decrypt: (value) => this.decrypt(value),
       prelogin: (req) => this.prelogin(req),
       self: requireSelf,
-      admin: requireAdmin,
+      admin: requirePermission,
       rate: (req, key) =>
         this.rateLimit(
           req.socket.remoteAddress ?? 'unknown',
@@ -541,7 +566,7 @@ export class AuthService {
       res.set('Cache-Control', 'no-store');
       res.set('Pragma', 'no-cache');
       if (authorize) {
-        requireAdmin(req);
+        requirePermission(req, 'admin.access');
         this.initialize();
       }
       if (!authorize && !this.enabled && !(req.method === 'GET' && req.path === '/session')) {
@@ -641,21 +666,22 @@ export class AuthService {
       router.delete('/sessions', (req, res) => revokeSessions(req, res, requireSelf(req).user.id));
       router.delete('/sessions/:sessionId', (req, res) => revokeSessions(req, res, requireSelf(req).user.id));
     }
-    router.use((req, _res, next) => {
-      requireAdmin(req);
-      next();
+    router.get('/users', (req, res) => {
+      requirePermission(req, 'users.read');
+      res.json({ users: this.state.users.map(publicUser) });
     });
-    router.get('/users', (_req, res) => res.json({ users: this.state.users.map(publicUser) }));
     router.post('/users', async (req, res) => {
+      requirePermission(req, 'users.manage');
       if (!this.hasSuperadmin()) return fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
       const input = z
         .object({
           username: z.string(),
           password: z.string(),
-          role: z.enum(['user', 'superadmin']).default('user'),
+          role: z.enum(ROLE_IDS).default('writer'),
         })
         .strict()
         .parse(req.body);
+      requireCreation(req, input.role);
       const name = username(input.username),
         value = password(input.password);
       if (this.state.users.some((u) => u.username === name)) return fail(409, 'AUTH_USERNAME_EXISTS');
@@ -663,7 +689,7 @@ export class AuthService {
       const salt = randomBytes(16).toString('hex'),
         derived = await derive(value, salt);
       // Recheck authorization after async derivation: an administrator may have been disabled meanwhile.
-      requireAdmin(req);
+      requireCreation(req, input.role);
       if (!this.hasSuperadmin()) return fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
       if (this.state.users.length >= 10000) return fail(409, 'AUTH_USER_CAPACITY');
       // Recheck after async password derivation so concurrent requests cannot create duplicates.
@@ -680,13 +706,16 @@ export class AuthService {
       res.status(201).json({ user: publicUser(user) });
     });
     router.patch('/users/:id', (req, res) => {
+      requirePermission(req, 'users.manage');
       const input = z
-        .object({ disabled: z.boolean().optional(), role: z.enum(['user', 'superadmin']).optional() })
+        .object({ disabled: z.boolean().optional(), role: z.enum(ROLE_IDS).optional() })
         .strict()
         .refine((value) => value.disabled !== undefined || value.role !== undefined)
         .parse(req.body);
       const user = this.state.users.find((u) => u.id === req.params.id);
       if (!user) return fail(404, 'AUTH_USER_NOT_FOUND');
+      requireTarget(req, user);
+      if (input.role !== undefined) requirePermission(req, 'roles.manage');
       const updated = { ...user, ...input };
       if (
         (updated.disabled || updated.role !== 'superadmin') &&
@@ -706,6 +735,7 @@ export class AuthService {
       res.json({ user: publicUser(updated) });
     });
     router.post('/users/:id/password', async (req, res) => {
+      requirePermission(req, 'users.manage');
       const input = z
         .object({ currentPassword: z.string().max(1024).optional(), newPassword: z.string() })
         .strict()
@@ -713,6 +743,7 @@ export class AuthService {
       const value = password(input.newPassword);
       const target = this.state.users.find((u) => u.id === req.params.id);
       if (!target) return fail(404, 'AUTH_USER_NOT_FOUND');
+      requireTarget(req, target);
       const actor = !authorize
         ? this.state.users.find((u) => u.id === this.session(req)?.user.id)
         : undefined;
@@ -721,7 +752,7 @@ export class AuthService {
         this.rateLimit(req.socket.remoteAddress ?? 'unknown', actor.username);
         const [, oldSalt, stored] = actor.passwordHash.split('$');
         const actual = await derive(input.currentPassword, oldSalt);
-        requireAdmin(req);
+        requirePermission(req, 'users.manage');
         if (
           this.state.users.find((u) => u.id === actor.id)?.passwordHash !== actor.passwordHash ||
           !equal(actual.toString('hex'), stored)
@@ -730,7 +761,10 @@ export class AuthService {
       }
       const salt = randomBytes(16).toString('hex');
       const derived = await derive(value, salt);
-      requireAdmin(req);
+      requirePermission(req, 'users.manage');
+      const currentTarget = this.state.users.find((u) => u.id === target.id);
+      if (!currentTarget) return fail(404, 'AUTH_USER_NOT_FOUND');
+      requireTarget(req, currentTarget);
       if (actor && this.state.users.find((u) => u.id === actor.id)?.passwordHash !== actor.passwordHash)
         return fail(401, 'AUTH_PASSWORD_INCORRECT');
       if (this.state.users.find((u) => u.id === target.id)?.passwordHash !== target.passwordHash)
@@ -746,8 +780,10 @@ export class AuthService {
       res.json({ ok: true });
     });
     const targetId = (req: Request): string => {
+      requirePermission(req, req.method === 'GET' ? 'users.read' : 'users.manage');
       const user = this.state.users.find((u) => u.id === req.params.id);
       if (!user) return fail(404, 'AUTH_USER_NOT_FOUND');
+      if (req.method !== 'GET') requireTarget(req, user);
       return user.id;
     };
     router.get('/users/:id/sessions', (req, res) => res.json({ sessions: listSessions(req, targetId(req)) }));
@@ -757,8 +793,12 @@ export class AuthService {
       const { encryptedSecret, ...rest } = this.state.turnstile;
       return { ...rest, hasSecret: !!encryptedSecret };
     };
-    router.get('/turnstile', (_req, res) => res.json(settings()));
+    router.get('/turnstile', (req, res) => {
+      requirePermission(req, 'security.read');
+      res.json(settings());
+    });
     router.put('/turnstile', (req, res) => {
+      requirePermission(req, 'security.manage');
       const input = z
         .object({
           enabled: z.boolean(),

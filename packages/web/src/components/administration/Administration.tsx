@@ -1,11 +1,36 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Copy, Database, HardDrive, RefreshCw, ShieldCheck, Users } from 'lucide-react';
+import {
+  ArrowRight,
+  CheckCircle2,
+  Copy,
+  Database,
+  HardDrive,
+  LayoutDashboard,
+  LockKeyhole,
+  RefreshCw,
+  ShieldCheck,
+  Terminal,
+  Users,
+} from 'lucide-react';
 import { api } from '../../services/api';
 import Modal from '../common/Modal';
 import OnlineMaintenance from './OnlineMaintenance';
 import { AccountAdminSettings } from '../account/AccountAdminSettings';
 import { useConfirm } from '../common/AppDialog';
-import type { AuthRole, AuthSessionInfo, AuthUser, TurnstileAdminSettings } from '../../../../../shared/auth';
+import type {
+  AuthRole,
+  AuthSessionInfo,
+  AuthStatus,
+  AuthUser,
+  TurnstileAdminSettings,
+} from '../../../../../shared/auth';
+import {
+  canManageUser,
+  hasPermission,
+  ROLE_IDS,
+  ROLES,
+  type Permission,
+} from '../../../../../shared/permissions';
 import '../../styles/administration.scss';
 
 const accountAdminRequest = <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
@@ -52,8 +77,16 @@ type Maintenance = {
 };
 type BusyCallback = (busy: boolean) => void;
 const ports: Record<Driver, number> = { mysql: 3306, postgresql: 5432, sqlserver: 1433 };
-const roles: Record<AuthRole, string> = { user: '普通用户', superadmin: '超级管理员' };
+const roleLabel = (role: AuthRole) => `${ROLES[role].label}（权重 ${ROLES[role].weight}）`;
+const tabPermissions: Record<Tab, Permission> = {
+  overview: 'admin.status.read',
+  users: 'users.read',
+  database: 'storage.read',
+  backup: 'maintenance.read',
+  system: 'security.read',
+};
 const tabs = [
+  { id: 'overview', label: '工作台', icon: LayoutDashboard },
   { id: 'users', label: '用户', icon: Users },
   { id: 'database', label: '数据库', icon: Database },
   { id: 'backup', label: '备份与维护', icon: HardDrive },
@@ -66,12 +99,18 @@ const date = (value: string) => {
   return Number.isNaN(parsed.getTime()) ? '未知时间' : parsed.toLocaleString();
 };
 
-function useResource<T>(path: string) {
+function useResource<T>(path: string | undefined) {
   const [value, setValue] = useState<T>();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
+    if (!path) {
+      setValue(undefined);
+      setLoading(false);
+      setError('');
+      return;
+    }
     const controller = new AbortController();
     setLoading(true);
     setError('');
@@ -154,21 +193,36 @@ function LoadState({ loading, error, retry }: { loading: boolean; error: string;
   );
 }
 
-function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallback; changed: () => void }) {
+function UsersPanel({
+  mode,
+  actor,
+  onBusy,
+  changed,
+}: {
+  mode: Mode;
+  actor: AuthRole;
+  onBusy: BusyCallback;
+  changed: () => void;
+}) {
+  const manage = hasPermission(actor, 'users.manage');
+  const assignRoles = hasPermission(actor, 'roles.manage');
+  const creationRoles = ROLE_IDS.filter((candidate) => assignRoles || canManageUser(actor, candidate));
+  const manageable = (user: AuthUser) => manage && canManageUser(actor, user.role);
   const resource = useResource<AuthUser[] | { users: AuthUser[] }>('/admin/users');
   const users = resource.value ? (Array.isArray(resource.value) ? resource.value : resource.value.users) : [];
   const operation = useOperation(onBusy);
   const confirm = useConfirm();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<AuthRole>('user');
+  const [role, setRole] = useState<AuthRole>('writer');
   const [selected, setSelected] = useState<AuthUser>();
   const [newPassword, setNewPassword] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [sessionUser, setSessionUser] = useState<AuthUser>();
   const mutate = async (user: AuthUser, patch: { role?: AuthRole; disabled?: boolean }) => {
+    if (!manageable(user) || (patch.role && !assignRoles)) return;
     const action = patch.role
-      ? `将角色更改为「${roles[patch.role]}」`
+      ? `将角色更改为「${roleLabel(patch.role)}」`
       : patch.disabled
         ? '停用账号并撤销其会话'
         : '重新启用账号';
@@ -191,8 +245,9 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
   };
   const create = async (event: FormEvent) => {
     event.preventDefault();
+    if (!manage || !creationRoles.includes(role)) return;
     if (
-      !(await confirm(`创建「${username.trim()}」（${roles[role]}）？新用户将使用独立数据空间。`, {
+      !(await confirm(`创建「${username.trim()}」（${roleLabel(role)}）？新用户将使用独立数据空间。`, {
         title: '创建账号',
         confirmText: '确认创建',
         danger: role === 'superadmin',
@@ -217,6 +272,7 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
     event.preventDefault();
     if (
       !selected ||
+      !manageable(selected) ||
       !(await confirm(`重置「${selected.username}」的密码？该用户现有会话将被撤销，需要重新登录。`, {
         title: '重置密码',
         confirmText: '确认重置',
@@ -272,15 +328,22 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
                     <small>创建于 {date(user.createdAt)}</small>
                   </th>
                   <td>
-                    <select
-                      aria-label={`${user.username} 的角色`}
-                      value={user.role}
-                      disabled={operation.busy}
-                      onChange={(event) => void mutate(user, { role: event.target.value as AuthRole })}
-                    >
-                      <option value="user">普通用户</option>
-                      <option value="superadmin">超级管理员</option>
-                    </select>
+                    {assignRoles ? (
+                      <select
+                        aria-label={`${user.username} 的角色`}
+                        value={user.role}
+                        disabled={operation.busy || !manageable(user)}
+                        onChange={(event) => void mutate(user, { role: event.target.value as AuthRole })}
+                      >
+                        {ROLE_IDS.map((candidate) => (
+                          <option key={candidate} value={candidate}>
+                            {roleLabel(candidate)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span>{roleLabel(user.role)}</span>
+                    )}
                   </td>
                   <td>
                     <span className={`administration-badge ${user.disabled ? 'is-muted' : ''}`}>
@@ -291,14 +354,14 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
                     <div className="administration-actions">
                       <button
                         type="button"
-                        disabled={operation.busy}
+                        disabled={operation.busy || !manageable(user)}
                         onClick={() => void mutate(user, { disabled: !user.disabled })}
                       >
                         {user.disabled ? '启用' : '停用'}
                       </button>
                       <button
                         type="button"
-                        disabled={operation.busy}
+                        disabled={operation.busy || !manageable(user)}
                         onClick={() => {
                           setSelected(user);
                           setNewPassword('');
@@ -307,7 +370,11 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
                       >
                         重置密码
                       </button>
-                      <button type="button" disabled={operation.busy} onClick={() => setSessionUser(user)}>
+                      <button
+                        type="button"
+                        disabled={operation.busy || !manageable(user)}
+                        onClick={() => setSessionUser(user)}
+                      >
                         会话
                       </button>
                     </div>
@@ -319,7 +386,7 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
           {users.length === 0 && <p className="administration-empty">暂无账号。</p>}
         </div>
       )}
-      {selected && (
+      {selected && manageable(selected) && (
         <form className="administration-card" onSubmit={(event) => void reset(event)}>
           <h4>重置密码 · {selected.username}</h4>
           <p>重置后撤销该账号的全部会话；重置当前账号可能使本页面退出。</p>
@@ -367,7 +434,7 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
           </fieldset>
         </form>
       )}
-      {sessionUser && (
+      {sessionUser && manageable(sessionUser) && (
         <SessionsPanel
           key={sessionUser.id}
           user={sessionUser}
@@ -378,7 +445,7 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
       <form className="administration-card" onSubmit={(event) => void create(event)}>
         <h4>创建新账号</h4>
         <p>不会自动启用登录认证。建议为每位使用者分配独立账号，按需授予管理员权限。</p>
-        <fieldset className="administration-fields" disabled={operation.busy}>
+        <fieldset className="administration-fields" disabled={operation.busy || !manage}>
           <label>
             用户名
             <input
@@ -405,8 +472,11 @@ function UsersPanel({ mode, onBusy, changed }: { mode: Mode; onBusy: BusyCallbac
           <label>
             角色
             <select value={role} onChange={(event) => setRole(event.target.value as AuthRole)}>
-              <option value="user">普通用户</option>
-              <option value="superadmin">超级管理员</option>
+              {creationRoles.map((candidate) => (
+                <option key={candidate} value={candidate}>
+                  {roleLabel(candidate)}
+                </option>
+              ))}
             </select>
           </label>
           <div className="administration-actions">
@@ -479,6 +549,7 @@ function SessionsPanel({ user, onBusy, close }: { user: AuthUser; onBusy: BusyCa
 }
 
 function DatabasePanel({
+  writable,
   status,
   onBusy,
   onDirty,
@@ -488,13 +559,14 @@ function DatabasePanel({
   onBusy: BusyCallback;
   onDirty: (dirty: boolean) => void;
   changed: () => void;
+  writable: boolean;
 }) {
   const resource = useResource<StorageConfig>('/admin/storage');
   const [draft, setDraft] = useState<StorageConfig>();
   const [dirty, setDirty] = useState(false);
   const operation = useOperation(onBusy);
   const confirm = useConfirm();
-  const locked = status.storage.active !== false;
+  const locked = !writable || status.storage.active !== false;
   useEffect(() => {
     if (resource.value) {
       setDraft(resource.value);
@@ -568,11 +640,15 @@ function DatabasePanel({
         </div>
       </header>
       <div className="administration-callout">
-        <strong>{locked ? '运行中 · 配置只读' : '维护模式 · 可编辑配置'}</strong>
+        <strong>
+          {!writable ? '当前角色 · 配置只读' : locked ? '运行中 · 配置只读' : '维护模式 · 可编辑配置'}
+        </strong>
         <p>
-          {locked
-            ? '存储正在使用中。为避免数据分流与损坏，需停止业务运行并进入服务端支持的维护模式后才能保存。'
-            : '仅可保存未被运行时使用的配置。服务端会再次校验状态；保存不会迁移数据。'}
+          {!writable
+            ? '当前角色仅可查看存储配置，不能修改数据库或租户映射，也不能初始化 SQL。'
+            : locked
+              ? '存储正在使用中。为避免数据分流与损坏，需停止业务运行并进入服务端支持的维护模式后才能保存。'
+              : '仅可保存未被运行时使用的配置。服务端会再次校验状态；保存不会迁移数据。'}
         </p>
       </div>
       <Feedback error={operation.error} notice={operation.notice} />
@@ -925,8 +1001,8 @@ function MaintenancePanel() {
   return (
     <div className="administration-stack">
       <header>
-        <h3>备份、恢复与迁移</h3>
-        <p>只通过服务器上的离线 CLI 执行，不在浏览器中发起破坏性维护。</p>
+        <h3>高级运维 · 服务器命令</h3>
+        <p>日常备份请使用上方引导。仅初始化账号、恢复或迁移时需要服务器终端。</p>
       </header>
       <div className="administration-callout">
         <strong>先停服务，再做维护</strong>
@@ -980,6 +1056,7 @@ function MaintenancePanel() {
 }
 
 function SystemPanel({
+  writable,
   status,
   onBusy,
   onDirty,
@@ -987,6 +1064,7 @@ function SystemPanel({
   status: AdminStatus;
   onBusy: BusyCallback;
   onDirty: (dirty: boolean) => void;
+  writable: boolean;
 }) {
   const resource = useResource<TurnstileAdminSettings>('/admin/turnstile');
   const [config, setConfig] = useState<TurnstileAdminSettings>();
@@ -1051,12 +1129,15 @@ function SystemPanel({
         )}
         <p>
           运行时状态：{status.storage.active ? '存储已激活；配置只读' : '存储未激活'}
-          。迁移与备份必须离线执行。
+          。恢复与迁移必须停服；日常备份可使用“备份与维护”中的在线任务。
         </p>
       </div>
-      <div className="administration-card">
-        <AccountAdminSettings request={accountAdminRequest} />
-      </div>
+      {writable && (
+        <div className="administration-card">
+          <AccountAdminSettings request={accountAdminRequest} />
+        </div>
+      )}
+      {!writable && <p className="administration-callout">当前角色仅可查看安全设置，不能修改。</p>}
       <Feedback error={operation.error} notice={operation.notice} />
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
       {config && (
@@ -1064,6 +1145,7 @@ function SystemPanel({
           className="administration-card"
           onSubmit={(event) => {
             event.preventDefault();
+            if (!writable) return;
             void (async () => {
               if (
                 !(await confirm(
@@ -1097,7 +1179,7 @@ function SystemPanel({
           <h4>Cloudflare Turnstile</h4>
           <p>仅作用于已启用的登录流程；本机模式下配置此项不会启用登录。</p>
           <fieldset
-            disabled={operation.busy || resource.loading || !!resource.error}
+            disabled={!writable || operation.busy || resource.loading || !!resource.error}
             className="administration-fields"
           >
             <label className="administration-checkbox administration-full">
@@ -1160,9 +1242,130 @@ function SystemPanel({
   );
 }
 
+function OverviewPanel({
+  status,
+  navigate,
+  allowed,
+}: {
+  status: AdminStatus;
+  navigate: (tab: Tab) => void;
+  allowed: (permission: Permission) => boolean;
+}) {
+  return (
+    <div className="administration-stack">
+      <header className="administration-overview-hero">
+        <span className="administration-eyebrow">ADMIN WORKSPACE</span>
+        <h3>让管理更有条理，让数据更安心。</h3>
+        <p>日常管理在这里完成，复杂运维按需展开。所有配置以服务端校验为准。</p>
+        <button className="is-primary" type="button" onClick={() => navigate('backup')}>
+          <HardDrive size={16} aria-hidden="true" /> 备份与维护 <ArrowRight size={15} aria-hidden="true" />
+        </button>
+      </header>
+      <dl className="administration-stats">
+        <div>
+          <dt>登录认证</dt>
+          <dd>{status.authenticationEnabled ? '已开启' : '未开启'}</dd>
+          <small>不会因保存设置自动开启</small>
+        </div>
+        <div>
+          <dt>用户账号</dt>
+          <dd>{status.userCount ?? '—'}</dd>
+          <small>{status.configured ? '已完成管理员初始化' : '尚未初始化，不影响本机使用'}</small>
+        </div>
+        <div>
+          <dt>数据存储</dt>
+          <dd>{status.storage.backend}</dd>
+          <small>{status.storage.profiles.length} 个数据库配置</small>
+        </div>
+        <div>
+          <dt>租户运行时</dt>
+          <dd>{status.runtime.tenantCount}</dd>
+          <small>当前已加载数量，非在线人数</small>
+        </div>
+      </dl>
+      <div className="administration-quick-grid">
+        {[
+          {
+            tab: 'backup' as const,
+            icon: HardDrive,
+            title: '数据保护',
+            text: '创建备份、校验完整性、准备恢复指引。',
+            action: '进入备份中心',
+          },
+          {
+            tab: 'users' as const,
+            icon: Users,
+            title: '用户管理',
+            text: '管理账号、角色和登录会话。',
+            action: '管理用户',
+          },
+          {
+            tab: 'database' as const,
+            icon: Database,
+            title: '存储配置',
+            text: '查看数据源和租户映射，激活后只读。',
+            action: '查看数据库',
+          },
+          {
+            tab: 'system' as const,
+            icon: ShieldCheck,
+            title: '安全设置',
+            text: '配置账号功能和人机验证。',
+            action: '管理安全策略',
+          },
+        ]
+          .filter(({ tab }) => allowed(tabPermissions[tab]))
+          .map(({ tab, icon: Icon, title, text, action }) => (
+            <section className="administration-card administration-quick-card" key={tab}>
+              <Icon size={21} aria-hidden="true" />
+              <h4>{title}</h4>
+              <p>{text}</p>
+              <button type="button" onClick={() => navigate(tab)}>
+                {action}
+                <ArrowRight size={14} aria-hidden="true" />
+              </button>
+            </section>
+          ))}
+      </div>
+      <div className="administration-callout administration-guidance">
+        <CheckCircle2 size={19} aria-hidden="true" />
+        <div>
+          <strong>推荐的轻量运维方式</strong>
+          <p>
+            重要变更前创建备份 → 选择备份校验完整性 → 需要恢复时生成离线计划。恢复和迁移始终在停服后执行。
+          </p>
+        </div>
+      </div>
+      {!status.configured && allowed('maintenance.commands') && (
+        <details className="administration-advanced">
+          <summary>
+            <LockKeyhole size={16} aria-hidden="true" /> 可选：初始化超级管理员
+          </summary>
+          <p>
+            本机模式无需先创建账号。需要用户管理时，在服务器终端通过 CLI
+            初始化首位超级管理员；不能在网页绕过引导。初始化不会开启登录认证，启用认证需按部署说明配置并重启。
+          </p>
+          <button type="button" onClick={() => navigate('backup')}>
+            查看高级运维命令
+          </button>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export default function Administration({ close, mode }: { close: () => void; mode: Mode }) {
-  const resource = useResource<AdminStatus>('/admin/status');
-  const [tab, setTab] = useState<Tab>('users');
+  const session = useResource<AuthStatus>(mode === 'authenticated' ? '/auth/session' : undefined);
+  const actor =
+    mode === 'local'
+      ? 'superadmin'
+      : session.value?.enabled && session.value.authenticated
+        ? session.value.user?.role
+        : undefined;
+  const allowed = (permission: Permission) => hasPermission(actor, permission);
+  const visibleTabs = tabs.filter(({ id }) => allowed(tabPermissions[id]));
+  const resource = useResource<AdminStatus>(allowed('admin.status.read') ? '/admin/status' : undefined);
+  const [tab, setTab] = useState<Tab>('overview');
   const [busy, setBusy] = useState(false);
   const [databaseDirty, setDatabaseDirty] = useState(false);
   const [securityDirty, setSecurityDirty] = useState(false);
@@ -1173,21 +1376,21 @@ export default function Administration({ close, mode }: { close: () => void; mod
       event.key === 'Home'
         ? 0
         : event.key === 'End'
-          ? tabs.length - 1
-          : event.key === 'ArrowRight'
-            ? (index + 1) % tabs.length
-            : event.key === 'ArrowLeft'
-              ? (index + tabs.length - 1) % tabs.length
+          ? visibleTabs.length - 1
+          : event.key === 'ArrowRight' || event.key === 'ArrowDown'
+            ? (index + 1) % visibleTabs.length
+            : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+              ? (index + visibleTabs.length - 1) % visibleTabs.length
               : -1;
     if (next < 0 || busy) return;
     event.preventDefault();
-    setTab(tabs[next].id);
-    document.getElementById(`${id}-tab-${tabs[next].id}`)?.focus();
+    setTab(visibleTabs[next].id);
+    document.getElementById(`${id}-tab-${visibleTabs[next].id}`)?.focus();
   };
   return (
     <Modal
       title="管理控制台"
-      description="用户、数据库与运行维护，一处管理。"
+      description="系统管理 / ADMIN CONSOLE"
       className="administration"
       wide
       close={close}
@@ -1202,90 +1405,128 @@ export default function Administration({ close, mode }: { close: () => void; mod
             : '通过管理员会话访问；所有操作均需服务端授权。'}
         </p>
       </div>
+      {mode === 'authenticated' && (
+        <LoadState loading={session.loading} error={session.error} retry={session.reload} />
+      )}
+      {mode === 'authenticated' && !session.loading && !session.error && !allowed('admin.access') && (
+        <p className="administration-feedback is-error" role="alert">
+          当前账号没有管理控制台访问权限。
+        </p>
+      )}
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
-      {status && (
+      {status && actor && allowed('admin.access') && (
         <>
-          {!status.configured && (
-            <div className="administration-callout" role="status">
-              <strong>尚未初始化认证</strong>
-              <p>
-                请先在服务器终端通过 CLI
-                初始化首位超级管理员；不能通过此页面绕过引导。初始化账号不等于开启认证，启用前请按部署说明配置认证并重启服务。
-              </p>
-              <button type="button" disabled={busy} onClick={() => setTab('backup')}>
-                查看离线维护命令
-              </button>
-            </div>
-          )}
-          <div className="administration-tabs" role="tablist" aria-label="管理分类">
-            {tabs.map(({ id: name, label, icon: Icon }, index) => (
-              <button
-                key={name}
-                id={`${id}-tab-${name}`}
-                role="tab"
-                aria-selected={tab === name}
-                aria-controls={`${id}-panel-${name}`}
-                tabIndex={tab === name ? 0 : -1}
-                disabled={busy}
-                onKeyDown={(event) => keydown(event, index)}
-                onClick={() => setTab(name)}
+          <div className="administration-layout">
+            <aside className="administration-sidebar">
+              <span className="administration-nav-caption">管理空间</span>
+              <div className="administration-tabs" role="tablist" aria-label="管理分类">
+                {visibleTabs.map(({ id: name, label, icon: Icon }, index) => (
+                  <button
+                    key={name}
+                    id={`${id}-tab-${name}`}
+                    role="tab"
+                    aria-selected={tab === name}
+                    aria-controls={`${id}-panel-${name}`}
+                    tabIndex={tab === name ? 0 : -1}
+                    disabled={busy}
+                    onKeyDown={(event) => keydown(event, index)}
+                    onClick={() => setTab(name)}
+                  >
+                    <Icon size={17} aria-hidden="true" />
+                    {label}
+                    {name === 'users' && status.userCount !== undefined && (
+                      <span className="administration-tab-count">{status.userCount}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div className="administration-sidebar-note">
+                <ShieldCheck size={17} aria-hidden="true" />
+                <span>
+                  安全管理边界<small>权限校验 · 操作确认 · 密钥保护</small>
+                </span>
+              </div>
+            </aside>
+            <div className="administration-content">
+              <section
+                role="tabpanel"
+                id={`${id}-panel-overview`}
+                aria-labelledby={`${id}-tab-overview`}
+                hidden={tab !== 'overview'}
+                tabIndex={0}
               >
-                <Icon size={17} aria-hidden="true" />
-                {label}
-                {name === 'users' && status.userCount !== undefined && (
-                  <span className="administration-tab-count">{status.userCount}</span>
+                <OverviewPanel status={status} navigate={setTab} allowed={allowed} />
+              </section>
+              <section
+                role="tabpanel"
+                id={`${id}-panel-users`}
+                aria-labelledby={`${id}-tab-users`}
+                hidden={tab !== 'users'}
+                tabIndex={0}
+              >
+                {allowed('users.read') &&
+                  (status.configured ? (
+                    <UsersPanel mode={mode} actor={actor} onBusy={setBusy} changed={resource.reload} />
+                  ) : (
+                    <p className="administration-empty">
+                      完成 CLI 引导后，刷新状态即可管理用户。登录认证仍保持原有设置。
+                    </p>
+                  ))}
+              </section>
+              <section
+                role="tabpanel"
+                id={`${id}-panel-database`}
+                aria-labelledby={`${id}-tab-database`}
+                hidden={tab !== 'database'}
+                tabIndex={0}
+              >
+                {allowed('storage.read') && (
+                  <DatabasePanel
+                    writable={allowed('storage.manage')}
+                    status={status}
+                    onBusy={setBusy}
+                    onDirty={setDatabaseDirty}
+                    changed={resource.reload}
+                  />
                 )}
-              </button>
-            ))}
+              </section>
+              <section
+                role="tabpanel"
+                id={`${id}-panel-backup`}
+                aria-labelledby={`${id}-tab-backup`}
+                hidden={tab !== 'backup'}
+                tabIndex={0}
+              >
+                {tab === 'backup' && allowed('maintenance.read') && (
+                  <OnlineMaintenance role={mode === 'authenticated' ? actor : undefined} />
+                )}
+                {allowed('maintenance.commands') && (
+                  <details className="administration-advanced">
+                    <summary>
+                      <Terminal size={16} aria-hidden="true" /> 高级运维：初始化、停服恢复与迁移命令
+                    </summary>
+                    <MaintenancePanel />
+                  </details>
+                )}
+              </section>
+              <section
+                role="tabpanel"
+                id={`${id}-panel-system`}
+                aria-labelledby={`${id}-tab-system`}
+                hidden={tab !== 'system'}
+                tabIndex={0}
+              >
+                {allowed('security.read') && (
+                  <SystemPanel
+                    writable={allowed('security.manage')}
+                    status={status}
+                    onBusy={setBusy}
+                    onDirty={setSecurityDirty}
+                  />
+                )}
+              </section>
+            </div>
           </div>
-          <section
-            role="tabpanel"
-            id={`${id}-panel-users`}
-            aria-labelledby={`${id}-tab-users`}
-            hidden={tab !== 'users'}
-            tabIndex={0}
-          >
-            {status.configured ? (
-              <UsersPanel mode={mode} onBusy={setBusy} changed={resource.reload} />
-            ) : (
-              <p className="administration-empty">
-                完成 CLI 引导后，刷新状态即可管理用户。登录认证仍保持原有设置。
-              </p>
-            )}
-          </section>
-          <section
-            role="tabpanel"
-            id={`${id}-panel-database`}
-            aria-labelledby={`${id}-tab-database`}
-            hidden={tab !== 'database'}
-            tabIndex={0}
-          >
-            <DatabasePanel
-              status={status}
-              onBusy={setBusy}
-              onDirty={setDatabaseDirty}
-              changed={resource.reload}
-            />
-          </section>
-          <section
-            role="tabpanel"
-            id={`${id}-panel-backup`}
-            aria-labelledby={`${id}-tab-backup`}
-            hidden={tab !== 'backup'}
-            tabIndex={0}
-          >
-            {tab === 'backup' && <OnlineMaintenance />}
-            <MaintenancePanel />
-          </section>
-          <section
-            role="tabpanel"
-            id={`${id}-panel-system`}
-            aria-labelledby={`${id}-tab-system`}
-            hidden={tab !== 'system'}
-            tabIndex={0}
-          >
-            <SystemPanel status={status} onBusy={setBusy} onDirty={setSecurityDirty} />
-          </section>
           <footer className="administration-footer">
             <span>{busy ? '正在提交，请勿关闭页面…' : '配置与权限以服务器校验结果为准'}</span>
             <button type="button" disabled={busy || resource.loading} onClick={resource.reload}>

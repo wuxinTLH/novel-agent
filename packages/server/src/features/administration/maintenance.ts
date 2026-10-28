@@ -595,7 +595,7 @@ const authSchema = z.object({
     z.object({
       id: z.string().uuid(),
       username: z.string().regex(/^[a-z0-9][a-z0-9_.-]{2,63}$/),
-      role: z.enum(['superadmin', 'user']),
+      role: z.enum(['superadmin', 'admin', 'operations', 'writer', 'user']),
       disabled: z.boolean(),
       passwordHash: z.string().regex(/^scrypt\$[a-f0-9]{32}\$[a-f0-9]{128}$/),
       createdAt: z.string().datetime(),

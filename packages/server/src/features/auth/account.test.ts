@@ -159,6 +159,11 @@ test('registration and verified email recovery tokens are hashed, expiring, sing
     await s.configure();
     const p = await s.pre();
     const body = { username: 'newuser', email: 'new@example.com', password };
+    assert.equal(
+      (await s.request('/account/register', 'POST', { ...body, role: 'superadmin' }, p.cookie, p.csrf))
+        .status,
+      400,
+    );
     assert.equal((await s.request('/account/register', 'POST', body)).status, 403);
     assert.equal((await s.request('/account/register', 'POST', body, p.cookie, p.csrf)).status, 202);
     const token = s.mail[0].token;
@@ -166,6 +171,11 @@ test('registration and verified email recovery tokens are hashed, expiring, sing
     assert.equal(
       (await s.request('/account/register/complete', 'POST', { token }, p.cookie, p.csrf)).status,
       201,
+    );
+    const registered = JSON.parse(fs.readFileSync(path.join(s.dir, 'auth.json'), 'utf8'));
+    assert.equal(
+      registered.users.find((user: { username: string }) => user.username === 'newuser').role,
+      'writer',
     );
     assert.equal(
       (await s.request('/account/register/complete', 'POST', { token }, p.cookie, p.csrf)).status,

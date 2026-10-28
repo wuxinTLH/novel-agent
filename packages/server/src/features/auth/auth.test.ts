@@ -7,6 +7,8 @@ import express from 'express';
 import type { Request } from 'express';
 import { AuthService, bootstrapSuperadmin, type AuthDocument, type AuthPersistence } from './auth.js';
 
+import { ROLE_IDS, ROLES, hasPermission, canManageUser } from '../../../../../shared/permissions.js';
+
 const password = 'a long test password 123!';
 async function setup(
   options: {
@@ -316,7 +318,7 @@ test('role updates protect last active superadmin, reject invalid patches and re
     const admin = await s.login();
     const patch = (id: string, body: unknown) =>
       s.request(`/users/${id}`, 'PATCH', body, admin.cookie, admin.csrf);
-    assert.equal((await patch(admin.result.user.id, { role: 'user' })).status, 409);
+    assert.equal((await patch(admin.result.user.id, { role: 'writer' })).status, 409);
     assert.equal((await patch(admin.result.user.id, {})).status, 400);
     assert.equal((await patch(admin.result.user.id, { role: 'bogus' })).status, 400);
     const created = await s.request(
@@ -331,13 +333,13 @@ test('role updates protect last active superadmin, reject invalid patches and re
     assert.equal((await patch(user.id, { role: 'superadmin' })).status, 200);
     assert.equal((await s.request('/sessions', 'GET', undefined, other.cookie)).status, 401);
     assert.equal((await patch(user.id, { disabled: true })).status, 200);
-    assert.equal((await patch(admin.result.user.id, { role: 'user' })).status, 409);
+    assert.equal((await patch(admin.result.user.id, { role: 'writer' })).status, 409);
     assert.equal((await patch(user.id, { disabled: false })).status, 200);
-    assert.equal((await patch(admin.result.user.id, { role: 'user' })).status, 200);
+    assert.equal((await patch(admin.result.user.id, { role: 'writer' })).status, 200);
     assert.equal((await s.request('/sessions', 'GET', undefined, admin.cookie)).status, 401);
     const restarted = new AuthService({ dataDir: s.dir, enabled: true });
     assert.equal(await restarted.resolve({ headers: { cookie: admin.cookie } } as Request), null);
-    assert.equal((await s.login()).result.user.role, 'user');
+    assert.equal((await s.login()).result.user.role, 'writer');
   } finally {
     await s.close();
   }
@@ -505,7 +507,10 @@ test('lifecycle failed writes leave passwords, roles and sessions unchanged', as
     broken = false;
     assert.equal((await s.login('writer')).response.status, 200);
     const restarted = new AuthService({ dataDir: s.dir, enabled: true, persistence });
-    assert.equal((await restarted.resolve({ headers: { cookie: writer.cookie } } as Request))?.role, 'user');
+    assert.equal(
+      (await restarted.resolve({ headers: { cookie: writer.cookie } } as Request))?.role,
+      'writer',
+    );
   } finally {
     await s.close();
   }
@@ -629,6 +634,156 @@ test('management works independently while auth stays off, rejects untrusted cal
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+test('shared roles use explicit permissions rather than weight ordering', () => {
+  assert.deepEqual(ROLE_IDS, ['superadmin', 'admin', 'operations', 'writer']);
+  assert.deepEqual(
+    ROLE_IDS.map((role) => ROLES[role].weight),
+    [1000, 99, 100, 10],
+  );
+  assert.equal(hasPermission('operations', 'admin.access'), true);
+  assert.equal(hasPermission('operations', 'users.manage'), false);
+  assert.equal(hasPermission('admin', 'security.read'), true);
+  assert.equal(hasPermission('admin', 'security.manage'), false);
+  assert.equal(canManageUser('admin', 'operations'), true);
+  assert.equal(canManageUser('admin', 'admin'), false);
+});
+
+test('four-role requests enforce manager boundaries, role assignment and security permissions', async () => {
+  const s = await setup();
+  try {
+    const owner = await s.login();
+    const users: Record<string, { id: string }> = {};
+    for (const role of ['admin', 'operations', 'writer'] as const) {
+      const response = await s.request(
+        '/users',
+        'POST',
+        { username: `test-${role}`, password, role },
+        owner.cookie,
+        owner.csrf,
+      );
+      assert.equal(response.status, 201);
+      users[role] = (await response.json()).user;
+    }
+    const admin = await s.login('test-admin');
+    const operations = await s.login('test-operations');
+    const writer = await s.login('test-writer');
+    const act = (route: string, method = 'GET', body?: unknown) =>
+      s.request(route, method, body, admin.cookie, admin.csrf);
+    assert.equal((await act('/users')).status, 200);
+    for (const role of ['writer', 'operations']) {
+      assert.equal(
+        (await act('/users', 'POST', { username: `created-${role}`, password, role })).status,
+        201,
+      );
+    }
+    const defaultWriter = await act('/users', 'POST', { username: 'default-writer', password });
+    assert.equal((await defaultWriter.json()).user.role, 'writer');
+    for (const role of ['admin', 'superadmin']) {
+      assert.equal((await act('/users', 'POST', { username: `forged-${role}`, password, role })).status, 403);
+    }
+    for (const role of ['user', 'bogus']) {
+      assert.equal((await act('/users', 'POST', { username: 'invalid-role', password, role })).status, 400);
+    }
+    for (const id of [users.admin.id, owner.result.user.id]) {
+      assert.equal((await act(`/users/${id}`, 'PATCH', { disabled: true })).status, 403);
+      assert.equal(
+        (await act(`/users/${id}/password`, 'POST', { currentPassword: password, newPassword: password }))
+          .status,
+        403,
+      );
+      assert.equal((await act(`/users/${id}/sessions`, 'DELETE')).status, 403);
+    }
+    assert.equal((await act(`/users/${users.writer.id}`, 'PATCH', { role: 'writer' })).status, 403);
+    assert.equal((await act(`/users/${users.operations.id}`, 'PATCH', { role: 'admin' })).status, 403);
+    assert.equal(
+      (await s.request(`/users/${users.writer.id}`, 'PATCH', { disabled: true }, admin.cookie)).status,
+      403,
+    );
+    assert.equal(
+      (await act(`/users/${users.writer.id}/password`, 'POST', { newPassword: password })).status,
+      401,
+    );
+    assert.equal(
+      (
+        await act(`/users/${users.writer.id}/password`, 'POST', {
+          currentPassword: password,
+          newPassword: password,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await s.request('/session', 'GET', undefined, writer.cookie).then((r) => r.json())).authenticated,
+      false,
+    );
+    assert.equal((await act(`/users/${users.operations.id}/sessions`, 'DELETE')).status, 200);
+    const operator = await s.login('test-operations');
+    for (const [route, method, body] of [
+      ['/users', 'GET', undefined],
+      ['/users', 'POST', { username: 'forged-user', password }],
+      [`/users/${users.writer.id}`, 'PATCH', { disabled: true }],
+      [`/users/${users.writer.id}/sessions`, 'GET', undefined],
+      ['/turnstile', 'GET', undefined],
+      ['/account/config', 'GET', undefined],
+      ['/account/oidc/users/' + users.writer.id, 'PUT', {}],
+    ] as const) {
+      assert.equal((await s.request(route, method, body, operator.cookie, operator.csrf)).status, 403);
+    }
+    assert.equal((await act('/turnstile')).status, 200);
+    assert.equal((await act('/turnstile', 'PUT', {})).status, 403);
+    const config = await act('/account/config').then((r) => r.json());
+    assert.equal((await act('/account/config', 'PUT', config)).status, 403);
+    assert.equal((await act('/account/oidc/users/' + users.writer.id, 'PUT', {})).status, 403);
+    assert.equal((await act(`/users/${users.operations.id}`, 'PATCH', { disabled: true })).status, 200);
+    assert.equal(
+      (await s.request('/session', 'GET', undefined, operations.cookie).then((r) => r.json())).authenticated,
+      false,
+    );
+    // Headers are not authorization: an unauthenticated caller cannot forge a principal.
+    const forged = await fetch(`${(await s.request('/session')).url.replace('/session', '/users')}`, {
+      headers: { 'x-user-role': 'superadmin', 'x-user-id': owner.result.user.id },
+    });
+    assert.equal(forged.status, 401);
+  } finally {
+    await s.close();
+  }
+});
+
+test('legacy persisted users normalize to writer and invalid persisted roles fail closed', async () => {
+  const s = await setup();
+  try {
+    const owner = await s.login();
+    const response = await s.request(
+      '/users',
+      'POST',
+      { username: 'legacy-writer', password },
+      owner.cookie,
+      owner.csrf,
+    );
+    const { user } = await response.json();
+    const legacy = await s.login('legacy-writer');
+    const saved = JSON.parse(fs.readFileSync(path.join(s.dir, 'auth.json'), 'utf8'));
+    saved.users.find((u: { id: string }) => u.id === user.id).role = 'user';
+    const restarted = new AuthService({
+      dataDir: s.dir,
+      enabled: true,
+      persistence: { read: () => saved, write() {} },
+    });
+    assert.equal(
+      (await restarted.resolve({ headers: { cookie: legacy.cookie } } as Request))?.role,
+      'writer',
+    );
+    saved.users.find((u: { id: string }) => u.id === user.id).role = 'unknown';
+    assert.throws(
+      () =>
+        new AuthService({ dataDir: s.dir, enabled: true, persistence: { read: () => saved, write() {} } }),
+      /AUTH_STORAGE_UNAVAILABLE/,
+    );
+  } finally {
+    await s.close();
+  }
+});
+
 test('corrupt persistence fails closed and failed write never installs a session', async () => {
   let document: AuthDocument | null = null,
     broken = false;

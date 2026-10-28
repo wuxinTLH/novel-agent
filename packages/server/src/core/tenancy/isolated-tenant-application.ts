@@ -1,4 +1,5 @@
 import express from 'express';
+import { hasPermission } from '../../../../../shared/permissions.js';
 import http from 'node:http';
 import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -121,7 +122,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
       if (!principal) return res.status(401).json({ code: 'AUTH_REQUIRED', error: '请先登录。' });
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !options.auth.requireCsrf(req))
         return res.status(403).json({ code: 'AUTH_CSRF_REQUIRED', error: '会话校验失败。' });
-      if (route.startsWith('/api/sqlconnect') && principal.role !== 'superadmin')
+      if (route.startsWith('/api/sqlconnect') && !hasPermission(principal.role, ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'storage.read' : 'sql.initialize'))
         return res.status(403).json({ code: 'AUTH_FORBIDDEN', error: '需要超级管理员权限。' });
       res.locals.isolatedOwnerId = principal.id;
       next();

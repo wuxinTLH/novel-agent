@@ -69,6 +69,8 @@ import AddNodeDialog from '../components/workflow/AddNodeDialog';
 import ErrorBanner, { errorMessage } from '../components/common/ErrorBanner';
 import ModelSettingsPanel from '../components/settings/ModelSettingsPanel';
 import ProjectSettingsPanel from '../components/projects/ProjectSettingsPanel';
+import ProjectsLibrary from '../components/projects/ProjectsLibrary';
+import '../styles/workspace-navigation.scss';
 import { useChapterEditor } from '../hooks/chapters/useChapterEditor';
 import {
   canApplyProject,
@@ -104,6 +106,7 @@ import {
   protocolLabels,
 } from '../../../../shared/types';
 type Page =
+  | 'projects'
   | 'workflow'
   | 'assets'
   | 'chapters'
@@ -115,6 +118,7 @@ type Page =
 type WorkflowPreset = 'chapter' | 'blank';
 type PendingRunSubmission = { key: string; request: RunRequest; requestHash: string };
 const routePages: Page[] = [
+  'projects',
   'workflow',
   'assets',
   'chapters',
@@ -133,7 +137,9 @@ function platformFromLocation(): PlatformId | null {
   return platformFromPath(window.location.pathname);
 }
 function isPresetWorkflow(graph: WorkflowGraph, preset: 'character' | 'world') {
-  const kinds = new Set<NonNullable<Step['kind']>>(graph.steps.map((step) => step.kind).filter(Boolean) as NonNullable<Step['kind']>[]);
+  const kinds = new Set<NonNullable<Step['kind']>>(
+    graph.steps.map((step) => step.kind).filter(Boolean) as NonNullable<Step['kind']>[],
+  );
   if (preset === 'character') {
     const blocked = ['world', 'expand', 'writer', 'audit', 'outline', 'plan'] as const;
     return kinds.has('character') && !blocked.some((kind) => kinds.has(kind));
@@ -334,7 +340,10 @@ export default function App() {
     [category, setCategory] = useState<Category>('world'),
     [filter, setFilter] = useState<Category | 'all'>('all'),
     [search, setSearch] = useState('');
-  const [assetSelection, setAssetSelection] = useState<{ projectId: string; ids: string[] }>({ projectId: '', ids: [] });
+  const [assetSelection, setAssetSelection] = useState<{ projectId: string; ids: string[] }>({
+    projectId: '',
+    ids: [],
+  });
   const chapterEditor = useChapterEditor(project, page === 'chapters');
   const { chapterId, editor, dirty, conflict: chapterConflict } = chapterEditor;
   const [manualChapter, setManualChapter] = useState(false);
@@ -378,17 +387,25 @@ export default function App() {
       const graph = current.workflows?.find((item) => isPresetWorkflow(item, preset));
       let updated = current;
       if (!graph) {
-        updated = await projectRequest(`/projects/${current.id}/workflows`, {
-          method: 'POST',
-          body: JSON.stringify({
-            name: preset === 'character' ? '人物编写' : '世界观编写',
-            preset,
-          }),
-        }, true);
+        updated = await projectRequest(
+          `/projects/${current.id}/workflows`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              name: preset === 'character' ? '人物编写' : '世界观编写',
+              preset,
+            }),
+          },
+          true,
+        );
       } else if (current.activeWorkflowId !== graph.id) {
-        updated = await projectRequest(`/projects/${current.id}/workflows/${graph.id}/select`, {
-          method: 'POST',
-        }, true);
+        updated = await projectRequest(
+          `/projects/${current.id}/workflows/${graph.id}/select`,
+          {
+            method: 'POST',
+          },
+          true,
+        );
       }
       if (!acceptProject(updated)) throw new Error('工作流已准备，但当前作品状态已变化，请刷新后重试。');
       localStorage.setItem('novel-page', nextPage);
@@ -526,10 +543,7 @@ export default function App() {
       if (presetRouteInFlight.current === requestKey) presetRouteInFlight.current = null;
     });
   }, [project, page, acceptProject, projectRequest]);
-  const visibleWorkflows = useMemo(
-    () => (project ? workflowsForPage(project, page) : []),
-    [project, page],
-  );
+  const visibleWorkflows = useMemo(() => (project ? workflowsForPage(project, page) : []), [project, page]);
   useEffect(() => {
     if (!projectId || !running) return;
     let stopped = false;
@@ -630,7 +644,9 @@ export default function App() {
         animated: project.steps.find((node) => node.id === edge.target)?.status === 'running',
         style: {
           stroke:
-            project.steps.find((node) => node.id === edge.source)?.status === 'done' ? 'var(--text)' : 'var(--border)',
+            project.steps.find((node) => node.id === edge.source)?.status === 'done'
+              ? 'var(--text)'
+              : 'var(--border)',
           strokeWidth: 1.5,
         },
       }));
@@ -690,6 +706,8 @@ export default function App() {
     activateProject(p);
     localStorage.setItem('novel-project', p.id);
     setPage('workflow');
+    localStorage.setItem('novel-page', 'workflow');
+    window.history.pushState({ page: 'workflow' }, '', '/workflow');
     setSelected(p.steps[0]?.id || null);
     setOpenNodeMenu(null);
     setError('');
@@ -1097,11 +1115,13 @@ export default function App() {
     () => filterAssets(project?.assets || [], filter, search),
     [project?.assets, filter, search],
   );
-  const selectedAssetIds = assetSelection.projectId === projectId
-    ? assetSelection.ids.filter((id) => project?.assets.some((asset) => asset.id === id))
-    : [];
+  const selectedAssetIds =
+    assetSelection.projectId === projectId
+      ? assetSelection.ids.filter((id) => project?.assets.some((asset) => asset.id === id))
+      : [];
   const visibleAssetIds = filteredAssets.map((asset) => asset.id);
-  const allVisibleAssetsSelected = visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedAssetIds.includes(id));
+  const allVisibleAssetsSelected =
+    visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedAssetIds.includes(id));
   const toggleAssetSelection = (ids: string[], checked: boolean) => {
     setAssetSelection((current) => {
       const previous = current.projectId === projectId ? current.ids : [];
@@ -1255,6 +1275,17 @@ export default function App() {
                 ))}
               </ul>
               <button
+                type="button"
+                className="project-switcher-all"
+                onClick={() => {
+                  setProjectSwitcherOpen(false);
+                  void navigate('projects');
+                }}
+              >
+                <Layers3 size={15} /> 查看全部作品
+                <ArrowRight size={14} aria-hidden="true" />
+              </button>
+              <button
                 className="project-switcher-create"
                 disabled={running || busy}
                 onClick={async () => {
@@ -1268,6 +1299,20 @@ export default function App() {
             </div>
           )}
         </div>
+        <button
+          type="button"
+          className={`workspace-library-link ${page === 'projects' ? 'active' : ''}`}
+          aria-current={page === 'projects' ? 'page' : undefined}
+          onClick={() => {
+            setProjectSwitcherOpen(false);
+            void navigate('projects');
+          }}
+        >
+          <Layers3 size={16} />
+          <span>全部作品</span>
+          <span className="workspace-library-count">{projects.length}</span>
+          <ChevronRight size={14} aria-hidden="true" />
+        </button>
         <button
           className="new-project"
           onClick={async () => {
@@ -1365,33 +1410,67 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <nav className="breadcrumbs" aria-label="当前位置">
-            <button type="button" onClick={() => setProjectSwitcherOpen(true)} aria-label="我的作品：打开作品列表">我的作品</button>
-            <ChevronRight size={14} aria-hidden="true" />
-            {page === 'project-settings' ? (
-              <span aria-current="page">{project.title}</span>
-            ) : (
-              <button type="button" onClick={() => void navigate('project-settings')} title="查看当前作品设置">{project.title}</button>
-            )}
-            <ChevronRight size={14} aria-hidden="true" />
-            {page === 'platforms' && selectedPlatform ? (
+            <button
+              type="button"
+              onClick={() => void navigate('projects')}
+              aria-current={page === 'projects' ? 'page' : undefined}
+            >
+              全部作品
+            </button>
+            {page !== 'projects' && (
               <>
-                <button type="button" onClick={backToPlatforms}>平台作品</button>
                 <ChevronRight size={14} aria-hidden="true" />
-                <strong aria-current="page">{({ tomato: '番茄小说', mock: '本地 Mock 测试', qidian: '起点中文网', qimao: '七猫中文网' } as const)[selectedPlatform]}</strong>
+                {page === 'project-settings' ? (
+                  <span aria-current="page">{project.title}</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void navigate('project-settings')}
+                    title="查看当前作品设置"
+                  >
+                    {project.title}
+                  </button>
+                )}
+                <ChevronRight size={14} aria-hidden="true" />
+                {page === 'platforms' && selectedPlatform ? (
+                  <>
+                    <button type="button" onClick={backToPlatforms}>
+                      平台作品
+                    </button>
+                    <ChevronRight size={14} aria-hidden="true" />
+                    <strong aria-current="page">
+                      {
+                        (
+                          {
+                            tomato: '番茄小说',
+                            mock: '本地 Mock 测试',
+                            qidian: '起点中文网',
+                            qimao: '七猫中文网',
+                          } as const
+                        )[selectedPlatform]
+                      }
+                    </strong>
+                  </>
+                ) : (
+                  <strong aria-current="page">
+                    {
+                      {
+                        projects: '全部作品',
+                        workflow:
+                          project.workflows?.find((graph) => graph.id === project.activeWorkflowId)?.name ||
+                          '创作工作流',
+                        assets: '小说设定库',
+                        chapters: '章节书稿',
+                        platforms: '平台作品',
+                        settings: '模型设置',
+                        'project-settings': '小说设置',
+                        'character-workflow': '人物工作流',
+                        'world-workflow': '世界观工作流',
+                      }[page]
+                    }
+                  </strong>
+                )}
               </>
-            ) : (
-              <strong aria-current="page">
-                {{
-                  workflow: project.workflows?.find((graph) => graph.id === project.activeWorkflowId)?.name || '创作工作流',
-                  assets: '小说设定库',
-                  chapters: '章节书稿',
-                  platforms: '平台作品',
-                  settings: '模型设置',
-                  'project-settings': '小说设置',
-                  'character-workflow': '人物工作流',
-                  'world-workflow': '世界观工作流',
-                }[page]}
-              </strong>
             )}
           </nav>
           <div className="topbar-right">
@@ -1441,169 +1520,195 @@ export default function App() {
           </div>
         </header>
         <div className="page-content">
-          <section className="page-heading">
-            <div>
-              <div className="eyebrow">
-                {page === 'workflow'
-                  ? 'STORY WORKSPACE'
-                  : page === 'assets'
-                    ? 'STORY BIBLE'
-                    : page === 'chapters'
-                      ? 'MANUSCRIPT'
-                      : page === 'platforms'
-                        ? 'PLATFORM CONNECTION'
-                        : page === 'settings'
-                        ? 'MODEL CONNECTION'
-                        : page === 'project-settings'
-                          ? 'NOVEL SETTINGS'
-                          : page === 'character-workflow'
-                            ? 'CHARACTER WORKFLOW'
-                            : 'WORLD WORKSPACE'}
+          {page !== 'projects' && (
+            <section className="page-heading">
+              <div>
+                <div className="eyebrow">
+                  {page === 'workflow'
+                    ? 'STORY WORKSPACE'
+                    : page === 'assets'
+                      ? 'STORY BIBLE'
+                      : page === 'chapters'
+                        ? 'MANUSCRIPT'
+                        : page === 'platforms'
+                          ? 'PLATFORM CONNECTION'
+                          : page === 'settings'
+                            ? 'MODEL CONNECTION'
+                            : page === 'project-settings'
+                              ? 'NOVEL SETTINGS'
+                              : page === 'character-workflow'
+                                ? 'CHARACTER WORKFLOW'
+                                : 'WORLD WORKSPACE'}
+                </div>
+                <h1>
+                  {
+                    {
+                      workflow: '让故事，自成宇宙',
+                      assets: '每一处设定，皆有回响',
+                      chapters: '把灵感，写成下一章',
+                      platforms: '为作品，连接新天地',
+                      settings: '为灵感，连接动力',
+                      'project-settings': '让作品，更完整',
+                      'character-workflow': '让人物，从设定开始',
+                      'world-workflow': '让世界，从轮廓开始',
+                    }[page]
+                  }
+                </h1>
+                <p>
+                  {
+                    {
+                      workflow: '从世界的轮廓到章节的细节，与 Agent 一起让想象落笔。',
+                      assets: '收好世界的地图、人物的秘密，以及故事将要抵达的地方。',
+                      chapters: '生成、打磨、留存。在这里，让每一个字找到自己的位置。',
+                      platforms:
+                        '人工选择账号、作品与一个已保存章节，确认后同步到外部草稿箱，不自动正式发布。',
+                      settings: '连接你偏爱的模型服务，让每一个创作节点开始思考。',
+                      'project-settings': '集中管理小说名称、类型、简介和封面等作品设定。',
+                      'character-workflow': '独立管理人物资料、关系和人物弧光，不混入正文创作。',
+                      'world-workflow': '独立管理地理、规则、势力和时代背景，不混入正文创作。',
+                    }[page]
+                  }
+                </p>
               </div>
-              <h1>
-                {
-                  {
-                    workflow: '让故事，自成宇宙',
-                    assets: '每一处设定，皆有回响',
-                    chapters: '把灵感，写成下一章',
-                    platforms: '为作品，连接新天地',
-                    settings: '为灵感，连接动力',
-                    'project-settings': '让作品，更完整',
-                    'character-workflow': '让人物，从设定开始',
-                    'world-workflow': '让世界，从轮廓开始',
-                  }[page]
-                }
-              </h1>
-              <p>
-                {
-                  {
-                    workflow: '从世界的轮廓到章节的细节，与 Agent 一起让想象落笔。',
-                    assets: '收好世界的地图、人物的秘密，以及故事将要抵达的地方。',
-                    chapters: '生成、打磨、留存。在这里，让每一个字找到自己的位置。',
-                    platforms: '人工选择账号、作品与一个已保存章节，确认后同步到外部草稿箱，不自动正式发布。',
-                    settings: '连接你偏爱的模型服务，让每一个创作节点开始思考。',
-                    'project-settings': '集中管理小说名称、类型、简介和封面等作品设定。',
-                    'character-workflow': '独立管理人物资料、关系和人物弧光，不混入正文创作。',
-                    'world-workflow': '独立管理地理、规则、势力和时代背景，不混入正文创作。',
-                  }[page]
-                }
-              </p>
-            </div>
-            <div className="heading-actions">
-              {(page === 'workflow' || page === 'character-workflow' || page === 'world-workflow') && (
-                <>
-                  <button
-                    className="button secondary"
-                    disabled={running || busy}
-                    onClick={() => void navigate('project-settings')}
-                  >
-                    <Settings2 size={16} /> 小说设置
-                  </button>
-                  <button className="button secondary" onClick={() => navigate('assets')}>
-                    <Upload size={16} />
-                    上传设定
-                  </button>
-                  {running ? (
+              <div className="heading-actions">
+                {(page === 'workflow' || page === 'character-workflow' || page === 'world-workflow') && (
+                  <>
                     <button
-                      className="button primary"
+                      className="button secondary"
+                      disabled={running || busy}
+                      onClick={() => void navigate('project-settings')}
+                    >
+                      <Settings2 size={16} /> 小说设置
+                    </button>
+                    <button className="button secondary" onClick={() => navigate('assets')}>
+                      <Upload size={16} />
+                      上传设定
+                    </button>
+                    {running ? (
+                      <button
+                        className="button primary"
+                        onClick={() =>
+                          task(async () => {
+                            await api(`/projects/${project.id}/cancel`, { method: 'POST' });
+                          })
+                        }
+                      >
+                        <Square size={14} />
+                        停止运行
+                      </button>
+                    ) : (
+                      <button
+                        className="button primary"
+                        disabled={busy || !project.steps.length}
+                        onClick={() => run()}
+                      >
+                        <Play size={15} fill="currentColor" />
+                        {page === 'character-workflow'
+                          ? '运行人物工作流'
+                          : page === 'world-workflow'
+                            ? '运行世界观工作流'
+                            : writingWorkflow
+                              ? '运行工作流'
+                              : '运行世界观工作流'}
+                      </button>
+                    )}
+                  </>
+                )}
+                {page === 'assets' && (
+                  <button className="button primary" disabled={running} onClick={() => setAddAsset(true)}>
+                    <Plus size={17} />
+                    新建设定
+                  </button>
+                )}
+                {page === 'platforms' && (
+                  <button className="button secondary" onClick={() => setPlatformGuide(true)}>
+                    <CircleHelp size={16} />
+                    连接教程
+                  </button>
+                )}
+                {page === 'chapters' && (
+                  <div className="chapter-page-actions">
+                    <button className="button secondary" onClick={() => setDocumentProjectId(project.id)}>
+                      <BookOpen size={16} />
+                      文稿格式与阅读
+                    </button>
+                    <button
+                      className="button secondary"
+                      disabled={!project.chapters.length}
                       onClick={() =>
-                        task(async () => {
-                          await api(`/projects/${project.id}/cancel`, { method: 'POST' });
+                        download(`${project.title}.md`, chapters.map((c) => c.content).join('\n\n---\n\n'))
+                      }
+                    >
+                      <ArrowDownToLine size={16} />
+                      导出全书
+                    </button>
+                    <button
+                      className="button secondary"
+                      disabled={!chapterEditor.currentChapter || running || busy}
+                      onClick={() =>
+                        chapterEditor.currentChapter && deleteChapter(chapterEditor.currentChapter)
+                      }
+                    >
+                      <Trash2 size={16} />
+                      删除章节
+                    </button>
+                    <button
+                      className="button secondary"
+                      disabled={!chapterId || dirty || chapterConflict || running || busy}
+                      title="前往平台页，人工选择账号与作品后确认一个已保存版本；此按钮不会进行远端写入"
+                      onClick={openDraftSync}
+                    >
+                      <Upload size={16} />
+                      同步此章到草稿
+                    </button>
+                    <button
+                      className="button secondary"
+                      disabled={dirty || running || busy || !chapterEditor.currentChapter}
+                      onClick={() =>
+                        chapterEditor.currentChapter &&
+                        setGenerationEntry({
+                          number: chapterEditor.currentChapter.number,
+                          mode: 'regenerate',
                         })
                       }
                     >
-                      <Square size={14} />
-                      停止运行
+                      <Redo2 size={16} />
+                      重生成此章
                     </button>
-                  ) : (
                     <button
                       className="button primary"
-                      disabled={busy || !project.steps.length}
+                      disabled={dirty || running || busy}
                       onClick={() => run()}
                     >
-                      <Play size={15} fill="currentColor" />
-                      {page === 'character-workflow'
-                        ? '运行人物工作流'
-                        : page === 'world-workflow'
-                          ? '运行世界观工作流'
-                          : writingWorkflow
-                            ? '运行工作流'
-                            : '运行世界观工作流'}
+                      <Play size={16} />
+                      生成章节 / 要求
                     </button>
-                  )}
-                </>
-              )}
-              {page === 'assets' && (
-                <button className="button primary" disabled={running} onClick={() => setAddAsset(true)}>
-                  <Plus size={17} />
-                  新建设定
-                </button>
-              )}
-              {page === 'platforms' && (
-                <button className="button secondary" onClick={() => setPlatformGuide(true)}>
-                  <CircleHelp size={16} />
-                  连接教程
-                </button>
-              )}
-              {page === 'chapters' && (
-                <div className="chapter-page-actions">
-                  <button className="button secondary" onClick={() => setDocumentProjectId(project.id)}>
-                    <BookOpen size={16} />
-                    文稿格式与阅读
-                  </button>
-                  <button
-                    className="button secondary"
-                    disabled={!project.chapters.length}
-                    onClick={() =>
-                      download(`${project.title}.md`, chapters.map((c) => c.content).join('\n\n---\n\n'))
-                    }
-                  >
-                    <ArrowDownToLine size={16} />
-                    导出全书
-                  </button>
-                  <button
-                    className="button secondary"
-                    disabled={!chapterEditor.currentChapter || running || busy}
-                    onClick={() =>
-                      chapterEditor.currentChapter && deleteChapter(chapterEditor.currentChapter)
-                    }
-                  >
-                    <Trash2 size={16} />
-                    删除章节
-                  </button>
-                  <button
-                    className="button secondary"
-                    disabled={!chapterId || dirty || chapterConflict || running || busy}
-                    title="前往平台页，人工选择账号与作品后确认一个已保存版本；此按钮不会进行远端写入"
-                    onClick={openDraftSync}
-                  >
-                    <Upload size={16} />
-                    同步此章到草稿
-                  </button>
-                  <button
-                    className="button secondary"
-                    disabled={dirty || running || busy || !chapterEditor.currentChapter}
-                    onClick={() =>
-                      chapterEditor.currentChapter &&
-                      setGenerationEntry({ number: chapterEditor.currentChapter.number, mode: 'regenerate' })
-                    }
-                  >
-                    <Redo2 size={16} />
-                    重生成此章
-                  </button>
-                  <button
-                    className="button primary"
-                    disabled={dirty || running || busy}
-                    onClick={() => run()}
-                  >
-                    <Play size={16} />
-                    生成章节 / 要求
-                  </button>
-                </div>
-              )}
-            </div>
-          </section>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
           <ErrorBanner error={error} onClose={() => setError('')} />
+          {page === 'projects' && (
+            <ProjectsLibrary
+              projects={projects}
+              currentId={project.id}
+              onOpen={(id) => {
+                if (!running && !busy) void switchProject(id);
+              }}
+              onEdit={(id) => {
+                if (running || busy) return;
+                void (async () => {
+                  await switchProject(id);
+                  if (activeId.current === id) await navigate('project-settings');
+                })();
+              }}
+              onCreate={() => {
+                if (!running && !busy) setNewProject(true);
+              }}
+              disabled={running || busy}
+            />
+          )}
           {project && readPendingRunSubmission(project.id) && !running && (
             <div className="run-reconciliation" role="status">
               <span>上次运行提交结果尚未核对。请先查运行状态，确认没有重复生成。</span>
@@ -1832,8 +1937,22 @@ export default function App() {
                   ) : step.kind === 'start' || step.id === project.workflow?.startNodeId ? (
                     <div className="inspector-body system-inspector">
                       <h3>{writingWorkflow ? '章节生成入口' : '设定与素材生成入口'}</h3>
-                      <p>开始节点是系统边界，不调用模型。{writingWorkflow ? '配置本次章号、生成方式及持久创作要求后开始运行。' : '按节点配置生成设定或素材，不写入章节书稿。'}</p>
-                      {writingWorkflow && <p>下一个新章号：第 {Math.max(nextChapterNumber(project), (project.chapterNumberHighWatermark || 0) + 1)} 章。删除旧章不会重新编号。</p>}
+                      <p>
+                        开始节点是系统边界，不调用模型。
+                        {writingWorkflow
+                          ? '配置本次章号、生成方式及持久创作要求后开始运行。'
+                          : '按节点配置生成设定或素材，不写入章节书稿。'}
+                      </p>
+                      {writingWorkflow && (
+                        <p>
+                          下一个新章号：第{' '}
+                          {Math.max(
+                            nextChapterNumber(project),
+                            (project.chapterNumberHighWatermark || 0) + 1,
+                          )}{' '}
+                          章。删除旧章不会重新编号。
+                        </p>
+                      )}
                       <button
                         className="button primary full"
                         disabled={running || busy || dirty}
@@ -1892,7 +2011,10 @@ export default function App() {
                         </button>
                       </div>
                       {inspectorTab === 'config' ? (
-                        <div className="inspector-body" key={`${project.id}/${project.activeWorkflowId}/${step.id}`}>
+                        <div
+                          className="inspector-body"
+                          key={`${project.id}/${project.activeWorkflowId}/${step.id}`}
+                        >
                           <label className="field-label">
                             输入上下文 <span>自动关联</span>
                           </label>
@@ -1923,7 +2045,9 @@ export default function App() {
                           />
                           {step.kind === 'character' && (
                             <div className="character-node-settings">
-                              <label className="field-label">人物数量 <span>纯随机可批量生成</span></label>
+                              <label className="field-label">
+                                人物数量 <span>纯随机可批量生成</span>
+                              </label>
                               <input
                                 type="number"
                                 min={1}
@@ -1932,46 +2056,74 @@ export default function App() {
                                 disabled={running || busy}
                                 onBlur={(event) =>
                                   event.target.validity.valid && event.target.value !== ''
-                                    ? saveCharacterSettings(step.id, { characterCount: Number(event.target.value) })
+                                    ? saveCharacterSettings(step.id, {
+                                        characterCount: Number(event.target.value),
+                                      })
                                     : setError('人物数量须为 1–100 的整数。')
                                 }
                               />
-                              <label className="field-label">名字 <span>不填则随机</span></label>
+                              <label className="field-label">
+                                名字 <span>不填则随机</span>
+                              </label>
                               <input
                                 defaultValue={step.characterName || ''}
                                 disabled={running || busy}
                                 placeholder="不填则随机生成"
-                                onBlur={(event) => saveCharacterSettings(step.id, { characterName: event.target.value.trim() })}
+                                onBlur={(event) =>
+                                  saveCharacterSettings(step.id, { characterName: event.target.value.trim() })
+                                }
                               />
-                              <label className="field-label">性别 <span>留空则随机男女</span></label>
+                              <label className="field-label">
+                                性别 <span>留空则随机男女</span>
+                              </label>
                               <input
                                 defaultValue={step.characterGender || ''}
                                 disabled={running || busy}
                                 placeholder="不填则随机男女"
-                                onBlur={(event) => saveCharacterSettings(step.id, { characterGender: event.target.value.trim() })}
+                                onBlur={(event) =>
+                                  saveCharacterSettings(step.id, {
+                                    characterGender: event.target.value.trim(),
+                                  })
+                                }
                               />
-                              <label className="field-label">性格 <span>留空则随机</span></label>
+                              <label className="field-label">
+                                性格 <span>留空则随机</span>
+                              </label>
                               <textarea
                                 defaultValue={step.characterPersonality || ''}
                                 disabled={running || busy}
                                 rows={2}
                                 placeholder="不填则根据世界设定随机"
-                                onBlur={(event) => saveCharacterSettings(step.id, { characterPersonality: event.target.value.trim() })}
+                                onBlur={(event) =>
+                                  saveCharacterSettings(step.id, {
+                                    characterPersonality: event.target.value.trim(),
+                                  })
+                                }
                               />
-                              <label className="field-label">经历 <span>填写部分内容以补全</span></label>
+                              <label className="field-label">
+                                经历 <span>填写部分内容以补全</span>
+                              </label>
                               <textarea
                                 defaultValue={step.characterExperience || ''}
                                 disabled={running || busy}
                                 rows={3}
                                 placeholder="例如：曾在边境军团服役"
-                                onBlur={(event) => saveCharacterSettings(step.id, { characterExperience: event.target.value.trim() })}
+                                onBlur={(event) =>
+                                  saveCharacterSettings(step.id, {
+                                    characterExperience: event.target.value.trim(),
+                                  })
+                                }
                               />
-                              <label className="field-label">人物模板 <span>按模板结构补全</span></label>
+                              <label className="field-label">
+                                人物模板 <span>按模板结构补全</span>
+                              </label>
                               <textarea
                                 defaultValue={step.characterTemplate || DEFAULT_CHARACTER_TEMPLATE}
                                 disabled={running || busy}
                                 rows={12}
-                                onBlur={(event) => saveCharacterSettings(step.id, { characterTemplate: event.target.value })}
+                                onBlur={(event) =>
+                                  saveCharacterSettings(step.id, { characterTemplate: event.target.value })
+                                }
                               />
                             </div>
                           )}
@@ -1991,11 +2143,14 @@ export default function App() {
                           >
                             <option value="">跟随全局模型</option>
                             {step.modelId && !settings.models?.some((model) => model.id === step.modelId) && (
-                              <option value={step.modelId} disabled>指定模型已删除，请重新选择</option>
+                              <option value={step.modelId} disabled>
+                                指定模型已删除，请重新选择
+                              </option>
                             )}
                             {(settings.models || []).map((m) => (
                               <option key={m.id} value={m.id} disabled={!m.enabled || !m.hasKey}>
-                                {m.name} · {m.model}{!m.enabled ? '（已禁用）' : !m.hasKey ? '（未配置密钥）' : ''}
+                                {m.name} · {m.model}
+                                {!m.enabled ? '（已禁用）' : !m.hasKey ? '（未配置密钥）' : ''}
                               </option>
                             ))}
                           </select>
@@ -2017,9 +2172,7 @@ export default function App() {
                               />
                               <span>
                                 <strong>使用前一次 AI 解析</strong>
-                                <small>
-                                  {previousOutputControl(step, running || busy).hint}
-                                </small>
+                                <small>{previousOutputControl(step, running || busy).hint}</small>
                               </span>
                             </label>
                           )}
@@ -2049,9 +2202,11 @@ export default function App() {
                           </select>
                           <div className="context-box">
                             <GitBranch size={15} />
-                            <span>{nodeContext?.upstream.length
-                              ? `上游：${nodeContext.upstream.map((item) => item.title).join('、')}`
-                              : '未连接创作上游，仅使用作品资料与本次要求'}</span>
+                            <span>
+                              {nodeContext?.upstream.length
+                                ? `上游：${nodeContext.upstream.map((item) => item.title).join('、')}`
+                                : '未连接创作上游，仅使用作品资料与本次要求'}
+                            </span>
                           </div>
                           <label className="field-label prompt-label" htmlFor="prompt">
                             Agent 指令 <Sparkles size={13} />
@@ -2080,11 +2235,16 @@ export default function App() {
                             <span>运行模型</span>
                             <strong>{nodeModel?.label}</strong>
                             <p>{nodeModel?.hint}</p>
-                            <p>{step.kind === 'writer' || step.id === 'draft'
-                              ? '此节点产出章节正文；审校节点只提建议，不会自动改写正文。'
-                              : step.kind === 'world' || step.kind === 'expand' || step.kind === 'character' || step.id === 'lore'
-                                ? '完整运行时可保存为设定资料，不会替代章节正文。'
-                                : '输出供下游节点参考；不会自动替代正文或保存为设定资料。'}</p>
+                            <p>
+                              {step.kind === 'writer' || step.id === 'draft'
+                                ? '此节点产出章节正文；审校节点只提建议，不会自动改写正文。'
+                                : step.kind === 'world' ||
+                                    step.kind === 'expand' ||
+                                    step.kind === 'character' ||
+                                    step.id === 'lore'
+                                  ? '完整运行时可保存为设定资料，不会替代章节正文。'
+                                  : '输出供下游节点参考；不会自动替代正文或保存为设定资料。'}
+                            </p>
                           </div>
                         </div>
                       ) : (
@@ -2186,14 +2346,15 @@ export default function App() {
                             : '先设定世界，再让故事发生'}
                     </strong>
                     <p>
-                      {project.run?.error || project.run?.publication?.error ||
+                      {project.run?.error ||
+                        project.run?.publication?.error ||
                         (project.run?.publication?.state === 'queued'
                           ? `自动远端队列已创建（${project.run.publication.batchId}），请到平台作品页查看上传 / 送审结果。`
                           : project.run?.publication?.state === 'pending'
-                          ? '正在接续远端自动队列；若服务中断请到平台页只读核对，不要重复启动。'
-                          : project.run?.status === 'done'
-                          ? '前往章节书稿继续编辑，或选择节点查看结果。'
-                          : '补充人物、地图和剧情走向，让 Agent 更懂你想讲述的故事。')}
+                            ? '正在接续远端自动队列；若服务中断请到平台页只读核对，不要重复启动。'
+                            : project.run?.status === 'done'
+                              ? '前往章节书稿继续编辑，或选择节点查看结果。'
+                              : '补充人物、地图和剧情走向，让 Agent 更懂你想讲述的故事。')}
                     </p>
                   </div>
                 </div>
@@ -2309,7 +2470,9 @@ export default function App() {
                 </label>
               </div>
               <div className="asset-bulk-toolbar">
-                <span>已选择 {selectedAssetIds.length} / {project.assets.length} 份</span>
+                <span>
+                  已选择 {selectedAssetIds.length} / {project.assets.length} 份
+                </span>
                 <button
                   className="button"
                   disabled={busy || running || !selectedAssetIds.length}
@@ -2320,7 +2483,12 @@ export default function App() {
                 <button
                   className="button asset-delete-all"
                   disabled={busy || running || !project.assets.length}
-                  onClick={() => void deleteAssets(project.assets.map((asset) => asset.id), true)}
+                  onClick={() =>
+                    void deleteAssets(
+                      project.assets.map((asset) => asset.id),
+                      true,
+                    )
+                  }
                 >
                   <Trash2 size={15} /> 删除全部
                 </button>
@@ -2383,11 +2551,13 @@ export default function App() {
                           onClick={async () => {
                             if (await confirmDialog(`确定删除「${a.name}」吗？`))
                               void task(async () => {
-                                if (acceptProject(
-                                  await projectRequest(`/projects/${project.id}/assets/${a.id}`, {
-                                    method: 'DELETE',
-                                  }),
-                                )) {
+                                if (
+                                  acceptProject(
+                                    await projectRequest(`/projects/${project.id}/assets/${a.id}`, {
+                                      method: 'DELETE',
+                                    }),
+                                  )
+                                ) {
                                   setAssetSelection((current) => ({
                                     ...current,
                                     ids: current.ids.filter((id) => id !== a.id),
@@ -2419,11 +2589,21 @@ export default function App() {
           {page === 'chapters' && (
             <>
               <div className="section-toolbar">
-                <button className="button primary" disabled={busy || running} onClick={async () => {
-                  if (dirty && !(await confirmDialog('当前章节有未保存修改。请先保存，或确认放弃后添加新章节。'))) return;
-                  if (dirty) chapterEditor.resetEditor(project.chapters);
-                  setManualChapter(true);
-                }}><Plus size={16}/> 添加正文（上传 / 手动编写）</button>
+                <button
+                  className="button primary"
+                  disabled={busy || running}
+                  onClick={async () => {
+                    if (
+                      dirty &&
+                      !(await confirmDialog('当前章节有未保存修改。请先保存，或确认放弃后添加新章节。'))
+                    )
+                      return;
+                    if (dirty) chapterEditor.resetEditor(project.chapters);
+                    setManualChapter(true);
+                  }}
+                >
+                  <Plus size={16} /> 添加正文（上传 / 手动编写）
+                </button>
               </div>
               <GenerationProgress
                 run={project.run}
@@ -2613,7 +2793,9 @@ export default function App() {
               key={project.id}
               projectId={project.id}
               workflow={project.workflow}
-              onProjectChange={(updated: Project) => { acceptProject(updated); }}
+              onProjectChange={(updated: Project) => {
+                acceptProject(updated);
+              }}
               running={running}
               selectedChapterId={platformChapterId || undefined}
               selectedPlatform={selectedPlatform}
@@ -2666,19 +2848,33 @@ export default function App() {
           {toast}
         </div>
       )}
-      {manualChapter && <ManualChapterModal key={`${project.id}:${project.workflow?.id}`} project={project} busy={busy || !!running} onClose={() => setManualChapter(false)} onSave={async input => {
-        if (taskInFlight.current) throw new Error('其他保存操作正在进行，请稍后重试。');
-        taskInFlight.current = true;
-        setBusy(true);
-        try {
-          const saved = await projectRequest(`/projects/${project.id}/chapters`, {method:'POST', body:JSON.stringify(input)});
-          if (!acceptProject(saved)) throw new Error('当前作品已切换，请返回原作品查看保存结果。');
-          const added = saved.chapters.find(chapter => chapter.manualRequestId === input.requestId);
-          if (added) chapterEditor.selectChapter(added);
-          setManualChapter(false);
-          showToast('正文已添加，可继续编辑或到平台页上传');
-        } finally { taskInFlight.current = false; setBusy(false); }
-      }}/ >}
+      {manualChapter && (
+        <ManualChapterModal
+          key={`${project.id}:${project.workflow?.id}`}
+          project={project}
+          busy={busy || !!running}
+          onClose={() => setManualChapter(false)}
+          onSave={async (input) => {
+            if (taskInFlight.current) throw new Error('其他保存操作正在进行，请稍后重试。');
+            taskInFlight.current = true;
+            setBusy(true);
+            try {
+              const saved = await projectRequest(`/projects/${project.id}/chapters`, {
+                method: 'POST',
+                body: JSON.stringify(input),
+              });
+              if (!acceptProject(saved)) throw new Error('当前作品已切换，请返回原作品查看保存结果。');
+              const added = saved.chapters.find((chapter) => chapter.manualRequestId === input.requestId);
+              if (added) chapterEditor.selectChapter(added);
+              setManualChapter(false);
+              showToast('正文已添加，可继续编辑或到平台页上传');
+            } finally {
+              taskInFlight.current = false;
+              setBusy(false);
+            }
+          }}
+        />
+      )}
       {generationEntry && (
         <GenerationModal
           key={`${project.id}/${workflowIdOf(project)}`}
@@ -2811,7 +3007,7 @@ export default function App() {
                 activateProject(p);
                 localStorage.setItem('novel-project', p.id);
                 setNewProject(false);
-                setPage('workflow');
+                await navigate('workflow');
                 showToast('新的故事空间已创建');
               });
             }}
@@ -2870,9 +3066,9 @@ export default function App() {
               选择头像
             </button>
             {avatarUrl && (
-                <button
-                  type="button"
-                  className="button secondary"
+              <button
+                type="button"
+                className="button secondary"
                 onClick={() => {
                   localStorage.removeItem('novel-avatar');
                   setAvatarUrl('');
@@ -3017,12 +3213,7 @@ export default function App() {
         />
       )}
       {workflowCreator && (
-        <Modal
-          title="创建小说工作流"
-          close={() => setWorkflowCreator(false)}
-          busy={busy}
-          error={error}
-        >
+        <Modal title="创建小说工作流" close={() => setWorkflowCreator(false)} busy={busy} error={error}>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -3040,7 +3231,8 @@ export default function App() {
                   },
                   true,
                 );
-                if (!acceptProject(created)) throw new Error('工作流已创建，但当前作品状态已变化，请刷新后查看。');
+                if (!acceptProject(created))
+                  throw new Error('工作流已创建，但当前作品状态已变化，请刷新后查看。');
                 setWorkflowCreator(false);
                 showToast('小说工作流已创建');
               });
@@ -3052,9 +3244,7 @@ export default function App() {
                 name="name"
                 required
                 maxLength={80}
-                defaultValue={
-                  `小说 ${(project.workflows?.length || 0) + 1}`
-                }
+                defaultValue={`小说 ${(project.workflows?.length || 0) + 1}`}
               />
             </label>
             <fieldset className="node-presets">
@@ -3474,7 +3664,11 @@ function ThemeSwitcher() {
     await loader.current?.select(next, (applied) => {
       document.documentElement.dataset.theme = applied.id;
       setTheme(applied.id);
-      try { localStorage.setItem('novel-theme', applied.id); } catch { /* Storage may be unavailable. */ }
+      try {
+        localStorage.setItem('novel-theme', applied.id);
+      } catch {
+        /* Storage may be unavailable. */
+      }
     });
   }, []);
   const reload = useCallback(async () => {
@@ -3485,17 +3679,28 @@ function ThemeSwitcher() {
       const loaded = await themesLoad();
       if (generation !== loadGeneration.current) return;
       let saved: string | null = document.documentElement.dataset.theme || null;
-      try { saved = localStorage.getItem('novel-theme') || saved; } catch { /* Use current theme. */ }
+      try {
+        saved = localStorage.getItem('novel-theme') || saved;
+      } catch {
+        /* Use current theme. */
+      }
       await select(loaded, saved);
       if (generation === loadGeneration.current) setRegistry(loaded);
     } catch (reason) {
-      if (generation === loadGeneration.current) setError(reason instanceof Error ? reason.message : '主题加载失败，已保留当前外观');
-    } finally { if (generation === loadGeneration.current) setLoading(false); }
+      if (generation === loadGeneration.current)
+        setError(reason instanceof Error ? reason.message : '主题加载失败，已保留当前外观');
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
+    }
   }, [select]);
   useEffect(() => {
     loader.current = new ThemeLoader();
     void reload();
-    return () => { ++loadGeneration.current; loader.current?.dispose(); loader.current = null; };
+    return () => {
+      ++loadGeneration.current;
+      loader.current?.dispose();
+      loader.current = null;
+    };
   }, [reload]);
   return (
     <div className="theme-menu">

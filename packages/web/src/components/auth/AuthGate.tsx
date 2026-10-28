@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { KeyRound, LogOut, Monitor, Settings2, ShieldCheck, UserRound } from 'lucide-react';
 import { api, resetApiSession } from '../../services/api';
+import './auth-toolbar.scss';
+import { hasPermission, ROLES } from '../../../../../shared/permissions';
 import Administration from '../administration/Administration';
 import AccountSecurity from './AccountSecurity';
 import { AccountAccess } from '../account/AccountAccess';
@@ -27,16 +30,6 @@ const card: CSSProperties = {
   background: 'var(--surface)',
 };
 const stack: CSSProperties = { display: 'grid', gap: 12 };
-const toolbar: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 12,
-  alignItems: 'center',
-  justifyContent: 'flex-end',
-  padding: '8px 16px',
-  background: 'var(--surface)',
-  borderBottom: '1px solid var(--line)',
-};
 function message(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请重试。';
 }
@@ -383,11 +376,29 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return (
       <>
         {localAdmin && (
-          <div style={toolbar}>
-            <span>本机模式 · 登录认证关闭</span>
-            <button type="button" onClick={() => setAdmin(true)}>
-              管理控制台
-            </button>
+          <div className="auth-toolbar auth-toolbar--local" role="region" aria-label="本机模式状态">
+            <div className="auth-toolbar__identity">
+              <span className="auth-toolbar__emblem" aria-hidden="true">
+                <Monitor size={18} />
+              </span>
+              <span className="auth-toolbar__copy">
+                <span className="auth-toolbar__pill">
+                  <span className="auth-toolbar__dot" />
+                  本机模式
+                </span>
+                <span className="auth-toolbar__caption">登录认证已关闭 · 仅供本机使用</span>
+              </span>
+            </div>
+            <div className="auth-toolbar__actions">
+              <button
+                className="auth-toolbar__button auth-toolbar__button--primary"
+                type="button"
+                onClick={() => setAdmin(true)}
+              >
+                <Settings2 size={16} aria-hidden="true" />
+                <span>管理控制台</span>
+              </button>
+            </div>
           </div>
         )}
         {children}
@@ -410,28 +421,60 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   };
   return (
     <div key={user.id}>
-      <div style={toolbar}>
-        <span>
-          {user.username} · {user.role}
-        </span>
-        {user.role === 'superadmin' && (
-          <button type="button" onClick={() => setAdmin(true)}>
-            管理控制台
+      <div className="auth-toolbar auth-toolbar--account" role="region" aria-label="账户状态与操作">
+        <div className="auth-toolbar__identity">
+          <span className="auth-toolbar__emblem" aria-hidden="true">
+            <UserRound size={18} />
+          </span>
+          <span className="auth-toolbar__copy">
+            <span className="auth-toolbar__username" title={user.username}>
+              {user.username}
+            </span>
+            <span className="auth-toolbar__pill">
+              <span className="auth-toolbar__dot" />
+              {ROLES[user.role]?.label ?? '未知角色'}
+            </span>
+          </span>
+        </div>
+        <div className="auth-toolbar__actions">
+          {hasPermission(user.role, 'admin.access') && (
+            <button
+              className="auth-toolbar__button auth-toolbar__button--primary"
+              type="button"
+              onClick={() => setAdmin(true)}
+            >
+              <Settings2 size={16} aria-hidden="true" />
+              <span>管理控制台</span>
+            </button>
+          )}
+          <button className="auth-toolbar__button" type="button" onClick={() => setAccount(true)}>
+            <KeyRound size={16} aria-hidden="true" />
+            <span>邮箱与双重验证</span>
           </button>
+          <button className="auth-toolbar__button" type="button" onClick={() => setSecurity(true)}>
+            <ShieldCheck size={16} aria-hidden="true" />
+            <span>账号安全</span>
+          </button>
+          <button
+            className="auth-toolbar__button auth-toolbar__button--logout"
+            type="button"
+            onClick={() => void logout()}
+            disabled={busy}
+          >
+            <LogOut size={16} aria-hidden="true" />
+            <span>{busy ? '正在退出…' : '退出登录'}</span>
+          </button>
+        </div>
+        {error && (
+          <span className="auth-toolbar__error" role="alert">
+            {error}
+          </span>
         )}
-        <button type="button" onClick={() => setAccount(true)}>
-          邮箱与双重验证
-        </button>
-        <button type="button" onClick={() => setSecurity(true)}>
-          账号安全
-        </button>
-        <button type="button" onClick={() => void logout()} disabled={busy}>
-          退出登录
-        </button>
-        {error && <span role="alert">{error}</span>}
       </div>
       {children}
-      {admin && <Administration close={() => setAdmin(false)} mode="authenticated" />}
+      {admin && hasPermission(user.role, 'admin.access') && (
+        <Administration close={() => setAdmin(false)} mode="authenticated" />
+      )}
       {security && <AccountSecurity close={() => setSecurity(false)} />}
       {account && (
         <Modal title="邮箱与双重验证" close={() => setAccount(false)} className="administration">

@@ -1,0 +1,218 @@
+// Match the existing fixed sidebar widths; below 1000px it returns to document flow.
+.auth-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  min-width: 0;
+  min-height: 66px;
+  margin-left: 208px;
+  padding: 12px 28px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  background: var(--surface);
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--accent-2) 9%, var(--surface)),
+    var(--surface) 52%,
+    color-mix(in srgb, var(--accent) 7%, var(--surface))
+  );
+
+  &__identity {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1 1 210px;
+  }
+
+  &__emblem {
+    display: grid;
+    place-items: center;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    border: 1px solid color-mix(in srgb, var(--accent-2) 22%, var(--line));
+    border-radius: 12px;
+    color: var(--accent-2);
+    background: color-mix(in srgb, var(--accent-2) 8%, var(--surface));
+  }
+
+  &__copy {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    min-width: 0;
+  }
+
+  &__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    padding: 4px 9px;
+    border: 1px solid color-mix(in srgb, var(--accent-2) 22%, var(--line));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-2) 7%, var(--surface));
+    color: var(--accent-2);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
+  &__dot {
+    flex: 0 0 5px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  &__caption {
+    color: var(--muted-text);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  &__username {
+    min-width: 0;
+    max-width: min(260px, 55vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  &__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 34px;
+    padding: 7px 11px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted-text);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background 0.18s,
+      border-color 0.18s,
+      color 0.18s;
+
+    svg {
+      flex-shrink: 0;
+    }
+
+    &:hover:not(:disabled) {
+      border-color: var(--line);
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 3px;
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &--primary {
+      border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+      background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+      color: var(--accent);
+
+      &:hover:not(:disabled) {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+        color: var(--accent);
+      }
+    }
+
+    &--logout {
+      border-color: var(--line);
+    }
+  }
+
+  &__error {
+    flex-basis: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (min-width: 1600px) {
+  .auth-toolbar {
+    padding-inline: 40px;
+  }
+}
+
+@media (max-width: 1200px) and (min-width: 1001px) {
+  .auth-toolbar {
+    margin-left: 190px;
+    padding-inline: 22px;
+  }
+}
+
+@media (max-width: 1000px) {
+  .auth-toolbar {
+    margin-left: 0;
+    padding-inline: 20px;
+  }
+}
+
+@media (max-width: 680px) {
+  .auth-toolbar {
+    gap: 10px;
+    padding: 12px;
+
+    &__identity {
+      flex-basis: 100%;
+    }
+
+    &__actions {
+      width: 100%;
+    }
+
+    &__button {
+      min-height: 42px;
+      padding-inline: 10px;
+    }
+
+    &--local &__actions {
+      width: auto;
+      margin-left: 46px;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-toolbar__button {
+    transition: none;
+  }
+}

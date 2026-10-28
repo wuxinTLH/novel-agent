@@ -1,0 +1,362 @@
+.administration .online-maintenance {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+
+  .online-maintenance-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .online-maintenance-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 9px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--muted-text);
+    font-size: 11px;
+    line-height: 1.6;
+
+    &.is-succeeded {
+      color: var(--text);
+      background: var(--soft);
+    }
+
+    &.is-running,
+    &.is-queued {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    &.is-failed,
+    &.is-interrupted {
+      border-style: dashed;
+      color: var(--text);
+      font-weight: 650;
+    }
+  }
+
+  .online-maintenance-boundary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 12px 15px;
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    background: var(--surface-2);
+    font-size: 12px;
+    line-height: 1.8;
+
+    span {
+      color: var(--muted-text);
+    }
+  }
+
+  .online-maintenance-overview {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+
+    > div {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    dt {
+      color: var(--muted-text);
+      font-size: 12px;
+    }
+
+    dd {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 4px 10px;
+      margin: 6px 0 0;
+      font-size: 20px;
+      font-weight: 650;
+    }
+  }
+
+  .online-maintenance-steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+  }
+
+  .online-maintenance-step {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    min-width: 0;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+
+    > p {
+      margin: 0;
+      font-size: 12px;
+    }
+
+    > button {
+      align-self: flex-start;
+      margin-top: auto;
+    }
+
+    label {
+      font-size: 12px;
+    }
+
+    select,
+    input[type='text'] {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 38px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+    }
+  }
+
+  .online-maintenance-step-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    > span {
+      color: var(--muted-text);
+      font-size: 12px;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  .online-maintenance-consent {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 10px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    line-height: 1.8;
+    cursor: pointer;
+
+    input {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      margin: 3px 0 0;
+      accent-color: var(--accent);
+    }
+  }
+
+  .online-maintenance-selection {
+    display: grid;
+    gap: 7px;
+    padding: 12px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    font-size: 12px;
+  }
+
+  .online-maintenance-note,
+  .online-maintenance-job-meta {
+    font-size: 12px;
+  }
+
+  .online-maintenance-history {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .online-maintenance-count {
+    margin-left: 6px;
+    color: var(--muted-text);
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .online-maintenance-jobs {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    > li {
+      display: grid;
+      justify-items: start;
+      gap: 10px;
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .online-maintenance-heading {
+      width: 100%;
+    }
+
+    p {
+      margin: 0;
+      font-size: 12px;
+    }
+  }
+
+  .online-maintenance-progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    color: var(--muted-text);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+
+    progress {
+      flex: 1;
+      min-width: 0;
+      height: 6px;
+      border: 0;
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--soft);
+      accent-color: var(--accent);
+
+      &::-webkit-progress-bar {
+        background: var(--soft);
+      }
+
+      &::-webkit-progress-value {
+        background: var(--accent);
+      }
+
+      &::-moz-progress-bar {
+        background: var(--accent);
+      }
+    }
+  }
+
+  .online-maintenance-job-backup {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    min-width: 0;
+  }
+
+  code {
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+
+  .online-maintenance-result {
+    width: 100%;
+    padding: 12px;
+    box-sizing: border-box;
+    border-radius: 6px;
+    background: var(--surface-2);
+
+    details {
+      margin-top: 10px;
+    }
+  }
+
+  details {
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.8;
+
+    summary {
+      padding: 4px 0;
+      color: var(--text);
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    summary:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 3px;
+      border-radius: 3px;
+    }
+
+    ol {
+      padding-left: 22px;
+      margin: 10px 0 0;
+      color: var(--muted-text);
+    }
+
+    li + li {
+      margin-top: 7px;
+    }
+  }
+
+  .online-maintenance-safety {
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+
+    > div {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+  }
+
+  .online-maintenance-empty {
+    padding: 24px 16px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    text-align: center;
+    font-size: 12px;
+  }
+
+  @media (max-width: 900px) {
+    .online-maintenance-steps {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 540px) {
+    .online-maintenance-overview {
+      grid-template-columns: 1fr;
+      gap: 8px;
+
+      > div {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      dd {
+        margin: 0;
+        font-size: 16px;
+      }
+    }
+
+    .online-maintenance-step,
+    .online-maintenance-jobs > li {
+      padding: 14px;
+    }
+
+    .online-maintenance-step > button {
+      width: 100%;
+    }
+  }
+}

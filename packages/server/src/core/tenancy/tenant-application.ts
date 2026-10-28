@@ -1,4 +1,5 @@
 import express from 'express';
+import { hasPermission } from '../../../../../shared/permissions.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -43,7 +44,7 @@ export function createTenantApplication(options: TenantApplicationOptions) {
       if (!principal) return res.status(401).json({ code: 'AUTH_REQUIRED', error: '请先登录。' });
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !options.auth.requireCsrf(req))
         return res.status(403).json({ code: 'AUTH_CSRF_REQUIRED', error: '会话校验失败。' });
-      if (requestPath.startsWith('/api/sqlconnect') && principal.role !== 'superadmin')
+      if (requestPath.startsWith('/api/sqlconnect') && !hasPermission(principal.role, ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'storage.read' : 'sql.initialize'))
         return res.status(403).json({ code: 'AUTH_FORBIDDEN', error: '需要超级管理员权限。' });
       let tenant = contexts.get(principal.id);
       if (!tenant) {

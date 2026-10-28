@@ -1,4 +1,5 @@
-export type AuthRole = 'superadmin' | 'user';
+import type { RoleId } from './permissions.js';
+export type AuthRole = RoleId;
 export interface AuthUser {
   id: string;
   username: string;

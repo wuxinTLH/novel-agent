@@ -143,7 +143,7 @@ async function fixture(t: TestContext) {
       },
     );
     assert.equal(created.status, 201);
-    assert.equal(created.body.user.role, 'user');
+    assert.equal(created.body.user.role, 'writer');
     const writer = await login('writer');
     assert.equal(writer.id, created.body.user.id);
     return { admin, writer };
@@ -372,7 +372,7 @@ test('session CSRF and per-tenant runtime CSRF are independent required guards',
   assert.equal(accepted.status, 201);
   const adminOnly = await f.request('GET', '/api/auth/users', undefined, { cookie: writer.cookie });
   assert.equal(adminOnly.status, 403);
-  assert.equal(adminOnly.body.error, 'AUTH_SUPERADMIN_REQUIRED');
+  assert.equal(adminOnly.body.error, 'AUTH_PERMISSION_DENIED');
   const sql = await f.request('GET', '/api/sqlconnect/status', undefined, { cookie: writer.cookie });
   assert.equal(sql.status, 403);
   assert.equal(sql.body.code, 'AUTH_FORBIDDEN');

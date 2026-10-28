@@ -1,8 +1,13 @@
 import express, { type Request } from 'express';
+import { hasPermission, type Permission } from '../../../../../shared/permissions.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AuthService } from '../auth/auth.js';
 import { createOnlineMaintenanceRouter, type OnlineMaintenanceManager } from './online-maintenance.js';
-import { readStorageManifest, readStorageProfiles, writeStorageProfiles } from '../../infrastructure/storage/storage-config.js';
+import {
+  readStorageManifest,
+  readStorageProfiles,
+  writeStorageProfiles,
+} from '../../infrastructure/storage/storage-config.js';
 
 function loopback(value: string | undefined): boolean {
   return value === '127.0.0.1' || value === '::1' || value === '::ffff:127.0.0.1';
@@ -39,31 +44,63 @@ export function createAdministrationRouter(options: {
       right = Buffer.from(token);
     return left.length === right.length && timingSafeEqual(left, right);
   };
+  const permitted = (req: Request, permission: Permission) =>
+    options.auth.enabled ? hasPermission(options.auth.session(req)?.user.role, permission) : local(req);
   const authorized = (req: Request) =>
-    options.auth.enabled
-      ? options.auth.session(req)?.user.role === 'superadmin' && options.auth.requireCsrf(req)
-      : local(req) && equalToken(req);
+    permitted(req, 'admin.access') &&
+    (options.auth.enabled ? options.auth.requireCsrf(req) : equalToken(req));
   router.use(express.json({ limit: '1mb' }));
   router.get('/session', (req, res) => {
     if (local(req)) return res.json({ available: true, mode: 'local', csrfToken: token });
-    if (options.auth.enabled && options.auth.session(req)?.user.role === 'superadmin')
+    if (options.auth.enabled && permitted(req, 'admin.access'))
       return res.json({ available: true, mode: 'authenticated' });
-    res.status(403).json({ code: 'ADMIN_FORBIDDEN', error: '管理员入口仅限本机或已登录的超级管理员。' });
+    res
+      .status(403)
+      .json({ code: 'ADMIN_FORBIDDEN', error: '管理员入口仅限本机管理模式或具有管理权限的已登录账号。' });
   });
   router.use((req, res, next) => {
     const read = ['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-    const allowed = options.auth.enabled
-      ? options.auth.session(req)?.user.role === 'superadmin' && (read || options.auth.requireCsrf(req))
-      : local(req) && (read || equalToken(req));
+    const allowed =
+      permitted(req, 'admin.access') &&
+      (read || (options.auth.enabled ? options.auth.requireCsrf(req) : equalToken(req)));
     if (!allowed)
       return res.status(403).json({ code: 'ADMIN_FORBIDDEN', error: '管理员权限或操作凭据无效。' });
+    // Classify every management endpoint explicitly; unknown routes never inherit access.
+    const route = req.path.toLowerCase().replace(/\/$/, '') || '/';
+    let permission: Permission | undefined;
+    if (route === '/status') permission = 'admin.status.read';
+    else if (route === '/storage') permission = read ? 'storage.read' : 'storage.manage';
+    else if (route === '/maintenance') permission = 'maintenance.commands';
+    else if (route === '/online-maintenance' || (read && /^\/online-maintenance\/tasks\/[^/]+$/.test(route)))
+      permission = 'maintenance.read';
+    else if (req.method === 'POST' && /^\/online-maintenance\/backups\/[^/]+\/validate$/.test(route))
+      permission = 'maintenance.validate';
+    else if (route === '/online-maintenance/tasks' && req.method === 'POST') {
+      const kinds: Record<string, Permission> = {
+        backup: 'maintenance.backup',
+        validate: 'maintenance.validate',
+        'restore-plan': 'maintenance.restorePlan',
+      };
+      permission = typeof req.body?.kind === 'string' ? kinds[req.body.kind] : undefined;
+    } else if (/^\/online-maintenance\/tasks\/[^/]+\/cancel$/.test(route)) permission = 'maintenance.cancel';
+    else if (route.startsWith('/users')) permission = read ? 'users.read' : 'users.manage';
+    else if (route.startsWith('/turnstile') || route.startsWith('/account/'))
+      permission = read ? 'security.read' : 'security.manage';
+    if (!permission || !permitted(req, permission))
+      return res
+        .status(403)
+        .json({ code: 'ADMIN_PERMISSION_REQUIRED', error: '此角色没有执行该操作的权限。' });
     next();
   });
-  if (options.onlineMaintenance) router.use('/online-maintenance', createOnlineMaintenanceRouter({
-    manager: options.onlineMaintenance,
-    // The preceding mandatory gate already validates administrator + write CSRF.
-    authorize: (_req, _res, next) => next(),
-  }));
+  if (options.onlineMaintenance)
+    router.use(
+      '/online-maintenance',
+      createOnlineMaintenanceRouter({
+        manager: options.onlineMaintenance,
+        // The preceding mandatory gate already validates administrator + write CSRF.
+        authorize: (_req, _res, next) => next(),
+      }),
+    );
   const profiles = () => readStorageProfiles(options.dir);
   router.get('/status', (_req, res) => {
     const config = profiles();
