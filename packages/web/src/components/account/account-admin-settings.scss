@@ -1,0 +1,232 @@
+.administration .account-admin {
+  display: grid;
+  gap: 20px;
+  h3,
+  h4,
+  p {
+    margin: 0;
+  }
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  &__header h3 {
+    margin: 6px 0;
+    font-size: 20px;
+  }
+  &__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.06em;
+  }
+  &__count {
+    flex-shrink: 0;
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--soft);
+    font-size: 11px;
+  }
+  &__notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 9px;
+    background: var(--soft);
+    border: 1px solid var(--line);
+  }
+  &__notice svg {
+    flex-shrink: 0;
+    margin-top: 3px;
+    color: var(--accent);
+  }
+  &__notice p {
+    font-size: 12px;
+  }
+  > fieldset {
+    display: grid;
+    gap: 22px;
+  }
+  &__section {
+    display: grid;
+    gap: 14px;
+  }
+  &__section h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  &__toggles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  label.account-admin__toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    cursor: pointer;
+  }
+  label.account-admin__toggle:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--soft);
+  }
+  &__toggle-copy {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+  }
+  &__toggle-copy strong {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  &__toggle-copy small {
+    font-size: 11px;
+    line-height: 1.65;
+  }
+  // Override broad form/input selectors; keep the accessible native checkbox interactive.
+  label.account-admin__toggle input[type='checkbox'] {
+    appearance: none;
+    display: block;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 21px;
+    min-height: 21px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--muted-text);
+    cursor: pointer;
+    position: relative;
+  }
+  label.account-admin__toggle input::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--surface);
+    transition: transform 0.15s ease;
+  }
+  label.account-admin__toggle input:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  label.account-admin__toggle input:checked::after {
+    transform: translateX(15px);
+  }
+  &__field {
+    display: grid;
+    gap: 7px;
+  }
+  &__field > span {
+    font-size: 12px;
+  }
+  &__field input {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    height: 38px;
+    padding: 8px 11px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+  }
+  &__field input::placeholder {
+    color: var(--muted-text);
+    opacity: 0.65;
+  }
+  &__oidc {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  &__oidc summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 13px 14px;
+    background: var(--soft);
+    cursor: pointer;
+    font-weight: 550;
+    list-style: none;
+  }
+  &__oidc summary::-webkit-details-marker {
+    display: none;
+  }
+  &__oidc[open] summary svg {
+    transform: rotate(180deg);
+  }
+  &__fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    padding: 16px;
+  }
+  &__secret {
+    grid-column: 1 / -1;
+  }
+  &__oidc-help {
+    padding: 0 16px 16px;
+    font-size: 11px;
+  }
+  &__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+  }
+  &__footer > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted-text);
+    font-size: 12px;
+  }
+  &__footer > .is-dirty {
+    color: var(--accent);
+  }
+  &__result {
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--soft);
+  }
+  @media (max-width: 720px) {
+    &__toggles,
+    &__fields {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    &__header {
+      flex-wrap: wrap;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    input::after {
+      transition: none !important;
+    }
+  }
+}

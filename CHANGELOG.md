@@ -2,6 +2,12 @@
 
 ## 未发布
 
+### 账户设置与部分界面双语
+
+- 管理中心 AccountAdminSettings 按基础账户开关与 OIDC 连接 / 密钥设置分组，展示已启用数量、未保存提示和保存反馈；宽屏双列、窄屏单列响应式布局。保留默认关闭的功能及认证总开关独立性；OIDC clientSecret 留空保留已保存值，不回传明文。
+- 引入 `packages/web/src/locals/` 前端词条，默认 `zh-CN`；顶栏 LanguageSwitcher 可切换 `en`，浏览器 localStorage 键为 `novel-locale`。目前仅翻译账户配置、顶栏及部分管理 / 导航文案；创作、平台及后端消息仍未完整英文化。
+- 根目录 README.md 继续提供完整默认中文说明，并新增 `README/README_zhCN.md` 和 `README/README_en.md` 独立语言入口；同步使用手册的功能边界和链接。
+
 ### 项目导航与管理体验
 
 - 优化顶部账号状态栏及项目切换导航，增加全部项目图库、搜索和项目操作入口，适配窄屏布局。

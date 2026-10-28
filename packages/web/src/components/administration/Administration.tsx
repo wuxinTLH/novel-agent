@@ -32,6 +32,7 @@ import {
   type Permission,
 } from '../../../../../shared/permissions';
 import '../../styles/administration.scss';
+import { useLocale } from '../../locals';
 
 const accountAdminRequest = <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
   if (!path.startsWith('/api/admin/')) return Promise.reject(new Error('无效管理员请求路径'));
@@ -1355,6 +1356,7 @@ function OverviewPanel({
 }
 
 export default function Administration({ close, mode }: { close: () => void; mode: Mode }) {
+  const { t } = useLocale();
   const session = useResource<AuthStatus>(mode === 'authenticated' ? '/auth/session' : undefined);
   const actor =
     mode === 'local'
@@ -1389,8 +1391,8 @@ export default function Administration({ close, mode }: { close: () => void; mod
   };
   return (
     <Modal
-      title="管理控制台"
-      description="系统管理 / ADMIN CONSOLE"
+      title={t('管理控制台')}
+      description={t('系统管理 / ADMIN CONSOLE')}
       className="administration"
       wide
       close={close}
@@ -1398,11 +1400,11 @@ export default function Administration({ close, mode }: { close: () => void; mod
       dirty={databaseDirty || securityDirty}
     >
       <div className="administration-mode">
-        <span className="administration-badge">{mode === 'local' ? '本机管理模式' : '管理员模式'}</span>
+        <span className="administration-badge">{mode === 'local' ? t('本机管理模式') : t('管理员模式')}</span>
         <p>
           {mode === 'local'
-            ? '登录认证保持关闭；管理权限由服务端的本机访问校验和管理令牌保护，不代表已登录账号。'
-            : '通过管理员会话访问；所有操作均需服务端授权。'}
+            ? t('登录认证保持关闭；管理权限由服务端的本机访问校验和管理令牌保护，不代表已登录账号。')
+            : t('通过管理员会话访问；所有操作均需服务端授权。')}
         </p>
       </div>
       {mode === 'authenticated' && (
@@ -1410,7 +1412,7 @@ export default function Administration({ close, mode }: { close: () => void; mod
       )}
       {mode === 'authenticated' && !session.loading && !session.error && !allowed('admin.access') && (
         <p className="administration-feedback is-error" role="alert">
-          当前账号没有管理控制台访问权限。
+          {t('当前账号没有管理控制台访问权限。')}
         </p>
       )}
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
@@ -1418,8 +1420,8 @@ export default function Administration({ close, mode }: { close: () => void; mod
         <>
           <div className="administration-layout">
             <aside className="administration-sidebar">
-              <span className="administration-nav-caption">管理空间</span>
-              <div className="administration-tabs" role="tablist" aria-label="管理分类">
+              <span className="administration-nav-caption">{t('管理空间')}</span>
+              <div className="administration-tabs" role="tablist" aria-label={t('管理分类')}>
                 {visibleTabs.map(({ id: name, label, icon: Icon }, index) => (
                   <button
                     key={name}
@@ -1433,7 +1435,7 @@ export default function Administration({ close, mode }: { close: () => void; mod
                     onClick={() => setTab(name)}
                   >
                     <Icon size={17} aria-hidden="true" />
-                    {label}
+                    {t(label)}
                     {name === 'users' && status.userCount !== undefined && (
                       <span className="administration-tab-count">{status.userCount}</span>
                     )}
@@ -1443,7 +1445,8 @@ export default function Administration({ close, mode }: { close: () => void; mod
               <div className="administration-sidebar-note">
                 <ShieldCheck size={17} aria-hidden="true" />
                 <span>
-                  安全管理边界<small>权限校验 · 操作确认 · 密钥保护</small>
+                  {t('安全管理边界')}
+                  <small>{t('权限校验 · 操作确认 · 密钥保护')}</small>
                 </span>
               </div>
             </aside>
@@ -1528,10 +1531,10 @@ export default function Administration({ close, mode }: { close: () => void; mod
             </div>
           </div>
           <footer className="administration-footer">
-            <span>{busy ? '正在提交，请勿关闭页面…' : '配置与权限以服务器校验结果为准'}</span>
+            <span>{busy ? t('正在提交，请勿关闭页面…') : t('配置与权限以服务器校验结果为准')}</span>
             <button type="button" disabled={busy || resource.loading} onClick={resource.reload}>
               <RefreshCw size={14} aria-hidden="true" />
-              刷新系统状态
+              {t('刷新系统状态')}
             </button>
           </footer>
         </>

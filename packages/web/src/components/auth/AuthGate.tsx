@@ -8,6 +8,7 @@ import AccountSecurity from './AccountSecurity';
 import { AccountAccess } from '../account/AccountAccess';
 import { AccountCompletion } from '../account/AccountCompletion';
 import { AccountSettings } from '../account/AccountSettings';
+import { LanguageSwitcher, useLocale } from '../../locals';
 import Modal from '../common/Modal';
 import type {
   AuthStatus as Session,
@@ -47,6 +48,7 @@ function prepareIdentity(identity: string) {
           if (
             key &&
             key !== 'novel-auth-identity' &&
+            key !== 'novel-locale' &&
             (key.startsWith('novel-') ||
               key.startsWith('platform-hidden:') ||
               key.startsWith('publication-auto-approve:'))
@@ -148,6 +150,7 @@ function completionFromLocation(): Completion | undefined {
 }
 
 function Login({ session }: { session: Session }) {
+  const { t } = useLocale();
   const [pendingMfa, setPendingMfa] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -184,6 +187,7 @@ function Login({ session }: { session: Session }) {
   };
   return (
     <main style={{ maxWidth: 460, margin: '10vh auto', padding: 16 }}>
+      <LanguageSwitcher />
       {pendingMfa ? (
         <div style={{ ...card, ...stack }}>
           <AccountAccess
@@ -192,15 +196,15 @@ function Login({ session }: { session: Session }) {
             onAuthenticated={() => window.location.reload()}
           />
           <button type="button" onClick={() => setPendingMfa(false)}>
-            返回密码登录
+            {t('返回密码登录')}
           </button>
         </div>
       ) : (
         <>
           <form onSubmit={submit} style={{ ...card, ...stack }} aria-busy={busy}>
-            <h1>登录 Novel Agent</h1>
+            <h1>{t('登录 Novel Agent')}</h1>
             <label style={stack}>
-              用户名
+              {t('用户名')}
               <input
                 autoComplete="username"
                 value={username}
@@ -210,7 +214,7 @@ function Login({ session }: { session: Session }) {
               />
             </label>
             <label style={stack}>
-              密码
+              {t('密码')}
               <input
                 type="password"
                 autoComplete="current-password"
@@ -223,7 +227,7 @@ function Login({ session }: { session: Session }) {
             <Challenge settings={session.turnstile} attempt={attempt} token={setToken} />
             {error && <p role="alert">{error}</p>}
             <button disabled={busy || (session.turnstile.enabled && !turnstileToken)}>
-              {busy ? '正在登录…' : '登录'}
+              {busy ? t('正在登录…') : t('登录')}
             </button>
           </form>
           <div style={{ ...card, marginTop: 16 }}>
@@ -243,6 +247,7 @@ function Login({ session }: { session: Session }) {
 }
 
 function CompletionPage({ session, completion }: { session: Session; completion?: Completion }) {
+  const { t } = useLocale();
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -253,15 +258,16 @@ function CompletionPage({ session, completion }: { session: Session; completion?
   }, [oidc]);
   return (
     <main style={{ ...card, ...stack, maxWidth: 480, margin: '10vh auto' }}>
-      <h1>账户操作</h1>
+      <LanguageSwitcher />
+      <h1>{t('账户操作')}</h1>
       {done ? (
-        <p role="status">账户操作已完成，请返回登录。</p>
+        <p role="status">{t('账户操作已完成，请返回登录。')}</p>
       ) : oidc === 'mfa' ? (
         <AccountAccess request={accountRequest} pendingMfa onAuthenticated={home} />
       ) : completion?.purpose === 'email' ? (
         session.enabled && session.authenticated ? (
           <>
-            <p>确认将此邮箱关联到当前登录的账户。</p>
+            <p>{t('确认将此邮箱关联到当前登录的账户。')}</p>
             <button
               disabled={busy}
               onClick={() => {
@@ -273,13 +279,13 @@ function CompletionPage({ session, completion }: { session: Session; completion?
                   .finally(() => setBusy(false));
               }}
             >
-              确认邮箱
+              {t('确认邮箱')}
             </button>
             {error && <p role="alert">{error}</p>}
           </>
         ) : (
           <p role="status">
-            请先登录此邮箱所属的账户，再重新打开邮件中的原始链接。验证链接不会自动关联到其他账户。
+            {t('请先登录此邮箱所属的账户，再重新打开邮件中的原始链接。验证链接不会自动关联到其他账户。')}
           </p>
         )
       ) : completion ? (
@@ -292,20 +298,21 @@ function CompletionPage({ session, completion }: { session: Session; completion?
       ) : (
         <p role="alert">
           {oidc === 'failed'
-            ? 'OIDC 登录失败，请返回登录后重试。'
+            ? t('OIDC 登录失败，请返回登录后重试。')
             : oidc === 'success'
-              ? '正在返回应用…'
-              : '账户链接无效或已失效，请重新申请邮件。'}
+              ? t('正在返回应用…')
+              : t('账户链接无效或已失效，请重新申请邮件。')}
         </p>
       )}
       <button type="button" onClick={home}>
-        返回应用 / 登录
+        {t('返回应用 / 登录')}
       </button>
     </main>
   );
 }
 
 export default function AuthGate({ children }: { children: ReactNode }) {
+  const { t } = useLocale();
   const [completion] = useState(completionFromLocation);
   useEffect(() => {
     if (window.location.pathname === '/account/complete' && window.location.hash)
@@ -366,8 +373,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   if (!session)
     return (
       <main style={{ ...card, margin: '10vh auto', maxWidth: 480 }}>
-        <p role={error ? 'alert' : 'status'}>{error || '正在检查登录状态…'}</p>
-        {error && <button onClick={() => void refresh()}>重试</button>}
+        <LanguageSwitcher />
+        <p role={error ? 'alert' : 'status'}>{error || t('正在检查登录状态…')}</p>
+        {error && <button onClick={() => void refresh()}>{t('重试')}</button>}
       </main>
     );
   if (window.location.pathname === '/account/complete')
@@ -375,8 +383,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   if (!session.enabled)
     return (
       <>
-        {localAdmin && (
-          <div className="auth-toolbar auth-toolbar--local" role="region" aria-label="本机模式状态">
+        {localAdmin ? (
+          <div className="auth-toolbar auth-toolbar--local" role="region" aria-label={t('本机模式状态')}>
             <div className="auth-toolbar__identity">
               <span className="auth-toolbar__emblem" aria-hidden="true">
                 <Monitor size={18} />
@@ -384,21 +392,26 @@ export default function AuthGate({ children }: { children: ReactNode }) {
               <span className="auth-toolbar__copy">
                 <span className="auth-toolbar__pill">
                   <span className="auth-toolbar__dot" />
-                  本机模式
+                  {t('本机模式')}
                 </span>
-                <span className="auth-toolbar__caption">登录认证已关闭 · 仅供本机使用</span>
+                <span className="auth-toolbar__caption">{t('登录认证已关闭 · 仅供本机使用')}</span>
               </span>
             </div>
             <div className="auth-toolbar__actions">
+              <LanguageSwitcher />
               <button
                 className="auth-toolbar__button auth-toolbar__button--primary"
                 type="button"
                 onClick={() => setAdmin(true)}
               >
                 <Settings2 size={16} aria-hidden="true" />
-                <span>管理控制台</span>
+                <span>{t('管理控制台')}</span>
               </button>
             </div>
+          </div>
+        ) : (
+          <div className="auth-toolbar">
+            <LanguageSwitcher />
           </div>
         )}
         {children}
@@ -421,7 +434,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   };
   return (
     <div key={user.id}>
-      <div className="auth-toolbar auth-toolbar--account" role="region" aria-label="账户状态与操作">
+      <div className="auth-toolbar auth-toolbar--account" role="region" aria-label={t('账户状态与操作')}>
         <div className="auth-toolbar__identity">
           <span className="auth-toolbar__emblem" aria-hidden="true">
             <UserRound size={18} />
@@ -437,6 +450,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
           </span>
         </div>
         <div className="auth-toolbar__actions">
+          <LanguageSwitcher />
           {hasPermission(user.role, 'admin.access') && (
             <button
               className="auth-toolbar__button auth-toolbar__button--primary"
@@ -444,16 +458,16 @@ export default function AuthGate({ children }: { children: ReactNode }) {
               onClick={() => setAdmin(true)}
             >
               <Settings2 size={16} aria-hidden="true" />
-              <span>管理控制台</span>
+              <span>{t('管理控制台')}</span>
             </button>
           )}
           <button className="auth-toolbar__button" type="button" onClick={() => setAccount(true)}>
             <KeyRound size={16} aria-hidden="true" />
-            <span>邮箱与双重验证</span>
+            <span>{t('邮箱与双重验证')}</span>
           </button>
           <button className="auth-toolbar__button" type="button" onClick={() => setSecurity(true)}>
             <ShieldCheck size={16} aria-hidden="true" />
-            <span>账号安全</span>
+            <span>{t('账号安全')}</span>
           </button>
           <button
             className="auth-toolbar__button auth-toolbar__button--logout"
@@ -462,7 +476,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
             disabled={busy}
           >
             <LogOut size={16} aria-hidden="true" />
-            <span>{busy ? '正在退出…' : '退出登录'}</span>
+            <span>{busy ? t('正在退出…') : t('退出登录')}</span>
           </button>
         </div>
         {error && (
@@ -477,7 +491,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       )}
       {security && <AccountSecurity close={() => setSecurity(false)} />}
       {account && (
-        <Modal title="邮箱与双重验证" close={() => setAccount(false)} className="administration">
+        <Modal title={t('邮箱与双重验证')} close={() => setAccount(false)} className="administration">
           <AccountSettings request={accountRequest} onSessionRevoked={() => window.location.reload()} />
         </Modal>
       )}

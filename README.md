@@ -1,5 +1,7 @@
 # Novel Agent
 
+语言 / Language：[简体中文（默认）](README/README_zhCN.md) · [English](README/README_en.md)
+
 面向本机和可信局域网的小说创作工作台，版本 `v0.0.2a`。支持多作品、多工作流、世界观编写、章节创作、资料管理、模型库、主题和数据保存；默认仍为免登录单用户，可通过本地管理 CLI 显式启用认证与租户隔离。不是面向公网的生产部署方案。
 
 ## 快速开始
@@ -109,7 +111,7 @@ npm run admin -- bootstrap-admin --username admin --confirm
 先按上节显式启用认证；创建用户或启用下列功能不会改变认证总开关。登录页按已启用能力显示注册、找回密码、OIDC 与第二因素输入；登录后通过“邮箱与双重验证”管理邮箱和 MFA，“账号安全”继续管理密码与会话。
 
 - 邮件使用可选 nodemailer SMTP 传输：仅 `NOVEL_SMTP_ENABLED=true` 启用，并须安全注入 `NOVEL_SMTP_HOST`、`NOVEL_SMTP_USER`、`NOVEL_SMTP_PASSWORD`、`NOVEL_SMTP_FROM`；`NOVEL_SMTP_PORT` 默认 587，`NOVEL_SMTP_SECURE=true` 时默认 465。不要将真实密码写入文档、命令参数或 Git。TLS 验证不关闭；显式启用却缺少配置会启动失败。
-- 管理员另行保存注册、邮箱验证、密码恢复、MFA 的开关及邮件回链使用的 HTTPS `publicOrigin`。注册始终要求邮件确认；单次邮件令牌 15 分钟过期，完成注册不自动登录，恢复密码撤销会话但不移除 MFA。回链为 `/account/complete#purpose=...&token=...`，不要分享链接或截图。
+- 管理中心“系统与安全 → 账户功能配置”将注册、邮箱验证、密码恢复和 MFA 分组为开关卡片，并单列可展开的 OIDC 连接与密钥设置；宽屏双列、窄屏单列。管理员另行保存这些开关及邮件回链使用的 HTTPS `publicOrigin`；编辑后须点击“保存配置”，不会自动开启认证。注册始终要求邮件确认；单次邮件令牌 15 分钟过期，完成注册不自动登录，恢复密码撤销会话但不移除 MFA。回链为 `/account/complete#purpose=...&token=...`，不要分享链接或截图。
 - OIDC 须显式配置 issuer、clientId、授权 / token / JWKS / 回调 HTTPS 地址，使用 code + PKCE S256、state、nonce、JWKS 签名和精确 issuer / audience 校验。管理员须预先将 issuer + subject 映射到已有用户；不按邮箱自动关联或自动注册，不是任意 OAuth 接入。
 - MFA 使用 TOTP，启用时仅展示一次 10 个恢复码；登录必须完成第二因素后才取得业务会话。已用 TOTP counter / 恢复码不能重放，启用或移除 MFA 撤销旧会话；仍有已绑定因素时不能通过全局关闭绕过。
 
@@ -123,6 +125,7 @@ npm run admin -- bootstrap-admin --username admin --confirm
 
 ### 界面
 
+- 界面默认简体中文（`zh-CN`），顶栏全局语言切换器（LanguageSwitcher）可切换 English（`en`）；选择以 `novel-locale` 保存在当前浏览器 localStorage。前端翻译资源集中于 `packages/web/src/locals/`。目前仅覆盖账户功能配置、顶栏及部分管理 / 导航文案；创作、平台页面和后端返回消息尚未全面翻译，切换后仍可能显示中文，不代表完整英文界面。
 - 顶栏可切换极简白、极简黑、跟随系统和蓝粉白主题，选择会保存在浏览器本地。
 - 主题由独立 CSS 与注册表加载，菜单提供“重新加载主题”；加载失败保留当前外观，首次失败使用浅色兜底。新增与部署方式见 [主题扩展说明](public/themes/README.md)。
 - 工作流、章节和表单控件使用统一的 SCSS 样式。

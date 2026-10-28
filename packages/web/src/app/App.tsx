@@ -71,6 +71,7 @@ import ModelSettingsPanel from '../components/settings/ModelSettingsPanel';
 import ProjectSettingsPanel from '../components/projects/ProjectSettingsPanel';
 import ProjectsLibrary from '../components/projects/ProjectsLibrary';
 import '../styles/workspace-navigation.scss';
+import { useLocale } from '../locals';
 import { useChapterEditor } from '../hooks/chapters/useChapterEditor';
 import {
   canApplyProject,
@@ -313,6 +314,7 @@ function FitCanvas() {
   return null;
 }
 export default function App() {
+  const { t } = useLocale();
   const confirmDialog = useConfirm();
   const [projects, setProjects] = useState<Project[]>([]),
     [project, setProject] = useState<Project | null>(null);
@@ -1192,16 +1194,16 @@ export default function App() {
           <img src="/favicon.svg" alt="" />
           <span>
             Novel<span className="brand-light"> Agent</span>
-            <small>你的故事，正在发生</small>
+            <small>{t('你的故事，正在发生')}</small>
           </span>
         </a>
         <div className="workspace-label">
-          创作空间 <span>WORKSPACE</span>
+          {t('创作空间')} <span>WORKSPACE</span>
         </div>
         <div className="project-select" ref={projectSwitcherRef}>
           <button
             className="project-switcher-trigger"
-            aria-label="切换作品"
+            aria-label={t('切换作品')}
             aria-haspopup="listbox"
             aria-expanded={projectSwitcherOpen}
             aria-controls="project-switcher-list"
@@ -1216,7 +1218,7 @@ export default function App() {
           >
             <span className="project-avatar">{project.title.slice(0, 1)}</span>
             <span className="project-switcher-current">
-              <small>当前作品</small>
+              <small>{t('当前作品')}</small>
               <strong>{project.title}</strong>
               {project.genre && <em>{project.genre}</em>}
             </span>
@@ -1282,7 +1284,7 @@ export default function App() {
                   void navigate('projects');
                 }}
               >
-                <Layers3 size={15} /> 查看全部作品
+                <Layers3 size={15} /> {t('查看全部作品')}
                 <ArrowRight size={14} aria-hidden="true" />
               </button>
               <button
@@ -1294,7 +1296,7 @@ export default function App() {
                     setNewProject(true);
                 }}
               >
-                <Plus size={14} /> 创建小说
+                <Plus size={14} /> {t('创建小说')}
               </button>
             </div>
           )}
@@ -1309,7 +1311,7 @@ export default function App() {
           }}
         >
           <Layers3 size={16} />
-          <span>全部作品</span>
+          <span>{t('全部作品')}</span>
           <span className="workspace-library-count">{projects.length}</span>
           <ChevronRight size={14} aria-hidden="true" />
         </button>
@@ -1319,7 +1321,7 @@ export default function App() {
             if (!dirty || (await confirmDialog('章节有未保存的修改，确定创建小说吗？'))) setNewProject(true);
           }}
         >
-          <Plus size={16} /> 创建小说
+          <Plus size={16} /> {t('创建小说')}
         </button>
         <nav>
           {(
@@ -1358,7 +1360,7 @@ export default function App() {
               }}
             >
               <item.icon size={18} />
-              {item.label}
+              {t(item.label)}
               {item.id === 'assets' && <span className="nav-count">{project.assets.length}</span>}
               {item.id === 'chapters' && project.chapters.length > 0 && (
                 <span className="nav-count">{project.chapters.length}</span>
@@ -1378,11 +1380,11 @@ export default function App() {
         </div>
         <div className="sidebar-bottom">
           <button className={page === 'settings' ? 'active' : ''} onClick={() => navigate('settings')}>
-            <Sparkles size={18} /> 模型设置
+            <Sparkles size={18} /> {t('模型设置')}
             <span className={`connection-dot ${settings.hasKey && settings.mode === 'live' ? 'live' : ''}`} />
           </button>
           <button onClick={() => setHelp(true)}>
-            <CircleHelp size={18} /> 使用指南
+            <CircleHelp size={18} /> {t('使用指南')}
             <ArrowRight size={14} className="push-right" />
           </button>
           <div className="local-user">
@@ -1409,13 +1411,13 @@ export default function App() {
       </aside>
       <main className="main">
         <header className="topbar">
-          <nav className="breadcrumbs" aria-label="当前位置">
+          <nav className="breadcrumbs" aria-label={t('当前位置')}>
             <button
               type="button"
               onClick={() => void navigate('projects')}
               aria-current={page === 'projects' ? 'page' : undefined}
             >
-              全部作品
+              {t('全部作品')}
             </button>
             {page !== 'projects' && (
               <>
@@ -1426,7 +1428,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => void navigate('project-settings')}
-                    title="查看当前作品设置"
+                    title={t('查看当前作品设置')}
                   >
                     {project.title}
                   </button>
@@ -1435,7 +1437,7 @@ export default function App() {
                 {page === 'platforms' && selectedPlatform ? (
                   <>
                     <button type="button" onClick={backToPlatforms}>
-                      平台作品
+                      {t('平台作品')}
                     </button>
                     <ChevronRight size={14} aria-hidden="true" />
                     <strong aria-current="page">
@@ -1455,17 +1457,17 @@ export default function App() {
                   <strong aria-current="page">
                     {
                       {
-                        projects: '全部作品',
+                        projects: t('全部作品'),
                         workflow:
                           project.workflows?.find((graph) => graph.id === project.activeWorkflowId)?.name ||
-                          '创作工作流',
-                        assets: '小说设定库',
-                        chapters: '章节书稿',
-                        platforms: '平台作品',
-                        settings: '模型设置',
-                        'project-settings': '小说设置',
-                        'character-workflow': '人物工作流',
-                        'world-workflow': '世界观工作流',
+                          t('创作工作流'),
+                        assets: t('小说设定库'),
+                        chapters: t('章节书稿'),
+                        platforms: t('平台作品'),
+                        settings: t('模型设置'),
+                        'project-settings': t('小说设置'),
+                        'character-workflow': t('人物工作流'),
+                        'world-workflow': t('世界观工作流'),
                       }[page]
                     }
                   </strong>
@@ -1478,19 +1480,19 @@ export default function App() {
             <button
               type="button"
               className="icon-button quick-settings"
-              aria-label="模型设置"
+              aria-label={t('模型设置')}
               onClick={() => navigate('settings')}
             >
               <Settings2 size={18} />
             </button>
             <span className="save-indicator">
               <span className="green-dot" />
-              {running ? '工作流运行中' : '已保存至本地'}
+              {running ? t('工作流运行中') : t('已保存至本地')}
             </span>
             <button
               type="button"
               className="icon-button help-trigger"
-              aria-label="使用指南"
+              aria-label={t('使用指南')}
               aria-haspopup="dialog"
               onClick={(event) => {
                 event.preventDefault();

@@ -1,0 +1,25 @@
+.language-switcher {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: inherit;
+
+  select {
+    min-height: 30px;
+    max-width: 110px;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    background: var(--surface, Canvas);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent, Highlight);
+      outline-offset: 2px;
+    }
+  }
+}
