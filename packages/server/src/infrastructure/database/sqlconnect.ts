@@ -141,6 +141,10 @@ export class SQLConnectService {
       throw new SQLConnectError(400, 'SQLCONNECT_CONFIRMATION_REQUIRED', '请输入与当前配置完全一致的数据库名称以确认初始化。');
     return this.run(true);
   }
+  /** Online backup must await adapter settlement, not just the HTTP timeout. */
+  async waitForIdle(): Promise<void> {
+    if (this.active) await this.active.catch(() => {});
+  }
   async close(): Promise<void> {
     this.closed = true;
     this.controller?.abort();

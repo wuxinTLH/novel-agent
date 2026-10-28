@@ -6,6 +6,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createApplication } from '../application.js';
 import { createServiceContext, type ServiceContext } from '../context.js';
 import { activateScopedStorage } from '../../infrastructure/storage/storage-config.js';
+import { createWorkerPlatformAccountLockClient, installPlatformAccountLockClient, type PlatformAccountLockCredentials } from './platform-account-lock.js';
 
 interface RuntimeData {
   root: string;
@@ -15,6 +16,7 @@ interface RuntimeData {
   appRoot: string;
   inheritEnvironment: boolean;
   capability: string;
+  platformAccountLocks: PlatformAccountLockCredentials;
 }
 
 /** Private entry point only. Never import the server index or install process signal hooks. */
@@ -75,6 +77,7 @@ async function run(data: RuntimeData) {
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('UNSAFE_TENANT_DIRECTORY');
     }
     binding = activateScopedStorage(data.root, data.dir, data.ownerId);
+    installPlatformAccountLockClient(createWorkerPlatformAccountLockClient(parentPort!, data.platformAccountLocks));
     context = createServiceContext(data.dir, data.inheritEnvironment);
     const app = createApplication(context, {
       port: data.port,

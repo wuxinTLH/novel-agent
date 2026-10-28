@@ -6,6 +6,8 @@ import { Worker } from 'node:worker_threads';
 import type { AuthService } from '../../features/auth/auth.js';
 import { installHttpFallbacks } from '../http.js';
 import { readAuthMode } from '../../infrastructure/storage/storage-config.js';
+import { mainPlatformAccountLockCoordinator } from './platform-account-lock.js';
+import { createOriginPolicy } from '../trusted-origin.js';
 
 export interface IsolatedTenantService {
   register(app: express.Express): void;
@@ -18,6 +20,7 @@ export interface IsolatedTenantApplicationOptions {
   auth: AuthService;
   services?: readonly IsolatedTenantService[];
   enabled: boolean;
+  waitForControlPlaneIdle?: () => Promise<void>;
 }
 export interface TenantRuntime {
   readonly dir: string;
@@ -45,37 +48,26 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
   const mode = readAuthMode(options.dir);
   let closing = false;
   let closeTask: Promise<void> | undefined;
+  let maintenance = false;
+  let maintenanceFailed = false;
+  const inFlight = new Set<express.Response>();
 
   // Deliberately no global body parser: delegation preserves exact wire bytes and uploads.
   const windows = new Map<string, number[]>();
+  const originAllowed = createOriginPolicy(options.port);
   app.use((req, res, next) => {
-    const allowed = (value: string) => {
-      try {
-        const url = new URL(value);
-        return (
-          url.protocol === 'http:' &&
-          ['5173', String(options.port)].includes(url.port) &&
-          (['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname) ||
-            /^10\./.test(url.hostname) ||
-            /^192\.168\./.test(url.hostname) ||
-            /^172\.(1[6-9]|2\d|3[0-1])\./.test(url.hostname))
-        );
-      } catch {
-        return false;
-      }
-    };
-    if (
-      !allowed(`http://${req.get('host') || ''}`) ||
-      (req.get('origin') && !allowed(req.get('origin')!)) ||
-      req.get('sec-fetch-site') === 'cross-site'
-    )
+    // OIDC uses a top-level cross-site GET redirect. Only this exact callback
+    // bypasses the fetch-site test; its handler verifies single-use state,
+    // browser binding, PKCE and signed nonce before issuing a session.
+    const oidcCallback = req.method === 'GET' && req.path === '/api/auth/account/oidc/callback';
+    if (!originAllowed(req, oidcCallback))
       return res.status(403).json({ code: 'LOCAL_ORIGIN_REJECTED', error: '只允许本机或局域网来源访问。' });
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'",
     );
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     if (req.path.toLowerCase().startsWith('/api/')) {
@@ -88,6 +80,15 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
       if (recent.length > 240) return res.status(429).json({ code: 'RATE_LIMITED', retryable: true });
     }
     if (closing) return res.status(503).json({ code: 'TENANT_RUNTIME_CLOSING', retryable: false });
+    const maintenanceStatus = /^\/api\/admin\/online-maintenance(?:\/|$)/i.test(req.path);
+    if (maintenance && !maintenanceStatus)
+      return res.status(503).json({ code: maintenanceFailed ? 'MAINTENANCE_RECOVERY_REQUIRED' : 'MAINTENANCE_IN_PROGRESS', retryable: !maintenanceFailed });
+    if (!maintenanceStatus) {
+      inFlight.add(res);
+      const done = () => inFlight.delete(res);
+      res.once('finish', done);
+      res.once('close', done);
+    }
     next();
   });
   app.use('/api/auth', express.json({ limit: '16mb' }), options.auth.router);
@@ -147,7 +148,10 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
       import.meta.url.endsWith('.ts') ? './tenant-runtime-worker.ts' : './tenant-runtime-worker.js',
       import.meta.url,
     );
+    const locks = mainPlatformAccountLockCoordinator();
+    const platformAccountLocks = locks.credentials();
     const workerData = {
+      platformAccountLocks,
       root: options.dir,
       dir,
       ownerId: options.enabled ? ownerId : undefined,
@@ -167,6 +171,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
           },
         )
       : new Worker(moduleUrl, { workerData, stdout: true, stderr: true });
+    locks.bindWorker(worker, platformAccountLocks);
     // Worker/driver exceptions can contain credentials. Never forward their output.
     worker.stdout?.resume();
     worker.stderr?.resume();
@@ -221,7 +226,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
         worker.once('exit', (code) => {
           exited = true;
           clearTimeout(poisonTimer);
-          if (closing && code !== 0 && entry.state !== 'failed') shutdownFailures.add(entry);
+          if ((closing || maintenance) && code !== 0) shutdownFailures.add(entry);
           if (entry.state !== 'closing') fail();
           else {
             clearTimeout(timer);
@@ -317,6 +322,71 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
   return {
     app,
     contexts,
+    /** A full application barrier: no new control-plane writes, no running tenant/background workers. */
+    async acquireQuiescence(signal?: AbortSignal) {
+      if (maintenance || closing) throw new Error('MAINTENANCE_ALREADY_ACTIVE');
+      const failedBefore = new Set(shutdownFailures);
+      maintenance = true;
+      let held = true;
+      const deadline = Date.now() + 30_000;
+      try {
+        // The task HTTP response must finish before starting this barrier.
+        while (inFlight.size) {
+          if (signal?.aborted) throw new Error('MAINTENANCE_CANCELLED');
+          if (Date.now() > deadline) throw new Error('MAINTENANCE_DRAIN_TIMEOUT');
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        if (options.waitForControlPlaneIdle) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              options.waitForControlPlaneIdle(),
+              new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('MAINTENANCE_CONTROL_DRAIN_TIMEOUT')), 30_000); }),
+            ]);
+          } finally { clearTimeout(timer); }
+        }
+        for (const entry of contexts.values()) {
+          if (entry.state === 'failed') throw new Error('MAINTENANCE_RUNTIME_UNHEALTHY');
+          entry.state = 'closing';
+          entry.worker.postMessage({ type: 'close' });
+        }
+        for (const entry of contexts.values()) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const exited = await Promise.race([
+            exits.get(entry)!.then(() => true),
+            new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 30_000); }),
+          ]);
+          clearTimeout(timer);
+          if (!exited || entry.state !== 'closed') throw new Error('MAINTENANCE_RUNTIME_DRAIN_FAILED');
+        }
+        await Promise.allSettled([...active]);
+        if (shutdownFailures.size !== failedBefore.size) throw new Error('MAINTENANCE_RUNTIME_SHUTDOWN_FAILED');
+        contexts.clear();
+        capabilities.clear();
+        csrfTokens.clear();
+        exits.clear();
+        poison.clear();
+        if (signal?.aborted) throw new Error('MAINTENANCE_CANCELLED');
+        return {
+          scope: 'all-tenants-and-control-plane' as const,
+          assertHeld() {
+            if (!held || !maintenance || maintenanceFailed || closing || contexts.size)
+              throw new Error('MAINTENANCE_LEASE_NOT_HELD');
+          },
+          async release() {
+            if (!held) return;
+            held = false;
+            maintenance = false;
+          },
+        };
+      } catch (error) {
+        held = false;
+        // A partial shutdown or outstanding request can still write. Never take a snapshot.
+        // Remain unavailable until restart rather than resurrecting ambiguous workers.
+        maintenanceFailed = true;
+        throw error;
+      }
+    },
     /** Outer business services must use the same worker-owned CSRF token as proxied APIs. */
     async requireRuntimeCsrf(req: express.Request, res: express.Response, next: express.NextFunction) {
       if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();

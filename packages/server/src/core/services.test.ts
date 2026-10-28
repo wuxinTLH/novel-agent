@@ -80,7 +80,7 @@ async function fixture() {
 test('service registry is explicit, preserves guard order, and rejects duplicate IDs before registration', () => {
   assert.deepEqual(
     coreServices.map((service) => service.id),
-    ['platform', 'model-settings', 'projects', 'workflow', 'assets', 'generation', 'chapters'],
+    ['platform', 'model-settings', 'projects', 'workflow', 'assets', 'generation', 'chapters', 'documents'],
   );
   let calls = 0;
   const service: FeatureService = {

@@ -1,6 +1,7 @@
 import express, { type Request } from 'express';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AuthService } from '../auth/auth.js';
+import { createOnlineMaintenanceRouter, type OnlineMaintenanceManager } from './online-maintenance.js';
 import { readStorageManifest, readStorageProfiles, writeStorageProfiles } from '../../infrastructure/storage/storage-config.js';
 
 function loopback(value: string | undefined): boolean {
@@ -27,6 +28,7 @@ export function createAdministrationRouter(options: {
   dir: string;
   auth: AuthService;
   tenantCount?: () => number;
+  onlineMaintenance?: OnlineMaintenanceManager;
 }) {
   const router = express.Router();
   const token = randomBytes(32).toString('hex');
@@ -57,6 +59,11 @@ export function createAdministrationRouter(options: {
       return res.status(403).json({ code: 'ADMIN_FORBIDDEN', error: '管理员权限或操作凭据无效。' });
     next();
   });
+  if (options.onlineMaintenance) router.use('/online-maintenance', createOnlineMaintenanceRouter({
+    manager: options.onlineMaintenance,
+    // The preceding mandatory gate already validates administrator + write CSRF.
+    authorize: (_req, _res, next) => next(),
+  }));
   const profiles = () => readStorageProfiles(options.dir);
   router.get('/status', (_req, res) => {
     const config = profiles();
@@ -78,7 +85,7 @@ export function createAdministrationRouter(options: {
           })) || [],
       },
       runtime: { tenantCount: options.tenantCount?.() || 0 },
-      maintenance: { offlineRequired: true },
+      maintenance: { offlineRequired: true, onlineBackupAvailable: !!options.onlineMaintenance },
     });
   });
   router.get('/storage', (_req, res) => {

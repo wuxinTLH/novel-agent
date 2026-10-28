@@ -9,3 +9,14 @@ data/
 test-results/
 .tmp-fanqie*/
 .tmp-build/
+
+# Disposable caches and local tool output; dependency lockfiles stay tracked.
+.cache/
+.vite/
+coverage/
+playwright-report/
+blob-report/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

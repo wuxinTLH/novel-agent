@@ -8,6 +8,7 @@ import { migrateProjects } from '../projects/store.js';
 import { PlatformStore } from '../platforms/platform-store.js';
 import { PublicationQueue } from '../platforms/publication-queue.js';
 import os from 'node:os';
+import { setImmediate as yieldToRuntime } from 'node:timers/promises';
 import { storageConfigSchema, profileForOwner } from '../../../../../shared/storage.js';
 import { sqlConnectConfigSchema } from '../../../../../shared/sqlconnect.js';
 
@@ -50,12 +51,26 @@ export interface MaintenanceBackend {
   /** Atomic, conflict-refusing import preserving revisions and receipts. */
   importSnapshot(profileId: string, snapshot: MaintenanceSnapshot): Promise<void>;
 }
+export interface MaintenanceQuiescence {
+  /** Trusted runtime integration only; never construct this lease from HTTP input. */
+  scope: 'all-tenants-and-control-plane';
+  /** Throws unless all writers are drained and new work remains blocked. */
+  assertHeld(): void;
+}
 export interface MaintenanceBase {
   dataDir: string;
   /** Acknowledges ALL processes sharing ANY selected SQL database have stopped. */
   runtimeStopped: true;
   backend?: MaintenanceBackend;
 }
+export type FullBackupOptions = (
+  | MaintenanceBase
+  | {
+      dataDir: string;
+      quiescence: MaintenanceQuiescence;
+      backend?: MaintenanceBackend;
+    }
+) & { destination: string; beforeCommit?: () => void | Promise<void> };
 const entrySchema = z
   .object({
     path: z.string(),
@@ -74,7 +89,7 @@ const manifestSchema = z
     backupId: z.string().uuid(),
     createdAt: z.string().datetime(),
     complete: z.literal(true),
-    consistency: z.literal('offline-all-runtimes-stopped'),
+    consistency: z.enum(['offline-all-runtimes-stopped', 'quiesced-all-tenants-and-control-plane']),
     exclusions: z.array(z.string()),
     entries: z.array(entrySchema),
     sql: z.array(
@@ -273,10 +288,11 @@ function assertBackendRequired(dir: string, backend?: MaintenanceBackend) {
   );
 }
 
-export async function backupFull(
-  options: MaintenanceBase & { destination: string },
-): Promise<FullBackupManifest> {
-  stopped(options);
+export async function backupFull(options: FullBackupOptions): Promise<FullBackupManifest> {
+  if ('quiescence' in options) {
+    check(options.quiescence.scope === 'all-tenants-and-control-plane', 'MAINTENANCE_QUIESCENCE_REQUIRED');
+    options.quiescence.assertHeld();
+  } else stopped(options);
   const root = path.resolve(options.dataDir),
     destination = path.resolve(options.destination);
   unrelated(root, destination);
@@ -284,7 +300,8 @@ export async function backupFull(
   safeAncestors(path.dirname(destination));
   check(!fs.existsSync(destination), 'MAINTENANCE_DESTINATION_EXISTS');
   assertBackendRequired(root, options.backend);
-  const release = acquireDataLock(root);
+  // A quiesced runtime retains its instance lock for the entire lease.
+  const release = 'quiescence' in options ? () => {} : acquireDataLock(root);
   try {
     return await performBackup(options);
   } finally {
@@ -292,9 +309,7 @@ export async function backupFull(
   }
 }
 /** Caller owns the data lock. Kept private so callers cannot bypass exclusion. */
-async function performBackup(
-  options: MaintenanceBase & { destination: string },
-): Promise<FullBackupManifest> {
+async function performBackup(options: FullBackupOptions): Promise<FullBackupManifest> {
   const root = path.resolve(options.dataDir),
     destination = path.resolve(options.destination);
   unrelated(root, destination);
@@ -309,6 +324,10 @@ async function performBackup(
     fs.mkdirSync(path.join(stage, 'files'), { mode: 0o700 });
     fs.mkdirSync(path.join(stage, 'sql'), { mode: 0o700 });
     const entries = inventory(root, true);
+    if ('quiescence' in options) {
+      await yieldToRuntime();
+      options.quiescence.assertHeld();
+    }
     for (const entry of entries) {
       const target = path.join(stage, 'files', entry.path);
       if (entry.type === 'directory') fs.mkdirSync(target, { mode: 0o700 });
@@ -316,6 +335,10 @@ async function performBackup(
         const bytes = safeBytes(path.join(root, entry.path));
         check(sha256(bytes) === entry.sha256, 'MAINTENANCE_SOURCE_CHANGED');
         privateWrite(target, bytes);
+      }
+      if ('quiescence' in options) {
+        await yieldToRuntime();
+        options.quiescence.assertHeld();
       }
     }
     const sql: FullBackupManifest['sql'] = [];
@@ -337,7 +360,8 @@ async function performBackup(
       backupId: randomUUID(),
       createdAt: new Date().toISOString(),
       complete: true,
-      consistency: 'offline-all-runtimes-stopped',
+      consistency:
+        'quiescence' in options ? 'quiesced-all-tenants-and-control-plane' : 'offline-all-runtimes-stopped',
       exclusions: [...excluded, '*.tmp', '.maintenance-*'],
       entries,
       sql,
@@ -345,6 +369,9 @@ async function performBackup(
     };
     privateWrite(path.join(stage, 'backup-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
     validateBackup(stage);
+    if ('quiescence' in options) await yieldToRuntime();
+    await options.beforeCommit?.();
+    if ('quiescence' in options) options.quiescence.assertHeld();
     fs.renameSync(stage, destination);
     return manifest;
   } catch (error) {

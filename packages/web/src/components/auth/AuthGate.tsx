@@ -2,7 +2,14 @@ import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type R
 import { api, resetApiSession } from '../../services/api';
 import Administration from '../administration/Administration';
 import AccountSecurity from './AccountSecurity';
-import type { AuthStatus as Session, TurnstilePublicSettings as TurnstilePublic } from '../../../../../shared/auth';
+import { AccountAccess } from '../account/AccountAccess';
+import { AccountCompletion } from '../account/AccountCompletion';
+import { AccountSettings } from '../account/AccountSettings';
+import Modal from '../common/Modal';
+import type {
+  AuthStatus as Session,
+  TurnstilePublicSettings as TurnstilePublic,
+} from '../../../../../shared/auth';
 
 type TurnstileApi = {
   render: (element: HTMLElement, options: Record<string, unknown>) => string;
@@ -131,7 +138,24 @@ function Challenge({
   );
 }
 
+const accountRequest = <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
+  if (!path.startsWith('/api/auth/') && !path.startsWith('/api/admin/'))
+    return Promise.reject(new Error('无效账户请求路径'));
+  return api<T>(path.slice(4), { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+};
+
+type Completion = { purpose: 'register' | 'reset' | 'email'; token: string };
+function completionFromLocation(): Completion | undefined {
+  if (window.location.pathname !== '/account/complete') return;
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const purpose = fragment.get('purpose');
+  const token = fragment.get('token');
+  if ((purpose === 'register' || purpose === 'reset' || purpose === 'email') && token)
+    return { purpose, token };
+}
+
 function Login({ session }: { session: Session }) {
+  const [pendingMfa, setPendingMfa] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [turnstileToken, setToken] = useState('');
@@ -146,11 +170,15 @@ function Login({ session }: { session: Session }) {
     const token = turnstileToken;
     setToken('');
     try {
-      await api('/auth/login', {
+      const result = await api<Session | { mfaRequired: true }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password, ...(token ? { turnstileToken: token } : {}) }),
       });
       setPassword('');
+      if ('mfaRequired' in result && result.mfaRequired) {
+        setPendingMfa(true);
+        return;
+      }
       // A reload purges App's module-level pending-run caches as well as React state.
       window.location.reload();
     } catch (error) {
@@ -163,43 +191,141 @@ function Login({ session }: { session: Session }) {
   };
   return (
     <main style={{ maxWidth: 460, margin: '10vh auto', padding: 16 }}>
-      <form onSubmit={submit} style={{ ...card, ...stack }} aria-busy={busy}>
-        <h1>登录 Novel Agent</h1>
-        <label style={stack}>
-          用户名
-          <input
-            autoComplete="username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            required
-            disabled={busy}
+      {pendingMfa ? (
+        <div style={{ ...card, ...stack }}>
+          <AccountAccess
+            request={accountRequest}
+            pendingMfa
+            onAuthenticated={() => window.location.reload()}
           />
-        </label>
-        <label style={stack}>
-          密码
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            disabled={busy}
-          />
-        </label>
-        <Challenge settings={session.turnstile} attempt={attempt} token={setToken} />
-        {error && <p role="alert">{error}</p>}
-        <button disabled={busy || (session.turnstile.enabled && !turnstileToken)}>
-          {busy ? '正在登录…' : '登录'}
-        </button>
-      </form>
+          <button type="button" onClick={() => setPendingMfa(false)}>
+            返回密码登录
+          </button>
+        </div>
+      ) : (
+        <>
+          <form onSubmit={submit} style={{ ...card, ...stack }} aria-busy={busy}>
+            <h1>登录 Novel Agent</h1>
+            <label style={stack}>
+              用户名
+              <input
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                required
+                disabled={busy}
+              />
+            </label>
+            <label style={stack}>
+              密码
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                disabled={busy}
+              />
+            </label>
+            <Challenge settings={session.turnstile} attempt={attempt} token={setToken} />
+            {error && <p role="alert">{error}</p>}
+            <button disabled={busy || (session.turnstile.enabled && !turnstileToken)}>
+              {busy ? '正在登录…' : '登录'}
+            </button>
+          </form>
+          <div style={{ ...card, marginTop: 16 }}>
+            <AccountAccess
+              request={accountRequest}
+              turnstile={session.turnstile}
+              renderChallenge={(attempt, token) => (
+                <Challenge settings={session.turnstile} attempt={attempt} token={token} />
+              )}
+              onAuthenticated={() => window.location.reload()}
+            />
+          </div>
+        </>
+      )}
+    </main>
+  );
+}
+
+function CompletionPage({ session, completion }: { session: Session; completion?: Completion }) {
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const oidc = new URLSearchParams(window.location.search).get('oidc');
+  const home = () => window.location.assign('/');
+  useEffect(() => {
+    if (oidc === 'success') home();
+  }, [oidc]);
+  return (
+    <main style={{ ...card, ...stack, maxWidth: 480, margin: '10vh auto' }}>
+      <h1>账户操作</h1>
+      {done ? (
+        <p role="status">账户操作已完成，请返回登录。</p>
+      ) : oidc === 'mfa' ? (
+        <AccountAccess request={accountRequest} pendingMfa onAuthenticated={home} />
+      ) : completion?.purpose === 'email' ? (
+        session.enabled && session.authenticated ? (
+          <>
+            <p>确认将此邮箱关联到当前登录的账户。</p>
+            <button
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError('');
+                void accountRequest('/api/auth/account/email/complete', 'POST', { token: completion.token })
+                  .then(() => setDone(true))
+                  .catch((reason: unknown) => setError(message(reason)))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              确认邮箱
+            </button>
+            {error && <p role="alert">{error}</p>}
+          </>
+        ) : (
+          <p role="status">
+            请先登录此邮箱所属的账户，再重新打开邮件中的原始链接。验证链接不会自动关联到其他账户。
+          </p>
+        )
+      ) : completion ? (
+        <AccountCompletion
+          purpose={completion.purpose}
+          token={completion.token}
+          request={accountRequest}
+          onComplete={() => setDone(true)}
+        />
+      ) : (
+        <p role="alert">
+          {oidc === 'failed'
+            ? 'OIDC 登录失败，请返回登录后重试。'
+            : oidc === 'success'
+              ? '正在返回应用…'
+              : '账户链接无效或已失效，请重新申请邮件。'}
+        </p>
+      )}
+      <button type="button" onClick={home}>
+        返回应用 / 登录
+      </button>
     </main>
   );
 }
 
 export default function AuthGate({ children }: { children: ReactNode }) {
+  const [completion] = useState(completionFromLocation);
+  useEffect(() => {
+    if (window.location.pathname === '/account/complete' && window.location.hash)
+      window.history.replaceState(
+        window.history.state,
+        '',
+        window.location.pathname + window.location.search,
+      );
+  }, []);
   const [session, setSession] = useState<Session>();
   const [error, setError] = useState('');
   const [admin, setAdmin] = useState(false);
+  const [account, setAccount] = useState(false);
   const [security, setSecurity] = useState(false);
   const [localAdmin, setLocalAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -251,6 +377,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         {error && <button onClick={() => void refresh()}>重试</button>}
       </main>
     );
+  if (window.location.pathname === '/account/complete')
+    return <CompletionPage session={session} completion={completion} />;
   if (!session.enabled)
     return (
       <>
@@ -291,6 +419,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
             管理控制台
           </button>
         )}
+        <button type="button" onClick={() => setAccount(true)}>
+          邮箱与双重验证
+        </button>
         <button type="button" onClick={() => setSecurity(true)}>
           账号安全
         </button>
@@ -302,6 +433,11 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       {children}
       {admin && <Administration close={() => setAdmin(false)} mode="authenticated" />}
       {security && <AccountSecurity close={() => setSecurity(false)} />}
+      {account && (
+        <Modal title="邮箱与双重验证" close={() => setAccount(false)} className="administration">
+          <AccountSettings request={accountRequest} onSessionRevoked={() => window.location.reload()} />
+        </Modal>
+      )}
     </div>
   );
 }

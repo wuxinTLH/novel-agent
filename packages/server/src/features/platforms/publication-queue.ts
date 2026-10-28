@@ -238,7 +238,9 @@ export class PublicationQueue {
     validateRemotePlan(preview);
     const keys = preview.chapters.map(c => identity(preview, c));
     if (new Set(keys).size !== keys.length) reject('DUPLICATE_CHAPTER', 'Chapter appears more than once');
-    await this.hooks.validate(freeze(clone(preview)));
+    const release = await this.hooks.acquire?.(freeze(clone(preview)));
+    try { await this.hooks.validate(freeze(clone(preview))); }
+    finally { await release?.(); }
     const batch: PublicationBatch = { id: preview.id, preview, state: 'preview',
       items: preview.chapters.map(snapshot => ({ id: randomUUID(), snapshot: clone(snapshot), state: 'queued', mutationStarted: false })),
       startRequestIds: [], pauseRequested: false, createdAt: preview.createdAt, updatedAt: preview.createdAt };

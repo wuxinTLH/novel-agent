@@ -125,10 +125,10 @@ test('explicit start is idempotent and sequential, lock spans entire batch, muta
   f.queue.start(batch.id, input); f.queue.start(batch.id, input);
   f.queue.start(batch.id, { ...input, requestId: 'different-active-request' });
   await f.queue.waitForIdle();
-  assert.deepEqual(order, ['lock', 'chapter-1', 'chapter-2', 'unlock']);
+  assert.deepEqual(order, ['lock', 'unlock', 'lock', 'chapter-1', 'chapter-2', 'unlock']);
   assert.equal(f.queue.get(batch.id).state, 'completed');
   f.queue.start(batch.id, input);
-  assert.deepEqual(order, ['lock', 'chapter-1', 'chapter-2', 'unlock']);
+  assert.deepEqual(order, ['lock', 'unlock', 'lock', 'chapter-1', 'chapter-2', 'unlock']);
 });
 
 test('pause finishes in-flight item, starts no next chapter, fresh explicit request resumes', async t => {

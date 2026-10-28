@@ -166,6 +166,13 @@ for (const dialect of ['postgresql', 'mysql', 'sqlserver'] as const) {
     });
     assert.deepEqual(await f.storage.readDocument('other', 'auth.json'), { revision: 1, content: '{}' });
     assert.equal(await f.storage.readDocument('missing', 'x'), null);
+    const beforeMissingProjectionRead = structuredClone(f.state());
+    assert.equal(await f.storage.readDocument('missing', 'projects.json'), null);
+    assert.deepEqual(
+      f.state(),
+      beforeMissingProjectionRead,
+      'missing projected reads must not create owners',
+    );
     assert.ok(
       f.calls.some((call) => call.sql.includes(dialect === 'sqlserver' ? 'UPDLOCK, HOLDLOCK' : 'FOR UPDATE')),
     );

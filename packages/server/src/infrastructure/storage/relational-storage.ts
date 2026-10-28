@@ -248,11 +248,59 @@ export function createRelationalAdapter(input: SQLConnectConfig): RelationalAdap
   };
 }
 
-/** New isolated v3 tables only. Repository gate makes full snapshots consistent with every writer;
- * owner locks additionally establish the per-tenant CAS boundary. No process/runtime activation. */
+/** Fair single-instance admission: owner work shares the barrier, maintenance is exclusive.
+ * Queue before opening a transaction so contending owners do not exhaust the connection pool.
+ * The SQL locks below remain authoritative across instances. */
+class RepositoryAdmission {
+  private readonly owners = new Set<string>();
+  private exclusive = false;
+  private readonly queue: Array<{ owner?: string; enter: () => void }> = [];
+
+  async run<T>(owner: string | undefined, work: () => Promise<T>): Promise<T> {
+    await new Promise<void>((enter) => {
+      this.queue.push({ owner, enter });
+      this.drain();
+    });
+    try {
+      return await work();
+    } finally {
+      if (owner === undefined) this.exclusive = false;
+      else this.owners.delete(owner);
+      this.drain();
+    }
+  }
+
+  private drain(): void {
+    if (this.exclusive) return;
+    for (let index = 0; index < this.queue.length;) {
+      const item = this.queue[index];
+      // Never admit work past a waiting exclusive operation (prevents snapshot starvation).
+      if (item.owner === undefined) {
+        if (index === 0 && this.owners.size === 0) {
+          this.queue.shift();
+          this.exclusive = true;
+          item.enter();
+        }
+        return;
+      }
+      if (this.owners.has(item.owner)) {
+        index++;
+        continue;
+      }
+      this.queue.splice(index, 1);
+      this.owners.add(item.owner);
+      item.enter();
+    }
+  }
+}
+
+/** New isolated v3 tables only. Shared repository locks permit independent owners;
+ * exclusive snapshot locks and per-owner locks preserve snapshot consistency and CAS.
+ * Admission is scoped to this instance; no process/runtime activation or write-behind. */
 export class RelationalStorage implements AsyncDocumentStorage {
   private readonly adapter: RelationalAdapter;
   private readonly dialect: RelationalDialect;
+  private readonly admission = new RepositoryAdmission();
   constructor(config: SQLConnectConfig, adapter?: RelationalAdapter) {
     const parsed = sqlConnectConfigSchema.parse(config);
     if (adapter && adapter.dialect !== parsed.driver) fail('DRIVER_MISMATCH');
@@ -266,7 +314,10 @@ export class RelationalStorage implements AsyncDocumentStorage {
         ? `dbo.${tables[key]}`
         : tables[key];
   }
-  private async transaction<T>(run: (tx: RelationalTransaction) => Promise<T>): Promise<T> {
+  private transaction<T>(run: (tx: RelationalTransaction) => Promise<T>, ownerId?: string): Promise<T> {
+    return this.admission.run(ownerId, () => this.executeTransaction(run));
+  }
+  private async executeTransaction<T>(run: (tx: RelationalTransaction) => Promise<T>): Promise<T> {
     let tx: RelationalTransaction | undefined;
     let committing = false,
       broken = false;
@@ -321,7 +372,13 @@ export class RelationalStorage implements AsyncDocumentStorage {
     }
   }
   private async lock(tx: RelationalTransaction, table: 'gate' | 'owners', column: string, value: string) {
-    const hint = this.dialect === 'sqlserver' ? ' WITH (UPDLOCK, HOLDLOCK)' : '';
+    // SQL Server update locks are compatible with shared locks; the barrier needs XLOCK.
+    const hint =
+      this.dialect === 'sqlserver'
+        ? table === 'gate'
+          ? ' WITH (XLOCK, HOLDLOCK)'
+          : ' WITH (UPDLOCK, HOLDLOCK)'
+        : '';
     const rows = await tx.query(
       `SELECT revision FROM ${this.table(table)}${hint} WHERE ${column} = ?${this.dialect === 'sqlserver' ? '' : ' FOR UPDATE'}`,
       [value],
@@ -329,8 +386,16 @@ export class RelationalStorage implements AsyncDocumentStorage {
     // A missing gate must never silently turn cross-process serialization into a no-op.
     if (rows.length !== 1) fail('SCHEMA_NOT_READY');
   }
-  private async gate(tx: RelationalTransaction) {
-    await this.lock(tx, 'gate', 'repository_id', 'default');
+  private async gate(tx: RelationalTransaction, shared = false) {
+    if (!shared) return this.lock(tx, 'gate', 'repository_id', 'default');
+    const hint = this.dialect === 'sqlserver' ? ' WITH (HOLDLOCK)' : '';
+    const suffix =
+      this.dialect === 'postgresql' ? ' FOR SHARE' : this.dialect === 'mysql' ? ' LOCK IN SHARE MODE' : '';
+    const rows = await tx.query(
+      `SELECT revision FROM ${this.table('gate')}${hint} WHERE repository_id = ?${suffix}`,
+      ['default'],
+    );
+    if (rows.length !== 1) fail('SCHEMA_NOT_READY');
   }
   private async owner(tx: RelationalTransaction, ownerId: string) {
     await this.insertAbsent(tx, 'owners', ['owner_id', 'revision'], [ownerId, 0], ['owner_id']);
@@ -385,7 +450,17 @@ export class RelationalStorage implements AsyncDocumentStorage {
     validate(identifier, ownerId);
     validate(documentKey, key);
     return this.transaction(async (tx) => {
-      if (key === 'projects.json') await this.gate(tx);
+      await this.gate(tx, true);
+      // Reconstruction spans several queries; serialize it with this owner's projection updates.
+      if (key === 'projects.json') {
+        const owners = await tx.query(
+          `SELECT revision FROM ${this.table('owners')}${this.dialect === 'sqlserver' ? ' WITH (UPDLOCK, HOLDLOCK)' : ''} WHERE owner_id = ?${this.dialect === 'sqlserver' ? '' : ' FOR UPDATE'}`,
+          [ownerId],
+        );
+        // On PostgreSQL a missing row cannot be locked: return this pre-insert view
+        // rather than reconstruct a concurrently created owner without its lock.
+        if (!owners.length) return null;
+      }
       const rows = await tx.query(
         `SELECT revision, content FROM ${this.table('documents')} WHERE owner_id = ? AND document_key = ?`,
         [ownerId, key],
@@ -399,7 +474,7 @@ export class RelationalStorage implements AsyncDocumentStorage {
                 : String(rows[0].content),
           }
         : null;
-    });
+    }, ownerId);
   }
   private async current(tx: RelationalTransaction, ownerId: string, key: string) {
     return tx.query(
@@ -445,7 +520,7 @@ export class RelationalStorage implements AsyncDocumentStorage {
     validate(revisionSchema, expectedRevision);
     if (expectedRevision === Number.MAX_SAFE_INTEGER) fail('REVISION_OVERFLOW');
     return this.transaction(async (tx) => {
-      await this.gate(tx);
+      await this.gate(tx, true);
       await this.owner(tx, ownerId);
       const rows = await this.current(tx, ownerId, key);
       if ((rows.length ? number(rows[0].revision) : 0) !== expectedRevision) fail('REVISION_CONFLICT');
@@ -453,7 +528,7 @@ export class RelationalStorage implements AsyncDocumentStorage {
       await this.put(tx, ownerId, key, content, next, rows.length > 0);
       await this.bump(tx, ownerId);
       return next;
-    });
+    }, ownerId);
   }
   async importDocuments(
     ownerId: string,
@@ -465,7 +540,7 @@ export class RelationalStorage implements AsyncDocumentStorage {
     documents = validate(z.array(importSchema), documents);
     if (new Set(documents.map((document) => document.key)).size !== documents.length) fail('INVALID_INPUT');
     return this.transaction(async (tx) => {
-      await this.gate(tx);
+      await this.gate(tx, true);
       await this.owner(tx, ownerId);
       const receipts = await tx.query(
         `SELECT document_count FROM ${this.table('receipts')} WHERE owner_id = ? AND source_hash = ?`,
@@ -484,7 +559,7 @@ export class RelationalStorage implements AsyncDocumentStorage {
       );
       await this.bump(tx, ownerId);
       return { imported: true, count: documents.length };
-    });
+    }, ownerId);
   }
   async exportSnapshot(): Promise<StorageSnapshot> {
     return this.transaction(async (tx) => {

@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { defaultPlatformAccountLockClient, PlatformAccountLockError, type PlatformAccountLockClient, type PlatformAccountLease } from '../../core/tenancy/platform-account-lock.js';
 import { PublicationQueue } from './publication-queue.js';
 import type { PublicationPreview, PublicationBatch, PublicationChapterRemotePlan } from '../../../../../shared/publication.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -46,6 +48,7 @@ export function publicOperation(record: DraftOperationRecord): DraftOperation {
 }
 export interface PlatformRuntimeOptions {
   browser?: DraftBrowserAdapter;
+  accountLocks?: PlatformAccountLockClient;
 }
 
 /** One instance per application; owns all platform state, browser sessions and task locks. */
@@ -59,6 +62,10 @@ export class PlatformRuntime {
   private unavailableReason?: string;
   private projectLocks = new Set<string>();
   private accountLocks = new Set<string>();
+  private readonly externalLocks: PlatformAccountLockClient;
+  private loginLeases = new Map<string, PlatformAccountLease>();
+  private loginOperations = new Map<string, Promise<unknown>>();
+  private lockContext = new AsyncLocalStorage<{ providerId: string; accountId?: string }>();
   private logins = new Map<string, PlatformLogin>();
   private loginTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private tasks = new Set<Promise<void>>();
@@ -76,15 +83,19 @@ export class PlatformRuntime {
     options: PlatformRuntimeOptions = {},
   ) {
     this.browser = options.browser ?? new FanqieBrowser();
+    this.externalLocks = options.accountLocks ?? defaultPlatformAccountLockClient();
     try {
       // Validate encryption before doing any platform migration; wrong keys preserve both files.
       this.secretStore = new SecretStore(store.dir);
       this.platformStore = new PlatformStore(store.dir);
       this.publicationQueue = new PublicationQueue(path.join(store.dir, 'publication-queue.json'), {
-        validate: (preview, items) => this.validatePublication(preview, items),
-        acquire: async (preview) => this.acquire(preview.target.projectId, this.connection(preview.target.projectId, preview.target.connectionId)),
-        execute: (preview, item, context) => this.runPublicationItem(preview, item, context),
-        reconcile: (preview, item) => this.reconcilePublicationItem(preview, item),
+        validate: (preview, items) => this.lockContext.run(preview.target, () => this.validatePublication(preview, items)),
+        acquire: async (preview) => {
+          const record = this.connection(preview.target.projectId, preview.target.connectionId);
+          return this.hasAccountLock(record) ? () => {} : this.acquire(preview.target.projectId, record);
+        },
+        execute: (preview, item, context) => this.lockContext.run(preview.target, () => this.runPublicationItem(preview, item, context)),
+        reconcile: (preview, item) => this.lockContext.run(preview.target, () => this.reconcilePublicationItem(preview, item)),
       });
     } catch {
       this.unavailableReason =
@@ -144,7 +155,7 @@ export class PlatformRuntime {
   private accountKey(record: ConnectionRecord) {
     return `${record.providerId}:${record.accountId}`;
   }
-  private acquire(projectId: string, record?: ConnectionRecord, completingLoginId?: string) {
+  private acquireLocal(projectId: string, record?: ConnectionRecord, completingLoginId?: string) {
     this.assertWritable(projectId);
     const key = record ? this.accountKey(record) : undefined;
     const activeLogin = [...this.logins.values()].some(
@@ -172,14 +183,39 @@ export class PlatformRuntime {
       if (key) this.accountLocks.delete(key);
     };
   }
+  private async externalLease(record?: ConnectionRecord): Promise<PlatformAccountLease> {
+    try {
+      // Unknown credentials/login can resolve to ANY account; exclude the whole provider.
+      return await this.externalLocks.acquire({ providerId: record?.providerId ?? 'tomato', ...(record ? { accountId: record.accountId } : {}) });
+    } catch (error) {
+      if (error instanceof PlatformAccountLockError)
+        throw new PlatformError(error.code === 'PLATFORM_BUSY' ? 409 : 503, error.code, error.message);
+      throw new PlatformError(503, 'PLATFORM_LOCK_UNAVAILABLE', '平台账号安全锁不可用；未执行外部操作。');
+    }
+  }
+  private async acquire(projectId: string, record?: ConnectionRecord, completingLoginId?: string) {
+    const releaseLocal = this.acquireLocal(projectId, record, completingLoginId);
+    try {
+      // Complete-login already owns a provider-exclusive lease; never recursively acquire.
+      if (completingLoginId) {
+        if (!this.loginLeases.has(completingLoginId)) throw new PlatformError(503, 'PLATFORM_LOCK_UNAVAILABLE', '登录安全锁不可用。');
+        return releaseLocal;
+      }
+      const release = await this.externalLease(record);
+      return async () => { try { await release(); } finally { releaseLocal(); } };
+    } catch (error) { releaseLocal(); throw error; }
+  }
   async withLock<T>(
     projectId: string,
     record: ConnectionRecord | undefined,
     fn: () => Promise<T>,
     completingLoginId?: string,
   ): Promise<T> {
-    const release = this.acquire(projectId, record, completingLoginId);
-    const operation = Promise.resolve().then(fn);
+    const operation = (async () => {
+      const release = await this.acquire(projectId, record, completingLoginId);
+      const scope = { providerId: record?.providerId ?? 'tomato', ...(record ? { accountId: record.accountId } : {}) };
+      try { return await this.lockContext.run(scope, fn); } finally { await release(); }
+    })();
     const settled = operation.then(
       () => {},
       () => {},
@@ -188,7 +224,6 @@ export class PlatformRuntime {
     try {
       return await operation;
     } finally {
-      release();
       this.tasks.delete(settled);
     }
   }
@@ -292,7 +327,12 @@ export class PlatformRuntime {
       throw error;
     }
   }
+  private hasAccountLock(record: ConnectionRecord) {
+    const scope = this.lockContext.getStore();
+    return scope?.providerId === record.providerId && (scope.accountId === undefined || scope.accountId === record.accountId);
+  }
   async listWorks(record: ConnectionRecord): Promise<PlatformWork[]> {
+    if (!this.hasAccountLock(record)) return this.withLock(record.projectId, record, () => this.listWorks(record));
     if (record.providerId !== 'tomato')
       return this.registry.get(record.providerId).listWorks(this.credential(record), record.id);
     const state = this.state(record);
@@ -320,7 +360,8 @@ export class PlatformRuntime {
       );
     return work;
   }
-  async testConnection(record: ConnectionRecord) {
+  async testConnection(record: ConnectionRecord): Promise<PlatformConnection> {
+    if (!this.hasAccountLock(record)) return this.withLock(record.projectId, record, () => this.testConnection(record));
     if (record.providerId === 'tomato') {
       await this.verify(record, this.state(record));
     } else await this.registry.get(record.providerId).connect(this.credential(record));
@@ -336,7 +377,9 @@ export class PlatformRuntime {
       throw new PlatformError(400, 'PLATFORM_LOGIN_INVALID', '此登录入口仅适用于番茄浏览器账号。');
     if (this.loginStarting || this.accountLocks.size || this.projectLocks.size)
       throw new PlatformError(409, 'PLATFORM_LOGIN_BUSY', '有平台操作正在进行，请完成后再开始人工登录。');
-    const operation = this.withLock(projectId, record, async () => {
+    const releaseLocal = this.acquireLocal(projectId, record);
+    const operation = (async () => {
+      const release = await this.externalLease();
       const login: PlatformLogin = {
         id: randomUUID(),
         projectId,
@@ -346,25 +389,31 @@ export class PlatformRuntime {
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
         message: '请在独立浏览器内自行登录，不要在应用中输入密码或 Cookie。登录不代表账号验证已完成。',
       };
-      await this.browser.startLogin(login.id);
+      this.loginLeases.set(login.id, release);
+      try { await this.browser.startLogin(login.id); }
+      catch (error) { await this.closeLoginLease(login.id); throw error; }
       this.logins.set(login.id, login);
       const timer = setTimeout(() => {
         const current = this.logins.get(login.id);
         if (current && ['waiting', 'needs_verification'].includes(current.status)) {
           current.status = 'closed';
           current.message = '登录已超时，隔离浏览器已关闭；请重新开始。';
-          void this.browser.closeLogin(login.id).catch(() => {});
+          void this.closeLoginLease(login.id).catch(() => {});
         }
         this.loginTimers.delete(login.id);
       }, 15 * 60_000);
       timer.unref();
       this.loginTimers.set(login.id, timer);
       return login;
-    });
+    })();
     this.loginStarting = true;
+    const settled = operation.then(() => {}, () => {});
+    this.tasks.add(settled);
     try {
       return await operation;
     } finally {
+      this.tasks.delete(settled);
+      releaseLocal();
       this.loginStarting = false;
     }
   }
@@ -378,7 +427,7 @@ export class PlatformRuntime {
     ) {
       login.status = 'closed';
       login.message = '登录已超时或浏览器已关闭，请重新开始。';
-      void this.browser.closeLogin(loginId).catch(() => {});
+      void this.closeLoginLease(loginId).catch(() => {});
     }
     return structuredClone(login);
   }
@@ -387,7 +436,7 @@ export class PlatformRuntime {
     if (!['waiting', 'needs_verification'].includes(login.status))
       throw new PlatformError(410, 'PLATFORM_LOGIN_CLOSED', '本次登录已结束，请重新开始。');
     const previous = login.connectionId ? this.connection(projectId, login.connectionId) : undefined;
-    return this.withLock(
+    const operation = this.withLock(
       projectId,
       previous,
       async () => {
@@ -461,16 +510,30 @@ export class PlatformRuntime {
         clearTimeout(this.loginTimers.get(loginId));
         this.loginTimers.delete(loginId);
         await this.browser.closeLogin(loginId);
+        await this.releaseLoginLease(loginId);
         return this.publicConnection(record);
       },
       loginId,
     );
+    this.loginOperations.set(loginId, operation);
+    try { return await operation; }
+    finally { this.loginOperations.delete(loginId); }
+  }
+  private async releaseLoginLease(loginId: string) {
+    const release = this.loginLeases.get(loginId);
+    if (release) { await release(); this.loginLeases.delete(loginId); }
+  }
+  private async closeLoginLease(loginId: string) {
+    // Timer/closed-window observation cannot revoke a lock beneath in-flight verification.
+    await this.loginOperations.get(loginId)?.catch(() => {});
+    await this.browser.closeLogin(loginId);
+    await this.releaseLoginLease(loginId);
   }
   async cancelLogin(projectId: string, loginId: string) {
     const login = this.login(projectId, loginId);
     if (this.projectLocks.has(projectId))
       throw new PlatformError(409, 'PLATFORM_BUSY', '登录验证正在进行，请稍后再关闭。');
-    await this.browser.closeLogin(loginId);
+    await this.closeLoginLease(loginId);
     clearTimeout(this.loginTimers.get(loginId));
     this.loginTimers.delete(loginId);
     this.logins.set(loginId, { ...login, status: 'closed', message: '人工登录已关闭；没有上传章节。' });
@@ -569,7 +632,7 @@ export class PlatformRuntime {
     const volumeId = requestedVolumeId ?? (volumes.length === 1 ? volumes[0].id : knownVolumes.size === 1 && known.every(Boolean) ? [...knownVolumes][0] : undefined);
     const volume = volumes.find(item => item.id === volumeId);
     if (!volume) throw new PlatformError(409, 'PUBLICATION_VOLUME_REQUIRED', '请选择有效目标分卷；多个分卷不能自动猜测。');
-    return Promise.all(chapters.map(async (snapshot, index) => {
+    const plans = await Promise.allSettled(chapters.map(async (snapshot, index) => {
       const previous = known[index];
       const matches = previous ? remote.filter(item => item.id === previous.id) : remote.filter(item =>
         item.volumeId === volume.id && Number(/^第\s*(\d+)\s*章/u.exec(item.title)?.[1]) === snapshot.number);
@@ -588,6 +651,10 @@ export class PlatformRuntime {
         remoteDraftId: chapter.id, expectedRemoteFingerprint: this.remoteFingerprint(actual),
         ...(previous ? { predecessor: previous.predecessor } : {}) };
     }));
+    // A rejected read must not release the lease while sibling browser reads still run.
+    const failure = plans.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) throw failure.reason;
+    return plans.map(result => (result as PromiseFulfilledResult<PublicationChapterRemotePlan>).value);
   }
   async preparePublication(projectId: string, linkId: string, chapterIds: string[], action: 'save_draft' | 'submit_review', useAi?: 1 | 2, volumeId?: string, autoApprove = false) {
     this.assertWritable(projectId);
@@ -896,7 +963,7 @@ export class PlatformRuntime {
         '该章节已有草稿或未知操作，不能再次创建，请先只读核对。',
       );
     this.credential(record);
-    const release = this.acquire(projectId, record);
+    const release = this.acquireLocal(projectId, record);
     const operation: DraftOperationRecord = {
       id: randomUUID(),
       projectId,
@@ -927,7 +994,7 @@ export class PlatformRuntime {
     // A single explicit task, not a background upload queue. Nothing resumes automatically on startup.
     let task: Promise<void>;
     task = Promise.resolve()
-      .then(() => this.runDraft(operation, record))
+      .then(() => this.lockContext.run({ providerId: record.providerId, accountId: record.accountId }, () => this.runDraft(operation, record)))
       .catch(() => {
         // Disk failure leaves durable queued/running intent; restart maps it to unknown. Never log secrets.
       })
@@ -939,7 +1006,9 @@ export class PlatformRuntime {
     return publicOperation(operation);
   }
   private async runDraft(operation: DraftOperationRecord, record: ConnectionRecord) {
+    let release: PlatformAccountLease | undefined;
     try {
+      release = await this.externalLease(record);
       operation.state = 'running';
       operation.updatedAt = now();
       this.platforms.putDraftOperation(operation);
@@ -982,7 +1051,7 @@ export class PlatformRuntime {
         error instanceof PlatformError ? error.message : '浏览器操作中断或超时；请先只读核对，不要重复发送。';
       operation.updatedAt = now();
       this.platforms.putDraftOperation(operation);
-    }
+    } finally { await release?.(); }
   }
   private matches(operation: DraftOperationRecord, actual: VerifiedDraft) {
     return (
@@ -1177,6 +1246,7 @@ export class PlatformRuntime {
     for (const timer of this.loginTimers.values()) clearTimeout(timer);
     this.loginTimers.clear();
     await this.waitForIdle();
+    for (const loginId of this.loginLeases.keys()) await this.closeLoginLease(loginId);
     await this.browser.close();
     this.secretStore?.clearMemory();
     this.logins.clear();

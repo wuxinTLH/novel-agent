@@ -156,7 +156,7 @@ try {
   await page.getByRole('tab', { name: '备份与维护' }).click();
   assert.equal(
     await panel()
-      .getByRole('button', { name: /恢复|迁移|备份/ })
+      .getByRole('button', { name: /恢复|迁移/ })
       .count(),
     0,
     'no online destructive action buttons',

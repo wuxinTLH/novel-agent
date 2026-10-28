@@ -95,13 +95,30 @@ npm run maintenance -- migrate-all --owner <UUID> --destination <EXTERNAL_BACKUP
 
 ### 可选认证
 
-认证默认关闭；首次超级管理员仅能停服后本地创建，不提供公开注册或 HTTP 引导接口。预先通过安全方式注入环境变量 `NOVEL_BOOTSTRAP_PASSWORD`（至少 12 个字符、最多 1024 字节），然后执行：
+认证及注册、邮箱验证、找回密码、OIDC、MFA 功能默认全部关闭；首次超级管理员仅能停服后本地创建，不提供 HTTP 管理员引导接口。可选公开注册只能创建经邮箱确认的普通用户，不替代管理员引导。预先通过安全方式注入环境变量 `NOVEL_BOOTSTRAP_PASSWORD`（至少 12 个字符、最多 1024 字节），然后执行：
 
 ```powershell
 npm run admin -- bootstrap-admin --username admin --confirm
 ```
 
 不要把密码放进命令参数、文档或 Git。创建身份不会开启认证。管理界面提供用户、数据库、备份与维护、系统与安全；认证关闭时仅真实 socket 回环 + 本机 Host / Origin 可管理，写操作还需管理 CSRF，局域网免登录用户不是管理员。首次超级管理员仍仅 CLI 引导；之后可创建 / 启停用户、变更角色、重置密码和撤销会话，保护最后一个有效超级管理员。认证开启后普通用户可在账号安全中改密、查看 / 撤销自己的会话；改密、重置、停用及角色变更撤销相关会话。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
+
+### 可选完整账号功能
+
+先按上节显式启用认证；创建用户或启用下列功能不会改变认证总开关。登录页按已启用能力显示注册、找回密码、OIDC 与第二因素输入；登录后通过“邮箱与双重验证”管理邮箱和 MFA，“账号安全”继续管理密码与会话。
+
+- 邮件使用可选 nodemailer SMTP 传输：仅 `NOVEL_SMTP_ENABLED=true` 启用，并须安全注入 `NOVEL_SMTP_HOST`、`NOVEL_SMTP_USER`、`NOVEL_SMTP_PASSWORD`、`NOVEL_SMTP_FROM`；`NOVEL_SMTP_PORT` 默认 587，`NOVEL_SMTP_SECURE=true` 时默认 465。不要将真实密码写入文档、命令参数或 Git。TLS 验证不关闭；显式启用却缺少配置会启动失败。
+- 管理员另行保存注册、邮箱验证、密码恢复、MFA 的开关及邮件回链使用的 HTTPS `publicOrigin`。注册始终要求邮件确认；单次邮件令牌 15 分钟过期，完成注册不自动登录，恢复密码撤销会话但不移除 MFA。回链为 `/account/complete#purpose=...&token=...`，不要分享链接或截图。
+- OIDC 须显式配置 issuer、clientId、授权 / token / JWKS / 回调 HTTPS 地址，使用 code + PKCE S256、state、nonce、JWKS 签名和精确 issuer / audience 校验。管理员须预先将 issuer + subject 映射到已有用户；不按邮箱自动关联或自动注册，不是任意 OAuth 接入。
+- MFA 使用 TOTP，启用时仅展示一次 10 个恢复码；登录必须完成第二因素后才取得业务会话。已用 TOTP counter / 恢复码不能重放，启用或移除 MFA 撤销旧会话；仍有已绑定因素时不能通过全局关闭绕过。
+
+邮件 / OIDC 的 HTTPS 回调须另配 TLS 反向代理及 `NOVEL_TRUSTED_PUBLIC_ORIGIN=https://novel.example.com`（仅示例）：单一 HTTPS origin，无用户信息、路径、查询、片段或通配符。代理须保留浏览器 Host（含非默认端口）、清除不可信转发头，阻止直接外部访问后端；服务不信任 `X-Forwarded-*`，该变量不会让 Node 自行提供 TLS。启用后自动为认证 Cookie 设置 Secure，浏览器须改用该 HTTPS 入口；账号 `publicOrigin` 与 OIDC `redirectUri` 须与之匹配。此配置不放宽免登录本机管理员权限，也不自动开启认证。SMTP、真实 OIDC 提供商及 HTTPS / Cookie 代理部署仍需独立验收，不构成公网生产安全保证。完整配置及接口见 [认证模块说明](packages/server/src/features/auth/README.md)。
+
+### 文稿格式与临时阅读
+
+章节书稿页“文稿格式与阅读”提供 DOCX、EPUB 导出，以及“准备 PDF 打印 → 打印稿件 / 另存为 PDF”。导出按章号使用服务器正式保存的 canonical 章节，不含编辑器未保存内容或未采用候选；已有 Markdown 导出保留。PDF 是浏览器打印，不是服务端 PDF 生成，须检查本机中文字体和分页，不能保证所有阅读器排版一致。
+
+可临时打开单份 ≤ 8 MiB 的 DOCX / PDF，旧 `.doc` 须先用 Word / LibreOffice 转换。阅读副本仅存服务端内存，30 分钟过期、重启丢失，不自动导入章节或设定，也不上传第三方。每项目最多 10 份、进程最多 64 份 / 64 MiB；ZIP 最多 512 项、实际总解压 ≤ 32 MiB、单项压缩比 ≤ 200:1，验证 5 秒，DOCX 转换 10 秒 / 输出 4 MiB，最多同时处理两份。Word 仅保留清理后的文本结构，不保留图片和活动内容；PDF 仅检查文件头尾、由浏览器阅读，**不是杀毒或完整 PDF 合规扫描**，无文本提取 / OCR。详见 [文档模块边界](packages/server/src/features/documents/README.md)。
 
 ### 界面
 
@@ -153,11 +170,18 @@ MODEL_API_KEY=your-api-key
 - SQLconnect 数据库密码以明文保存在数据目录的 `sqlconnect.json`，不属于模型密钥的加密范围；保护操作系统账号、目录权限、Windows ACL 和备份。
 - 模型地址不允许指向本机、内网或云元数据地址。
 - 业务 API 修改请求仍需当前租户进程上下文的 `X-Platform-CSRF`；启用认证后另需有效会话及 `X-CSRF-Token`，原有来源 / 私网 HTTP 限制不因登录而解除。
-- 同一数据目录只允许一个应用实例。v3 数据库 Worker 使用持久连接池；隔离租户内保留同步 COMMIT 屏障，同租户等待仍阻塞，主控制面及其他租户事件循环隔离，最多 32 个租户运行时。同一 profile 的 repository 快照门锁串行化相关操作，是一致性 / 吞吐取舍，非分布式服务或性能基准声明。SQL 行锁 / 版本冲突检测不保证跨主机运行时安全，不能多实例共享 owner 运行发布任务。认证控制面同步 SQL 写入仍可能有界阻塞主线程；平台账号锁也仅运行时内生效，不防止不同租户同时使用同一外部账号。
+- 同一数据目录只允许一个应用实例。v3 数据库 Worker 使用持久连接池；普通操作按 owner 排队，不同 owner 可并发入场，完整快照 / 导入 / 迁移使用独占屏障；持久化仍等待实际 COMMIT，同租户同步等待及认证控制面同步 SQL 仍可能有界阻塞，最多 32 个租户运行时。SQL 行锁 / CAS 不是分布式租约，不支持多实例共享 owner 运行生成 / 发布。
+- 平台账号锁现由单实例控制面协调全部租户：按服务端已核验的 provider + 稳定账号身份互斥；身份尚未知的人工登录占用该平台全局锁，阻止与已知账号操作交叠。忙时拒绝，不用 TTL 或 HTTP 断开推断副作用完成；异常失败关闭。它不是跨主机 / 多实例锁，不能阻止官方后台或其他应用操作同一账号。
 - 平台登录必须由用户在隔离浏览器中完成，应用不会代填密码或验证码，也不要求粘贴 Cookie、session 或 token。点击核验会自动进入作者首页，读取实时登录身份后保存会话。
 - 固定配置 `PLATFORM_SECRETS_KEY` 才能加密跨后端重启保存平台会话；未配置时仅保存在内存。同步网站实际更新的浏览器状态，不臆造双 token 刷新接口；失效或验证码要求仍需重新人工登录。
 - 草稿上传、覆盖与送审需要明确操作授权：手动批准，或显式开启自动审批 / 配置全自动工作流。自动审批不关闭账号、正文、版本和幂等校验。删除草稿保留独立确认及只读回查。
 - 不提交平台会话、模型密钥、作品数据、公开站点研究缓存或个人截图。自动化测试不是对真实账号送审成功的证明。
+
+### 在线备份任务与离线恢复
+
+管理控制台“备份与维护 → 在线维护任务”可创建全应用备份、按受管备份 ID 校验完整性和生成离线恢复计划。备份先暂停全部租户和控制面新请求，等待已接纳操作排空并关闭全部租户 Worker / 浏览器，持有静默屏障完成快照后再恢复接入；不是只暂停当前用户。无法可靠排空则失败，不降级成活动目录复制。
+
+任务串行执行，默认最多排队 8 项、保留 100 条终态历史、最多 20 个备份 / 未完成产物；容量满需主机管理员安全整理。备份位于数据目录外的受管兄弟目录（默认 `data` 对应 `.data-managed-backups`），包含敏感材料，无浏览器下载 / 任意路径输入；应另行保护 Windows ACL 和外部密钥。界面显示的是阶段进度，不是字节百分比；取消须等当前阶段安全结束，提交阶段不能取消，重启中断不自动重试。完整性校验 / 恢复计划不证明密钥可解密、业务语义正确或目标数据库兼容，也不写入恢复目标。**实际恢复与迁移仍须停服使用 CLI**；没有定时备份、多实例在线协调或跨库原子回滚承诺。
 
 ### 离线备份与恢复
 
@@ -186,6 +210,12 @@ npm run build
 真实 PostgreSQL 可通过显式 `npm run test:postgres` 验收：仅接受 `PGDATABASE=novel_test`，连接参数由 `PGHOST`、宿主机映射端口 `PGPORT`、`PGUSER`、`PGPASSWORD` 环境变量提供，切勿将密码写入命令参数或 Git。该脚本会执行真实 v2 迁移、写入并保留唯一 `test-pg-*` 测试 owner，不是只读探测。已在测试库通过重复迁移、已有 v1 表行数保持、实际提交读回、跨 owner 隔离、并发 CAS、幂等导入及事务回滚验收；不等同于已迁移用户当前工作目录，也不代表 Cloudflare 或真实平台发布验收。
 
 构建后还可运行 `node scripts/smoke-administration.mjs`，使用临时目录和真实浏览器检查默认关闭认证的严格本机管理入口及管理界面，不连接真实数据库。新 v3 的可选真实 PostgreSQL 验收使用 `npx tsx scripts/test-relational-storage.ts`，要求显式安全提供 `PGHOST`、`PGPORT`、`PGDATABASE=novel_test`、`PGUSER`、`PGPASSWORD`；默认验证 TLS，`PGSSLMODE=disable` 仅允许回环。该脚本会建 v3 结构、写入并保留唯一 `test-v3-*` 测试 owner，不清理既有数据，不是只读探测。尚未执行该 v3 在线验收，前述真实 v2 结果不证明 v3 或 MySQL / SQL Server 在线通过。
+
+### 存储并发基准与在线验证边界
+
+[实际本地模拟报告](scripts/benchmark-storage-report.md) 使用四连接许可、模拟提交延迟和 80 次并发提交，三轮八 owner 的吞吐为约 254–261 ops/s，对照 profile 串行队列约 64–66 ops/s（3.86–4.05 倍）；单 owner 基本不变。**这是 SIMULATED 入场瓶颈实验，不执行真实 SQL / 网络 / 落盘，不是数据库性能提升证明**。可用 `npx tsx scripts/benchmark-storage.ts` 复现；实际数据库锁争用、吞吐和故障恢复仍待在线测量。
+
+新增可选 `npx tsx scripts/test-relational-storage-live.ts` 使用显式安全注入的 `PGHOST`、`PGPORT`、`PGUSER`、`PGPASSWORD`、`PGDATABASE`，且须 `STORAGE_LIVE_ALLOW_CREATE_DATABASE=1`，默认 `STORAGE_LIVE_TLS=verify`。需 CREATEDB 权限，创建 / 验收 / 删除本次唯一的两个临时数据库，不删除已有用户库、不强制断开其他会话；未执行真实在线验收。原 v2 / v3 验收入口保留，所有模拟结果不替代真实 PostgreSQL / MySQL / SQL Server 验收。
 
 ## 主要代码
 

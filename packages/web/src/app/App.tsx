@@ -63,6 +63,7 @@ import { platformFromPath, platformPath } from '../hooks/platforms/platformNavig
 import GenerationModal, { type GenerationEntry } from '../components/generation/GenerationModal';
 import GenerationCandidates from '../components/generation/GenerationCandidates';
 import GenerationProgress from '../components/generation/GenerationProgress';
+import { DocumentWorkspace } from '../components/documents/DocumentWorkspace';
 import Modal from '../components/common/Modal';
 import AddNodeDialog from '../components/workflow/AddNodeDialog';
 import ErrorBanner, { errorMessage } from '../components/common/ErrorBanner';
@@ -337,6 +338,7 @@ export default function App() {
   const chapterEditor = useChapterEditor(project, page === 'chapters');
   const { chapterId, editor, dirty, conflict: chapterConflict } = chapterEditor;
   const [manualChapter, setManualChapter] = useState(false);
+  const [documentProjectId, setDocumentProjectId] = useState<string | null>(null);
   const [generationEntry, setGenerationEntry] = useState<GenerationEntry | null>(null);
   const [platformChapterId, setPlatformChapterId] = useState('');
   const [selectedPlatform, setSelectedPlatform] = useState<PlatformId | null>(() => platformFromLocation());
@@ -1153,6 +1155,11 @@ export default function App() {
   const completed = project.steps.filter((item) => item.status === 'done').length;
   return (
     <div className="app-shell">
+      {documentProjectId === project.id && (
+        <Modal title="文稿格式与阅读" close={() => setDocumentProjectId(null)} wide>
+          <DocumentWorkspace key={project.id} projectId={project.id} />
+        </Modal>
+      )}
       <aside className="sidebar">
         <a
           className="brand"
@@ -1540,6 +1547,10 @@ export default function App() {
               )}
               {page === 'chapters' && (
                 <div className="chapter-page-actions">
+                  <button className="button secondary" onClick={() => setDocumentProjectId(project.id)}>
+                    <BookOpen size={16} />
+                    文稿格式与阅读
+                  </button>
                   <button
                     className="button secondary"
                     disabled={!project.chapters.length}

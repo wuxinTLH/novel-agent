@@ -13,6 +13,8 @@ import {
 } from 'node:crypto';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
+import { accountStateSchema, type AccountEmailTransport } from './account-state.js';
+import { AccountExtension } from './account.js';
 import type {
   AuthUser,
   AuthPrincipal,
@@ -48,6 +50,7 @@ const documentSchema = z.object({
   users: z.array(userSchema).max(10000),
   sessions: z.array(sessionSchema).max(20000),
   turnstile: turnstileSchema,
+  account: accountStateSchema.optional(),
 });
 export type AuthDocument = z.infer<typeof documentSchema>;
 /** Must atomically persist before returning; owner/global metadata, never a tenant-selected file. Single writer required. */
@@ -66,6 +69,8 @@ export interface AuthServiceOptions {
   now?: () => number;
   fetch?: typeof fetch;
   sessionTtlMs?: number;
+  /** Owner-provided delivery transport; required before enabling email features. */
+  emailTransport?: AccountEmailTransport;
 }
 export class AuthError extends Error {
   constructor(
@@ -199,6 +204,11 @@ export class AuthService {
   private readonly secure: boolean;
   private readonly ttl: number;
   private readonly attempts = new Map<string, { count: number; until: number }>();
+  private readonly pending = new Set<Promise<unknown>>();
+  /** Caller must first quiesce new HTTP requests. Tracks actual async work, not socket lifetime. */
+  async waitForIdle(): Promise<void> {
+    while (this.pending.size) await Promise.allSettled([...this.pending]);
+  }
   constructor(options: AuthServiceOptions) {
     this.options = options;
     this.enabled = options.enabled === true;
@@ -228,12 +238,52 @@ export class AuthService {
       )
         throw new Error('invalid identity');
       if (this.state.turnstile.encryptedSecret) this.decrypt(this.state.turnstile.encryptedSecret);
+      const account = this.state.account;
+      if (account) {
+        if (
+          new Set(account.profiles.map((p) => p.userId)).size !== account.profiles.length ||
+          account.profiles.some((p) => !ids.has(p.userId))
+        )
+          throw new Error('invalid account identity');
+        const emails = account.profiles.flatMap((p) => (p.email ? [p.email] : []));
+        const subjects = account.profiles.flatMap((p) =>
+          p.oidcSubject ? [JSON.stringify([p.oidcIssuer, p.oidcSubject])] : [],
+        );
+        if (new Set(emails).size !== emails.length || new Set(subjects).size !== subjects.length)
+          throw new Error('duplicate account identity');
+        if (account.config.oidc.encryptedClientSecret)
+          this.decrypt(account.config.oidc.encryptedClientSecret);
+        for (const profile of account.profiles)
+          if (profile.encryptedTotp) this.decrypt(profile.encryptedTotp);
+      }
     } catch {
       fail(503, 'AUTH_STORAGE_UNAVAILABLE');
     }
     this.initialized = true;
   }
   private save(next: AuthDocument) {
+    if (next.account) {
+      const changed = new Set(
+        this.state.users
+          .filter((old) => {
+            const current = next.users.find((u) => u.id === old.id);
+            return (
+              !current ||
+              current.disabled !== old.disabled ||
+              current.role !== old.role ||
+              current.passwordHash !== old.passwordHash
+            );
+          })
+          .map((u) => u.id),
+      );
+      next = {
+        ...next,
+        account: {
+          ...next.account,
+          tokens: next.account.tokens.filter((t) => !t.userId || !changed.has(t.userId)),
+        },
+      };
+    }
     try {
       this.persistence.write(structuredClone(documentSchema.parse(next)));
     } catch {
@@ -314,8 +364,37 @@ export class AuthService {
       token = req.get('x-csrf-token');
     return !!session && !!token && this.sameOrigin(req) && equal(token, session.csrfToken);
   }
-  private setCookie(res: Response, name: string, value: string, maxAge: number) {
-    res.cookie(name, value, { httpOnly: true, secure: this.secure, sameSite: 'strict', path: '/', maxAge });
+  private setCookie(res: Response, name: string, value: string, maxAge: number, lax = false) {
+    res.cookie(name, value, {
+      httpOnly: true,
+      secure: this.secure,
+      sameSite: lax ? 'lax' : 'strict',
+      path: '/',
+      maxAge,
+    });
+  }
+  private issueSession(req: Request, res: Response, id: string) {
+    const user = this.state.users.find((u) => u.id === id && !u.disabled);
+    if (!user) return fail(401, 'AUTH_LOGIN_FAILED');
+    const token = randomBytes(32).toString('hex'),
+      csrfToken = randomBytes(32).toString('hex'),
+      expiresAt = this.clock() + this.ttl;
+    const oldHash = hash(cookie(req, SESSION_COOKIE));
+    const active = this.state.sessions.filter((s) => s.expiresAt > this.clock() && s.tokenHash !== oldHash);
+    if (active.length >= 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
+    this.save({
+      ...this.state,
+      sessions: [...active, { tokenHash: hash(token), userId: id, csrfToken, expiresAt }],
+    });
+    this.setCookie(res, SESSION_COOKIE, token, this.ttl);
+    this.setCookie(res, PREFLIGHT_COOKIE, '', 0);
+    if (req.path === '/account/oidc/callback' && req.get('accept')?.includes('text/html'))
+      return res.redirect(303, '/account/complete?oidc=success');
+    return res.json({
+      user: publicUser(user),
+      csrfToken,
+      expiresAt: new Date(expiresAt).toISOString(),
+    } satisfies AuthSession);
   }
   private prelogin(req: Request): boolean {
     const value = cookie(req, PREFLIGHT_COOKIE),
@@ -437,6 +516,27 @@ export class AuthService {
       if (revokesCurrent) this.setCookie(res, SESSION_COOKIE, '', 0);
       return res.json({ ok: true });
     };
+    const account = new AccountExtension({
+      read: () => this.state,
+      save: (document) => this.save(document),
+      now: this.clock,
+      encrypt: (value) => this.encrypt(value),
+      decrypt: (value) => this.decrypt(value),
+      prelogin: (req) => this.prelogin(req),
+      self: requireSelf,
+      admin: requireAdmin,
+      rate: (req, key) =>
+        this.rateLimit(
+          req.socket.remoteAddress ?? 'unknown',
+          `account:${req.socket.remoteAddress ?? 'unknown'}:${key}`,
+        ),
+      turnstile: (value) => this.validateTurnstile(value),
+      issue: (req, res, id) => this.issueSession(req, res, id),
+      cookie,
+      setCookie: (res, name, value, age, lax) => this.setCookie(res, name, value, age, lax),
+      mail: this.options.emailTransport,
+      fetcher: this.fetcher,
+    });
     router.use((req, res, next) => {
       res.set('Cache-Control', 'no-store');
       res.set('Pragma', 'no-cache');
@@ -450,6 +550,7 @@ export class AuthService {
       }
       next();
     });
+    account.install(router, !!authorize);
     if (!authorize) {
       router.get('/csrf', (req, res) => {
         if (!this.sameOrigin(req)) return res.status(403).json({ error: 'AUTH_CSRF_INVALID' });
@@ -490,26 +591,7 @@ export class AuthService {
           !equal(actual.toString('hex'), stored)
         )
           return fail(401, 'AUTH_LOGIN_FAILED');
-        const token = randomBytes(32).toString('hex'),
-          csrfToken = randomBytes(32).toString('hex'),
-          expiresAt = this.clock() + this.ttl;
-        // Keep a bounded number of active sessions and rotate the current browser's old token.
-        const oldHash = hash(cookie(req, SESSION_COOKIE));
-        const active = this.state.sessions.filter(
-          (s) => s.expiresAt > this.clock() && s.tokenHash !== oldHash,
-        );
-        if (active.length >= 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
-        this.save({
-          ...this.state,
-          sessions: [...active, { tokenHash: hash(token), userId: user.id, csrfToken, expiresAt }],
-        });
-        this.setCookie(res, SESSION_COOKIE, token, this.ttl);
-        this.setCookie(res, PREFLIGHT_COOKIE, '', 0);
-        return res.json({
-          user: publicUser(user),
-          csrfToken,
-          expiresAt: new Date(expiresAt).toISOString(),
-        } satisfies AuthSession);
+        return account.finish(req, res, user.id);
       });
       router.post('/logout', (req, res) => {
         if (!this.requireCsrf(req)) return fail(403, 'AUTH_CSRF_INVALID');
@@ -700,12 +782,35 @@ export class AuthService {
       this.save({ ...this.state, turnstile: { ...rest, encryptedSecret } });
       res.json(settings());
     });
-    router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    router.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
       const known = error instanceof AuthError;
+      if (req.path === '/account/oidc/callback' && req.get('accept')?.includes('text/html'))
+        return res.redirect(303, '/account/complete?oidc=failed');
       res.status(known ? error.status : error instanceof z.ZodError ? 400 : 503).json({
         error: known ? error.code : error instanceof z.ZodError ? 'AUTH_INVALID_REQUEST' : 'AUTH_UNAVAILABLE',
       });
     });
+    // Express does not await handlers after response/socket close. Track their actual promises
+    // so maintenance can drain password derivation, mail and provider exchange safely.
+    for (const layer of router.stack) {
+      for (const handler of layer.route?.stack ?? []) {
+        const original = handler.handle;
+        handler.handle = (req: Request, res: Response, next: NextFunction) => {
+          let result: unknown;
+          try {
+            result = original(req, res, next);
+          } catch (error) {
+            next(error);
+            return;
+          }
+          if (result && typeof (result as Promise<unknown>).then === 'function') {
+            const pending = Promise.resolve(result);
+            this.pending.add(pending);
+            void pending.catch(next).finally(() => this.pending.delete(pending));
+          }
+        };
+      }
+    }
     return router;
   }
 }

@@ -6,32 +6,11 @@ import path from 'node:path';
 import { z } from 'zod';
 import { GenerationError } from '../features/generation/generation.js';
 import type { ServiceContext } from './context.js';
+import { createOriginPolicy } from './trusted-origin.js';
 export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number) {
-  const privateHost = (hostname: string) =>
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname === '::1' ||
-    /^10\./.test(hostname) ||
-    /^192\.168\./.test(hostname) ||
-    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname);
-  const allowedOrigin = (value: string) => {
-    try {
-      const url = new URL(value);
-      return (
-        url.protocol === 'http:' && ['5173', String(port)].includes(url.port) && privateHost(url.hostname)
-      );
-    } catch {
-      return false;
-    }
-  };
+  const originAllowed = createOriginPolicy(port);
   app.use((req, res, next) => {
-    const origin = req.get('origin');
-    const host = req.get('host') || '';
-    if (
-      !allowedOrigin(`http://${host}`) ||
-      (origin && !allowedOrigin(origin)) ||
-      req.get('sec-fetch-site') === 'cross-site'
-    )
+    if (!originAllowed(req))
       return res.status(403).json({ error: '只允许本机或局域网来源访问。', code: 'LOCAL_ORIGIN_REJECTED' });
     if (req.path.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
@@ -49,7 +28,7 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext 
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'",
     );
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     next();

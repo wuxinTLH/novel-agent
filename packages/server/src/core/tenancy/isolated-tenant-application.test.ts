@@ -13,6 +13,20 @@ import {
 } from './isolated-tenant-application.js';
 
 const policyPort = 3001;
+
+test('only the exact OIDC GET callback admits cross-site navigation and still checks host and origin', async (t) => {
+  const f = await fixture(t);
+  const headers = { 'sec-fetch-site': 'cross-site', accept: 'text/html' };
+  const callback = '/api/auth/account/oidc/callback?state=bad&code=bad';
+  const admitted = await f.request('GET', callback, undefined, headers);
+  // Auth is OFF: reaching the auth handler returns AUTH_DISABLED, not origin bypass elsewhere.
+  assert.equal(admitted.status, 404);
+  assert.equal((await f.request('POST', callback, undefined, headers)).status, 403);
+  assert.equal((await f.request('GET', '/api/auth/session', undefined, headers)).status, 403);
+  assert.equal((await f.request('GET', callback, undefined, { ...headers, host: 'evil.example:3001' })).status, 403);
+  assert.equal((await f.request('GET', callback, undefined, { ...headers, origin: 'https://evil.example' })).status, 403);
+  assert.equal(f.tenant.contexts.size, 0);
+});
 async function fixture(t: TestContext, enabled = false, services: IsolatedTenantService[] = []) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-isolated-'));
   const auth = new AuthService({ dataDir: dir, enabled });
@@ -311,4 +325,27 @@ test('outer control plane stays accessible without starting a runtime and parses
   });
   assert.equal(response.body.value, 3);
   assert.equal(f.tenant.contexts.size, 0);
+});
+
+test('online maintenance barrier drains workers, gates auth/business and resumes with fresh runtime', async (t) => {
+  const f = await fixture(t, false, [{ register(app) {
+    app.get('/api/admin/online-maintenance/tasks', (_req, res) => res.json({ ok: true }));
+  } }]);
+  const before = await f.request('GET', '/api/health');
+  assert.equal(before.status, 200);
+  const old = f.tenant.contexts.get('root')!;
+  const lease = await f.tenant.acquireQuiescence();
+  lease.assertHeld();
+  assert.equal(old.worker.threadId, -1);
+  assert.equal(f.tenant.contexts.size, 0);
+  assert.equal((await f.request('GET', '/api/auth/session')).status, 503);
+  assert.equal((await f.request('GET', '/api/health')).status, 503);
+  assert.equal((await f.request('GET', '/api/admin/online-maintenance/tasks')).status, 200);
+  await assert.rejects(f.tenant.acquireQuiescence(), /MAINTENANCE_ALREADY_ACTIVE/);
+  await lease.release();
+  assert.throws(() => lease.assertHeld(), /MAINTENANCE_LEASE_NOT_HELD/);
+  const after = await f.request('GET', '/api/health');
+  assert.equal(after.status, 200);
+  assert.notEqual(after.body.platform.csrfToken, before.body.platform.csrfToken);
+  assert.notEqual(f.tenant.contexts.get('root'), old);
 });

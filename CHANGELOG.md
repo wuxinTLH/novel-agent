@@ -2,6 +2,21 @@
 
 ## 未发布
 
+### 单实例安全、并发与运维扩展
+
+- 增加控制面统一的跨租户平台账号锁，使用已核验 provider / 稳定账号身份；未知身份人工登录持有该平台全局锁。忙时拒绝、锁不可用失败关闭，不按 HTTP 断开或 TTL 释放未确定副作用；不宣称跨主机 / 多实例安全。
+- v3 普通存储操作改为 owner 级排队，不同 owner 可并发；完整快照、导入及迁移保留独占屏障和实际 COMMIT 确认。同步租户桥接 / 认证 SQL 控制面阻塞边界保留。
+- 新增本地 SIMULATED 存储入场基准及实际报告：四连接许可、80 次操作，八 owner 三轮约 254–261 ops/s，对照 profile 队列约 64–66 ops/s，单 owner 基本不变；不执行真实 SQL / 网络 / 落盘，不是生产数据库性能证明。新增需显式创建数据库 opt-in 的可选 PostgreSQL v3 在线验收脚本，真实数据库尚未验收。
+- 管理界面增加有界在线维护任务队列：全应用备份、受管备份完整性校验、离线恢复计划、阶段进度与安全取消。备份暂停并排空全部租户和控制面，关闭 Worker / 浏览器后快照，完成后恢复接入；敏感产物存数据目录外的受管目录，无浏览器下载和任意路径操作。恢复 / 迁移仍仅停服 CLI，重启中断不自动重试，非字节进度 / 在线恢复或定时备份。
+
+### 可选账号与文稿格式
+
+- 认证与全部扩展开关保持默认关闭；新增可选邮箱确认普通用户注册、验证邮箱、邮件找回密码、OIDC 与 TOTP MFA / 一次性恢复码。首次超级管理员仍 CLI 引导，注册或配置不自动开启认证。
+- 邮件由显式环境变量配置的可选 nodemailer SMTP 发送；邮件令牌单次、15 分钟到期，密码恢复不绕过 MFA。OIDC 使用 PKCE / state / nonce / JWKS 校验和管理员明确 issuer + subject 映射，不自动按邮箱关联或注册；已绑定因素不能通过关闭 MFA 总开关绕过。真实 SMTP / 提供商 / HTTPS 部署仍待独立验收。
+- 增加显式 `NOVEL_TRUSTED_PUBLIC_ORIGIN` HTTPS origin opt-in，与保留 Host 的 TLS 反向代理配合并自动启用认证 Secure Cookie；不信任转发头、不自动提供 TLS、不放宽本机免登录管理权限，仍须独立部署验收。
+- 增加章节书稿“文稿格式与阅读”：从正式 canonical 章节导出真实 DOCX / EPUB，保留 Markdown；PDF 采用浏览器稿件专用打印 / 另存，不是服务端 PDF 生成，中文字体与分页须人工检查。
+- 增加 ≤ 8 MiB DOCX / PDF 临时阅读，30 分钟过期、重启丢失，不导入章节 / 资料；旧 `.doc` 不支持。ZIP 解压限额、独立限时 DOCX 转换、HTML 清理及沙箱防护不等于杀毒；PDF 无文本提取 / OCR，仅交浏览器原生阅读。限制详见模块说明。
+
 ### 工程目录与工作区
 
 - 前后端独立为 npm workspaces：`space.syjx.agent.novel.web` 与 `space.syjx.agent.novel.server`；根目录安装、开发、构建、启动和维护命令保留。
@@ -23,7 +38,7 @@
 - 认证模式按验证后的稳定用户 UUID 装配独立、不可变 owner 的应用上下文，隔离 Store、Runner、模型密钥、平台运行时、发布队列和上传；提供用户创建 / 停用、会话 / CSRF 和管理员 Turnstile 配置，默认单用户行为保留。
 - SQLconnect 保留 `sqlconnect.json` 和原连接探测 / 初始化入口，保存 / 初始化不自动迁移。新增 v3 `storage-profiles.json` 多连接及 owner 映射，MySQL / PostgreSQL / SQL Server 关系适配器；MySQL / SQL Server 目前仅模拟 SQL 单元验证，尚无真实服务器兼容性证明。
 - v3 项目 / 章节 / 设定 / 工作流使用 canonical 实体表，文档结构、owner / 文档 revisions 及导入 receipts 同事务持久化。停服 `npm run maintenance -- migrate-all --owner UUID --destination EXTERNAL_BACKUP --confirm` 先完整备份、校验全部租户、导入空目标、回读再激活；不自动开启认证。旧 `admin migrate-sql` PostgreSQL v2 单 owner 迁移仍保留为 legacy。
-- 数据库 Worker 改用持久连接池；每租户隔离 Worker 保留同步 COMMIT 屏障，同租户等待仍阻塞，其他租户 / 主控制面业务事件循环隔离，最多 32 个租户运行时。同 profile repository 快照门锁串行化相关读写是吞吐取舍，不是无锁性能或分布式服务保证；认证控制面同步 SQL 持久化仍可能短时阻塞主线程。未知提交失败关闭、不回落 JSON，单实例限制不变。
+- 数据库 Worker 改用持久连接池；每租户隔离 Worker 保留同步 COMMIT 屏障，同租户等待仍阻塞，其他租户 / 主控制面业务事件循环隔离，最多 32 个租户运行时。当前普通操作按 owner 入场、不同 owner 可并发，快照 / 导入 / 迁移独占；不是无锁性能或分布式服务保证；认证控制面同步 SQL 持久化仍可能短时阻塞主线程。未知提交失败关闭、不回落 JSON，单实例限制不变；跨租户账号锁现由单实例协调，仍非分布式锁。
 - 新增离线 `npm run maintenance -- backup --destination PATH --confirm` 与 `restore --source PATH --data-dir NEW --confirm`；仅 SQL 恢复额外必须显式 `--database-config EXPLICIT_TARGET_PROFILES`。完整应用备份含全部配置 v3 仓库 owners / 文档 / 实体内容 / revisions / receipts 和安全本地文件树（含二进制、空目录），不是整个数据库 dump；排除锁、临时文件、admin-backups 和维护产物，拒绝不安全链接。外部环境秘密不入包，需独立保管。
 - 恢复默认新 / 空本地和数据库目标，不连接备份源地址；保留文件 rollback 副本，不能自动跨数据库回滚。失败 `.maintenance-journal.json` 阻止启动，需人工安全协调；恢复撤销认证会话，不重放远端发布。旧 version 1 SQL 后端不支持 maintenance backup，须独立 `pg_dump` 加完整目录 / 外部密钥备份。
 - 增加管理中心用户 / 数据库 / 维护 / 安全区域、角色 / 密码 / 会话管理和普通用户账号安全；认证仍默认关闭，本机管理需严格 socket 回环、Host / Origin 与管理 CSRF，局域网访问不授予管理员。首次超级管理员仍 CLI，最后一个有效超级管理员受保护；改密、重置、停用及角色变更撤销目标会话。

@@ -6,9 +6,27 @@ import path from 'node:path';
 import { Store } from '../projects/store.js';
 import { PlatformRuntime } from './platform-runtime.js';
 import { FanqieBrowser } from './fanqie-browser.js';
+import { PlatformAccountLockError } from '../../core/tenancy/platform-account-lock.js';
 import { PlatformError, type BrowserSessionState, type DraftBrowserAdapter } from './platforms-types.js';
 
-// Offline only: fake cookies, temporary encrypted storage, no browser launch or network.
+test('unavailable coordinator prevents login browser entry and verified-account read', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-lock-unavailable-'));
+  const fixture = fixtureBrowser();
+  let acquired = 0;
+  const runtime = new PlatformRuntime(new Store(dir), { browser: fixture.browser, accountLocks: {
+    acquire: async () => { acquired++; throw new PlatformAccountLockError('PLATFORM_LOCK_UNAVAILABLE'); },
+  } });
+  try {
+    const projectId = runtime.store.projects[0].id;
+    await assert.rejects(runtime.startLogin(projectId), { code: 'PLATFORM_LOCK_UNAVAILABLE' });
+    assert.equal(acquired, 1);
+    assert.equal(runtime.browser.loginOpen('any-id'), false);
+    await assert.rejects(runtime.withLock(projectId, { providerId: 'tomato', accountId: 'verified-author' } as never, async () => {
+      assert.fail('external work must not begin without a lease');
+    }), { code: 'PLATFORM_LOCK_UNAVAILABLE' });
+  } finally { await runtime.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 const snapshot = (value: string): BrowserSessionState => ({
   cookies: [{ name: 'offline-session', value }],
   origins: [{ origin: 'https://fanqienovel.com', localStorage: [{ name: 'offline', value }] }],
@@ -70,6 +88,35 @@ function fixtureBrowser() {
     captured: () => captured,
   };
 }
+
+test('separate runtimes exclude verified same-account work and hold unknown login through browser close', async () => {
+  const a = await setup(), b = await setup();
+  let finish!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { finish = resolve; });
+  const work = a.runtime.withLock(a.projectId, a.record, async () => { entered(); await blocked; });
+  try {
+    await ready;
+    await assert.rejects(b.runtime.listWorks(b.record), { code: 'PLATFORM_BUSY' });
+    await assert.rejects(b.runtime.startLogin(b.projectId), { code: 'PLATFORM_BUSY' });
+    finish(); await work;
+    const login = await a.runtime.startLogin(a.projectId);
+    await assert.rejects(b.runtime.listWorks(b.record), { code: 'PLATFORM_BUSY' });
+    let closed!: () => void;
+    const closeBlocked = new Promise<void>(resolve => { closed = resolve; });
+    const original = a.runtime.browser.closeLogin;
+    a.runtime.browser.closeLogin = async id => { await closeBlocked; await original(id); };
+    const cancel = a.runtime.cancelLogin(a.projectId, login.id);
+    await assert.rejects(b.runtime.listWorks(b.record), { code: 'PLATFORM_BUSY' });
+    closed(); await cancel;
+    await b.runtime.listWorks(b.record);
+  } finally {
+    finish(); await work;
+    await a.runtime.close(); await b.runtime.close();
+    fs.rmSync(a.dir, { recursive: true, force: true }); fs.rmSync(b.dir, { recursive: true, force: true });
+  }
+});
 
 async function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-session-regression-'));

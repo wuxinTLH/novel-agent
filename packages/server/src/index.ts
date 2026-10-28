@@ -4,10 +4,19 @@ import express from 'express';
 import { createAdministrationRouter } from './features/administration/administration.js';
 import { createIsolatedTenantApplication } from './core/tenancy/isolated-tenant-application.js';
 import { acquireDataLock, appRoot } from './core/local-runtime.js';
+import { trustedPublicOrigin } from './core/trusted-origin.js';
 import type { IsolatedTenantService } from './core/tenancy/isolated-tenant-application.js';
 import { SQLConnectService, createSQLconnectRouter } from './infrastructure/database/sqlconnect.js';
 import { AuthService } from './features/auth/auth.js';
-import { createAuthPersistence, readAuthMode, readStorageManifest } from './infrastructure/storage/storage-config.js';
+import { createAccountEmailTransport } from './features/auth/account-mail.js';
+import { OnlineMaintenanceManager } from './features/administration/online-maintenance.js';
+import { RelationalStorage } from './infrastructure/storage/relational-storage.js';
+import {
+  createAuthPersistence,
+  readAuthMode,
+  readStorageManifest,
+  readStorageProfiles,
+} from './infrastructure/storage/storage-config.js';
 try {
   process.loadEnvFile(path.join(appRoot, '.env'));
 } catch (error) {
@@ -27,10 +36,45 @@ const authPersistence = createAuthPersistence(dir);
 const auth = new AuthService({
   dataDir: dir,
   enabled: mode.enabled,
+  secureCookies: !!trustedPublicOrigin(),
   persistence: authPersistence,
+  emailTransport: createAccountEmailTransport(),
 });
 if (mode.enabled && !auth.hasSuperadmin()) throw new Error('AUTH_BOOTSTRAP_REQUIRED');
 const sqlconnect = new SQLConnectService({ dataDir: dir, appRoot });
+const onlineMaintenance = new OnlineMaintenanceManager({
+  dataDir: dir,
+  acquireQuiescence: (signal) => tenants.acquireQuiescence(signal),
+  async backend() {
+    // Saved prospective profiles are not active business storage. Local backups must
+    // not connect to them; legacy v1 still fails closed in backupFull's SQL check.
+    if (manifest?.version !== 3) return undefined;
+    const profiles = readStorageProfiles(dir);
+    if (!profiles) throw new Error('STORAGE_PROFILES_REQUIRED');
+    const stores = new Map(
+      profiles.profiles.map((profile) => [profile.id, new RelationalStorage(profile.connection)]),
+    );
+    const store = (id: string) => {
+      const value = stores.get(id);
+      if (!value) throw new Error('MAINTENANCE_PROFILE_MISMATCH');
+      return value;
+    };
+    return {
+      profileIds: [...stores.keys()],
+      exportSnapshot: (id: string) => store(id).exportSnapshot(),
+      // This online backend is strictly read-only. Restore/import stay offline.
+      assertEmpty: async () => {
+        throw new Error('OFFLINE_REQUIRED');
+      },
+      importSnapshot: async () => {
+        throw new Error('OFFLINE_REQUIRED');
+      },
+      close: async () => {
+        await Promise.all([...stores.values()].map((value) => value.close()));
+      },
+    };
+  },
+});
 const services: IsolatedTenantService[] = [
   {
     register(app) {
@@ -53,6 +97,7 @@ const services: IsolatedTenantService[] = [
   },
 ];
 services.unshift({
+  close: () => onlineMaintenance.close(),
   register(application) {
     application.use(
       '/api/admin',
@@ -60,6 +105,7 @@ services.unshift({
         dir,
         auth,
         tenantCount: () => tenants.contexts.size,
+        onlineMaintenance,
       }),
     );
     application.get('/api/services/user', (_req, res) =>
@@ -79,6 +125,10 @@ const tenants = createIsolatedTenantApplication({
   auth,
   services,
   enabled: mode.enabled,
+  waitForControlPlaneIdle: async () => {
+    await auth.waitForIdle();
+    await sqlconnect.waitForIdle();
+  },
 });
 const app = tenants.app;
 const closeRuntime = tenants.close;
@@ -91,6 +141,7 @@ async function shutdown() {
   const deadline = setTimeout(() => process.exit(1), 10_000);
   deadline.unref();
   try {
+    await onlineMaintenance.close();
     await closeRuntime();
     await authPersistence?.close?.();
     releaseDataLock();

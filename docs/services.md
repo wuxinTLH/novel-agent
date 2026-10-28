@@ -18,6 +18,10 @@
 - `sqlconnect.ts` / `sqlconnect-drivers.ts`：原连接探测及预留表初始化；见 [SQLconnect](sqlconnect.md)。
 - `document-storage.ts` / `storage-config.ts` / [shared/storage.ts](../shared/storage.ts)：文档边界、v3 多数据库配置、owner 映射与激活清单。
 - `relational-storage.ts` / `pooled-storage-bridge.ts` / `database-worker.ts`：v3 关系存储、持久连接池及同步持久化桥接。
+- `platform-account-lock.ts`：单实例控制面协调所有租户的已核验外部账号锁，未知登录占整个平台锁；非分布式锁。
+- `documents.ts` / `exports.ts` / `parser.ts`：正式章节 DOCX / EPUB 导出、浏览器打印数据、限额的 DOCX / PDF 临时阅读。
+- `account.ts` / `account-mail.ts`：默认关闭的注册、邮件、OIDC 与 MFA 能力，SMTP 显式注入。
+- `online-maintenance.ts`：有界在线备份、完整性校验与离线恢复计划队列。
 - [admin.ts](../packages/server/src/features/administration/admin.ts)：停服后的身份引导及旧 PostgreSQL v2 迁移 CLI。
 - [server/maintenance-cli.ts](../packages/server/src/features/administration/maintenance-cli.ts) / [server/maintenance.ts](../packages/server/src/features/administration/maintenance.ts)：离线全量应用备份、恢复、全部租户迁移。
 
@@ -25,7 +29,7 @@
 
 ## 认证、管理与不可变租户上下文
 
-认证、Turnstile 仍默认关闭。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。首次超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建，没有公开注册 / HTTP 引导。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
+认证、Turnstile 仍默认关闭。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。首次超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建，没有 HTTP 管理员引导；可选邮箱确认注册仅创建普通用户，默认关闭。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
 
 管理界面分“用户、数据库、备份与维护、系统与安全”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，局域网访问免登录业务不等于拥有管理员权限。认证开启后须已验证的超级管理员会话，写入另需认证 CSRF；超级管理员不能据此浏览其他租户业务或秘密。
 
@@ -43,9 +47,33 @@ Turnstile 管理默认关闭；secret 加密保存，仅返回 hasSecret。启�
 
 v3 使用 `novel_agent_v3_*` 表，项目、章节、设定、工作流实体正文成为 canonical 实体表数据；文档保存兼容结构、其他设置以及 revision，读取 / 导出时重建完整 projects 文档。不是把同一正文同时作为独立权威副本双写。owner revision、文档 revision、导入 receipts 与实体同事务提交，CAS 冲突拒绝覆盖。
 
-数据库 Worker 持有异步持久连接池，不再每次业务操作 spawn 新进程 / 新连接。租户 Worker 内保留同步持久化屏障：只有确认实际 COMMIT 才返回，不是 write-behind；等待会阻塞**同一租户**，不阻塞主控制面及其他租户事件循环。控制面认证状态的同步 SQL 持久化仍可能有界阻塞主线程；不能将业务 Worker 隔离理解为所有管理请求均无阻塞。数据库仍可能成为共同瓶颈：同一 profile 的 repository gate 将写入、完整快照及相关读取串行化，这是保证一致性的吞吐取舍，不是无锁高并发或基准性能提升声明。超时 / 未知提交使桥接失败关闭，不自动重试远端副作用。
+数据库 Worker 持有异步持久连接池，不再每次业务操作 spawn 新进程 / 新连接。租户 Worker 内保留同步持久化屏障：只有确认实际 COMMIT 才返回，不是 write-behind；等待会阻塞**同一租户**，不阻塞主控制面及其他租户事件循环。控制面认证状态的同步 SQL 持久化仍可能有界阻塞主线程；不能将业务 Worker 隔离理解为所有管理请求均无阻塞。普通存储操作在获取连接前按 owner 排队，不同 owner 可并发；快照 / 导入 / 迁移走独占入场屏障，等待已入场事务实际结束。数据库共享 repository 锁与 owner 锁仍参与一致性 / CAS，并不保证不同数据库引擎无争用。超时 / 未知提交使桥接失败关闭，不自动重试远端副作用。
 
-**仍只允许单应用实例及本地数据锁。** 行锁 / CAS / Worker 隔离不是分布式租约，不保护跨实例重复生成、浏览器或发布；不得多实例共享 owner 运行。平台外部账号锁仅运行时内有效，不是跨租户全局锁；两个租户绑定同一真实平台账号仍可能并发，须避免这种部署 / 操作。离线维护前须停止所有共享所选数据库的运行时，本地文件锁不能替你停止其他主机。
+**仍只允许单应用实例及本地数据锁。** 行锁 / CAS / Worker 隔离不是分布式租约，不保护跨实例重复生成、浏览器或发布；不得多实例共享 owner 运行。平台账号锁由单实例控制面在全部租户间协调：服务端已核验 provider + 稳定账号身份互斥；未知身份登录持有该平台全局锁，与该平台所有账号操作互斥。客户端不能自报锁键，Worker 私有能力及身份摘要用于协调；忙时拒绝，锁不可用失败关闭，不按 TTL 或请求断开提前释放，Worker 退出后才清理其残留租约。这不保护其他实例、其他应用或官方后台并发操作。离线维护前须停止所有共享所选数据库的运行时，本地文件锁不能替你停止其他主机。
+
+### 模拟基准与真实验收
+
+[本地 SIMULATED 实测报告](../scripts/benchmark-storage-report.md) 使用四连接许可、80 次操作、三轮测量：八 owner 队列约 254–261 ops/s，对照 profile 队列约 64–66 ops/s（3.86–4.05 倍），单 owner 基本不变。适配器没有真实 SQL、网络、落盘和数据库锁；只能说明模拟入场瓶颈移除，不能证明 PostgreSQL / MySQL / SQL Server 实际吞吐。报告中的可选在线脚本要求明确环境变量和 `STORAGE_LIVE_ALLOW_CREATE_DATABASE=1`，创建并仅删除本次生成的两个临时数据库；真实 v3 在线验收尚未完成。
+
+## 可选完整账号扩展
+
+[认证模块配置](../packages/server/src/features/auth/README.md) 包含注册、邮箱验证、密码恢复、OIDC、TOTP MFA 与恢复码；认证总开关和每项能力仍全部默认关闭。首次超级管理员仍由 CLI 引导，公开注册必须邮箱确认且仅能普通用户，不自动登录。SMTP 由显式 `NOVEL_SMTP_ENABLED=true` 与 `NOVEL_SMTP_HOST` / `NOVEL_SMTP_USER` / `NOVEL_SMTP_PASSWORD` / `NOVEL_SMTP_FROM` 注入，端口默认 587，`NOVEL_SMTP_SECURE=true` 默认 465，使用可选 nodemailer 传输与证书验证。邮件令牌单次、15 分钟到期，回链使用 HTTPS publicOrigin 和 fragment，避免进入请求查询与日志。
+
+OIDC 显式配置端点，使用 code + PKCE S256、state / 浏览器绑定 cookie、nonce 与 JWKS 签名验证（精确 issuer / audience）；管理员通过 `PUT /api/admin/account/oidc/users/:id` 明确 issuer + subject 关联已有用户，不按邮箱自动注册 / 合并。MFA 在密码 / OIDC 后验证新鲜 TOTP counter 或单次恢复码才签发会话；启用 / 移除因素、恢复密码撤销旧会话，恢复密码不移除 MFA，已绑定因素时不能全局关闭绕过。真实邮件、提供商与 HTTPS / Cookie 反向代理部署仍须独立验收，不是公网生产安全声明。
+
+账号邮件 / OIDC 部署须另配 TLS 终止代理及显式 `NOVEL_TRUSTED_PUBLIC_ORIGIN=https://novel.example.com` 单一 HTTPS origin；代理保留浏览器 Host、拒绝直接绕过后端、清除不可信转发头，服务从不信任 `X-Forwarded-*`。这会自动给认证 Cookie 加 Secure，但不会提供 TLS，也不改变认证默认关闭或免登录本机管理边界。HTTPS origin / Host 需精确一致，管理员账号 `publicOrigin` 与 OIDC 回调同源；具体操作见 [使用手册](使用手册.md#可选注册邮箱恢复oidc-与双重验证)。
+
+## 文稿导出与临时文档
+
+[文档服务及限制](../packages/server/src/features/documents/README.md) 已挂入受现有项目授权 / CSRF / 来源限制保护的业务路由；章节书稿页“文稿格式与阅读”使用同一服务。DOCX / EPUB 导出读取按章号排列的已保存 canonical 章节，不含候选和未保存编辑；PDF 是浏览器稿件专用打印 / 另存，不是服务端 PDF 生成，字体 / 分页需人工确认。
+
+DOCX / PDF 单份 ≤ 8 MiB，服务端内存副本 30 分钟过期、重启丢失，不进入项目或资料存储；每项目 10 份、进程 64 份 / 64 MiB，最多同时处理两份。DOCX ZIP 全项验证（512 项 / 32 MiB 实际解压 / 单项 200:1 / 5 秒），转换独立进程（128 MiB V8 heap / 10 秒 / 4 MiB 输出）并清理图片、链接及活动内容；不是 OS 级内存上限或杀毒。PDF 仅验证头尾并由沙箱浏览器原生阅读，无文本提取 / OCR；旧 `.doc` 必须自行转换。
+
+## 在线维护任务
+
+[在线维护管理器](../packages/server/src/features/administration/online-maintenance.ts) 由主进程单例装配，管理中心“备份与维护”可提交 backup、validate、restore-plan。默认排队 8 项 / 终态历史 100 条 / 备份或未完成产物 20 个，达到容量不自动删除敏感备份。备份必须先阻止全部租户及控制面新请求，排空真实处理 promise，关闭所有租户 Worker / 浏览器，持有静默屏障与实例锁再导出全部配置 profile；不能可靠排空则拒绝。完成或安全失败后恢复接入，不将当前用户暂停误作全局一致性。
+
+产物位于数据目录外受管兄弟目录（默认 `.data-managed-backups`），不提供浏览器下载、原始目录 / manifest / 错误内容或任意路径输入。备份含秘密，必须由主机管理员保护 ACL、容量及外部密钥。任务进度为阶段估计而非字节进度；取消需安全检查点，committing 不能取消；重启标记 interrupted，不自动重试。validate / restore-plan 仅检查完整性及给出离线提示，不证明解密 / 业务语义、不连接备份源数据库、不导入目标。恢复和迁移仍必须停服 CLI，非定时备份 / 分布式维护服务。
 
 ## 全量应用备份与恢复
 

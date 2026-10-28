@@ -2,9 +2,16 @@ import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent 
 import { Copy, Database, HardDrive, RefreshCw, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../../services/api';
 import Modal from '../common/Modal';
+import OnlineMaintenance from './OnlineMaintenance';
+import { AccountAdminSettings } from '../account/AccountAdminSettings';
 import { useConfirm } from '../common/AppDialog';
 import type { AuthRole, AuthSessionInfo, AuthUser, TurnstileAdminSettings } from '../../../../../shared/auth';
 import '../../styles/administration.scss';
+
+const accountAdminRequest = <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
+  if (!path.startsWith('/api/admin/')) return Promise.reject(new Error('无效管理员请求路径'));
+  return api<T>(path.slice(4), { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+};
 
 type Mode = 'local' | 'authenticated';
 type Driver = 'mysql' | 'postgresql' | 'sqlserver';
@@ -1047,6 +1054,9 @@ function SystemPanel({
           。迁移与备份必须离线执行。
         </p>
       </div>
+      <div className="administration-card">
+        <AccountAdminSettings request={accountAdminRequest} />
+      </div>
       <Feedback error={operation.error} notice={operation.notice} />
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
       {config && (
@@ -1264,6 +1274,7 @@ export default function Administration({ close, mode }: { close: () => void; mod
             hidden={tab !== 'backup'}
             tabIndex={0}
           >
+            {tab === 'backup' && <OnlineMaintenance />}
             <MaintenancePanel />
           </section>
           <section
