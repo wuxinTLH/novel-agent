@@ -8,3 +8,4 @@ data/
 *.tsbuildinfo
 test-results/
 .tmp-fanqie*/
+.tmp-build/
