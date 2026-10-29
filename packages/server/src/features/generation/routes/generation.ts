@@ -9,6 +9,7 @@ import {
 } from '../../../../../../shared/generation.js';
 import { type Project } from '../../../../../../shared/types.js';
 import { acceptCandidate, resolveRequirements, validateRequirements } from '../generation.js';
+import { streamProgress } from '../stream-progress.js';
 import type { FeatureService } from '../../../core/context.js';
 import { createProjectOperations, inputError, invalidateSteps } from '../../projects/project-operations.js';
 function runRequestHash(value: unknown) {
@@ -24,6 +25,11 @@ export const generationService: FeatureService = {
     const { store, runner, modelProvider } = context;
     const { models, settings } = modelProvider;
     const { mutateProject } = createProjectOperations(store);
+    app.get('/api/projects/:projectId/generation-progress', (_req, res) => {
+      const project = res.locals.project as Project;
+      res.setHeader('Cache-Control', 'no-store');
+      res.json(streamProgress.snapshot({ scopeId: store.dir, projectId: project.id, runId: project.run?.status === 'running' ? project.run.id : '' }));
+    });
     app.put('/api/projects/:projectId/requirements', (req, res) => {
       const v = z
         .object({
@@ -109,6 +115,16 @@ export const generationService: FeatureService = {
       void handle.promise.catch(() => {
         console.error('工作流执行或持久化失败；请检查数据目录和任务状态。');
       });
+      res.setHeader('X-Run-Id', handle.run.id);
+      res.status(202).json(p);
+    });
+    app.post('/api/projects/:projectId/runs/:runId/resume', (req, res) => {
+      const body = z.object({ snapshotFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(req.body);
+      const p = res.locals.project as Project;
+      const active = settings.activeModelId ? models.get(settings.activeModelId) : undefined;
+      const runtime = { ...settings, ...(active || {}), mode: settings.mode, modelProfiles: Array.from(models.values()) };
+      const handle = runner.start(p, runtime, {}, undefined, { runId: String(req.params.runId), fingerprint: body.snapshotFingerprint });
+      void handle.promise.catch(() => console.error('恢复任务执行或持久化失败；请检查任务状态。'));
       res.setHeader('X-Run-Id', handle.run.id);
       res.status(202).json(p);
     });

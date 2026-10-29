@@ -8,6 +8,8 @@ import { assetsService } from '../features/assets/assets.js';
 import { generationService } from '../features/generation/routes/generation.js';
 import { chaptersService } from '../features/chapters/chapters.js';
 import { documentsService } from '../features/documents/documents.js';
+import { fileSandboxService } from '../features/file-sandbox/service.js';
+import { knowledgeService } from '../features/knowledge/knowledge.js';
 
 /** Platform routes precede the general project mutation guard, as in the original API. */
 export const coreServices: readonly FeatureService[] = [
@@ -19,6 +21,8 @@ export const coreServices: readonly FeatureService[] = [
   generationService,
   chaptersService,
   documentsService,
+  fileSandboxService,
+  knowledgeService,
 ];
 
 export function registerServices(app: Express, context: ServiceContext, services: readonly FeatureService[]) {

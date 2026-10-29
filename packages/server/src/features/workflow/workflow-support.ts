@@ -59,6 +59,7 @@ export const editableStepSchema = z
       .optional(),
     outputName: z.string().trim().max(120).optional(),
     modelId: z.string().optional(),
+    join: z.enum(['all', 'any']).optional(),
     assetIds: z.array(z.string()).max(100).optional(),
     enabled: z.boolean().optional(),
     reusePreviousOutput: z.boolean().optional(),
@@ -77,6 +78,7 @@ const edgesSchema = z
       source: z.string().min(1),
       target: z.string().min(1),
       label: z.string().optional(),
+      when: z.string().trim().min(1).max(128).optional(),
     }),
   )
   .max(500);
@@ -90,6 +92,8 @@ export const editableWorkflowSchema = z
     chapterCount: z.number().int().min(1).max(MAX_BATCH_SIZE).optional(),
     autoGenerate: z.boolean().optional(),
     automationMode: z.enum(['manual', 'automatic']).optional(),
+    maxAutoRepairs: z.number().int().min(0).max(3).optional(),
+    maxParallelNodes: z.number().int().min(1).max(4).optional(),
     publication: z
       .object({
         enabled: z.boolean(),

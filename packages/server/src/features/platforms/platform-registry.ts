@@ -11,17 +11,18 @@ import {
 
 export function createPlatformRegistry(store: PlatformStore | undefined, browser: DraftBrowserAdapter) {
   const unavailable = [
-    provider('qidian', '起点中文网', false, '等待核验官方作者管理接口与授权资料。'),
-    provider('qimao', '七猫中文网', false, '等待核验官方作者管理接口与授权资料。'),
+    provider('qidian', '起点中文网', false, '未取得可核验的官方作者接口、应用资质及授权文档。接入须提供平台许可、测试账号、权限范围和回执规范；当前不提供 token/OAuth、作品或发布能力。'),
+    provider('qimao', '七猫中文网', false, '未取得可核验的官方作者接口、应用资质及授权文档。接入须提供平台许可、测试账号、权限范围和回执规范；当前不提供 token/OAuth、作品或发布能力。'),
   ];
   const tomato = provider(
     'tomato',
     '番茄小说',
     true,
-    '第三方本机辅助工具；人工登录并显式选择作品后，可保存和删除已核验草稿，不正式发布。页面结构变化时失败关闭。',
+    '第三方本机辅助工具；人工登录并绑定作品后，save_draft 仅保存并全文回读草稿，submit_review 须单独批准和明确 AI 声明并核验送审回执，不代表审核通过或正式发布。扩展仅支持双确认配对；页面结构变化时失败关闭。',
     {
-      manualLogin: true,
-      listWorks: true,
+      manualLogin: browser.readiness === 'ready',
+      extensionPairing: true,
+      listWorks: browser.readiness === 'ready',
       getWork: browser.readiness === 'ready',
       syncWork: browser.readiness === 'ready',
       saveDraft: browser.readiness === 'ready',
@@ -30,8 +31,9 @@ export function createPlatformRegistry(store: PlatformStore | undefined, browser
     },
     browser.readiness,
   );
-  tomato.authMethods = ['manual_browser'];
-  tomato.readinessReason = browser.reason;
+  for (const item of unavailable) item.readinessReason = item.description;
+  tomato.authMethods = ['manual_browser', 'browser_extension'];
+  tomato.readinessReason = `${browser.reason} 扩展配对不验证账号，不授予作品读取、草稿保存、送审或发布权限。正式发布能力保持关闭。`;
   const mock = provider(
     'mock',
     '本地 Mock 测试',

@@ -111,7 +111,7 @@ test('ZIP validation rejects invalid structure, duplicate names, oversized input
     /解压比例/,
   );
 });
-test('document API preserves CSRF and project isolation, rejects legacy/mismatched formats, serves only PDF with restrictive headers', async () => {
+test('document API preserves CSRF and project isolation, rejects original PDF and retains only sanitized DOCX', async () => {
   const app = express();
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -144,24 +144,27 @@ test('document API preserves CSRF and project isolation, rejects legacy/mismatch
     const legacy = await upload('test.doc', 'old');
     assert.equal(legacy.status, 415);
     assert.equal((await legacy.json()).code, 'LEGACY_DOC_UNSUPPORTED');
-    assert.equal((await upload('test.pdf', '<script>fake</script>')).status, 400);
+    assert.equal((await upload('test.pdf', '<script>fake</script>')).status, 415);
     assert.equal((await upload('test.html', '<html>')).status, 415);
     assert.equal((await upload('test.pdf', Buffer.alloc(DOCUMENT_MAX_BYTES + 1))).status, 413);
-    const response = await upload('test.pdf', '%PDF-1.4\n%%EOF');
+    const rejectedPdf = await upload('test.pdf', '%PDF-1.4\n%%EOF');
+    assert.equal(rejectedPdf.status, 415);
+    assert.equal((await rejectedPdf.json()).code, 'UPLOAD_PDF_DISARM_REQUIRED');
+    const response = await upload('test.docx', await exportManuscript(project, 'docx'));
     assert.equal(response.status, 201);
     const preview = await response.json();
-    const resource = await fetch(root + preview.resourceUrl, {
-      headers: { host: `127.0.0.1:${address.port}` },
-    });
-    assert.equal(resource.status, 200);
-    assert.equal(resource.headers.get('content-type'), 'application/pdf');
-    assert.equal(resource.headers.get('x-frame-options'), 'SAMEORIGIN');
-    assert.match(resource.headers.get('content-security-policy')!, /sandbox/);
-    assert.match(resource.headers.get('cache-control')!, /no-store/);
-    const foreign = await fetch(root + preview.resourceUrl.replace('project-one', 'project-two'), {
-      headers: { host: `127.0.0.1:${address.port}` },
+    assert.equal(preview.resourceUrl, undefined);
+    assert.match(preview.html, /中文正文/);
+    assert.doesNotMatch(preview.html, /<script>/);
+    const resourcePath = `/api/projects/project-one/documents/${preview.id}/resource`;
+    assert.equal((await fetch(root + resourcePath, { headers: { host: localHost } })).status, 404);
+    const foreign = await fetch(root + resourcePath.replace('project-one', 'project-two'), {
+      headers: { host: localHost },
     });
     assert.equal(foreign.status, 404);
+    assert.equal((await fetch(root + resourcePath.replace('project-one', 'project-two').replace('/resource', ''), {
+      method: 'DELETE', headers: { host: localHost, 'X-Platform-CSRF': 'token' },
+    })).status, 404);
     const exported = await fetch(root + '/api/projects/project-one/documents/export/docx', {
       headers: { host: `127.0.0.1:${address.port}` },
     });
@@ -172,13 +175,13 @@ test('document API preserves CSRF and project isolation, rejects legacy/mismatch
       headers: { host: `127.0.0.1:${address.port}` },
     });
     assert.match((await printed.json()).html, /<h2>第一章/);
-    const removed = await fetch(root + preview.resourceUrl.replace('/resource', ''), {
+    const removed = await fetch(root + resourcePath.replace('/resource', ''), {
       method: 'DELETE',
       headers: { host: `127.0.0.1:${address.port}`, 'X-Platform-CSRF': 'token' },
     });
     assert.equal(removed.status, 200);
     assert.equal(
-      (await fetch(root + preview.resourceUrl, { headers: { host: `127.0.0.1:${address.port}` } })).status,
+      (await fetch(root + resourcePath, { headers: { host: `127.0.0.1:${address.port}` } })).status,
       404,
     );
   } finally {

@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
+import sharp from 'sharp';
 import type { Project } from '../../../../../shared/types.js';
 import { AuthService } from '../../features/auth/auth.js';
 import { createTenantApplication } from './tenant-application.js';
@@ -160,15 +161,11 @@ async function fixture(t: TestContext) {
   return { dir, tenant, request, users, runtime, headers };
 }
 
-function imageUpload(marker: string) {
+async function imageUpload(marker: string) {
   const boundary = 'novel-tenant-test-boundary';
-  const image = Buffer.concat([
-    Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH3sAAAAASUVORK5CYII=',
-      'base64',
-    ),
-    Buffer.from(marker),
-  ]);
+  const png = await sharp({ create: { width: 2, height: 3, channels: 4, background: '#3478abcd' } })
+    .png().toBuffer();
+  const image = Buffer.concat([png, Buffer.from(marker)]);
   const body = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="category"\r\n\r\nworld\r\n--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="private.png"\r\nContent-Type: image/png\r\n\r\n`,
@@ -203,7 +200,7 @@ test('tenant outer policy precedes authentication and anonymous APIs/uploads nev
     assert.equal(response.status, 401, route);
     assert.equal(response.body.code, 'AUTH_REQUIRED', route);
   }
-  const upload = imageUpload('anonymous');
+  const upload = await imageUpload('anonymous');
   for (const [route, body, contentType] of [
     ['/api/projects', { title: 'Anonymous' }, 'application/json'],
     ['/api/projects/missing/assets/upload', upload.body, upload.contentType],
@@ -291,7 +288,7 @@ test('authenticated tenants keep projects, lists, uploads and immutable runtime 
     [admin, adminToken, projects[0]],
     [writer, writerToken, projects[1]],
   ] as const) {
-    const upload = imageUpload(user.id);
+    const upload = await imageUpload(user.id);
     const result = await f.request('POST', `/api/projects/${project.id}/assets/upload`, upload.body, {
       ...f.headers(user, token),
       'content-type': upload.contentType,
@@ -305,7 +302,12 @@ test('authenticated tenants keep projects, lists, uploads and immutable runtime 
   for (const { user, url, image } of uploads) {
     const own = await f.request('GET', url, undefined, { cookie: user.cookie });
     assert.equal(own.status, 200);
-    assert.deepEqual(own.bytes, image);
+    const expectedPixels = await sharp(image).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const ownPixels = await sharp(own.bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    assert.equal(ownPixels.info.width, expectedPixels.info.width);
+    assert.equal(ownPixels.info.height, expectedPixels.info.height);
+    assert.deepEqual(ownPixels.data, expectedPixels.data);
+    assert.equal(own.bytes.includes(Buffer.from(user.id)), false, 're-encoding removes appended upload marker');
     assert.equal(own.headers['cache-control'], 'private, no-store');
     const other = await f.request('GET', url, undefined, {
       cookie: user.id === admin.id ? writer.cookie : admin.cookie,

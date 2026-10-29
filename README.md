@@ -34,6 +34,9 @@ npm start
 - [SQLconnect 说明](docs/sqlconnect.md)：可选数据库连接、显式建表、凭据保护和部署资源。
 - [主题扩展说明](public/themes/README.md)：主题注册表、独立 CSS 与生产部署。
 - [更新记录](CHANGELOG.md)：功能变更与验证边界。
+- [功能完善验收清单](docs/功能完善验收清单.md)：P1 / P2 / P3 的实现状态与外部验收条件。
+- [文件沙箱](docs/文件沙箱.md)：上传准入、内容重构、拒绝策略和隔离边界。
+- [平台扩展](docs/平台扩展.md)：MV3 客户端安装、双确认配对和真实平台能力边界。
 
 首次使用番茄登录需要在运行后端的桌面机器操作弹出的 Chromium。纯远程服务器没有可交互桌面时无法完成首次人工登录。
 
@@ -121,7 +124,7 @@ npm run admin -- bootstrap-admin --username admin --confirm
 
 章节书稿页“文稿格式与阅读”提供 DOCX、EPUB 导出，以及“准备 PDF 打印 → 打印稿件 / 另存为 PDF”。导出按章号使用服务器正式保存的 canonical 章节，不含编辑器未保存内容或未采用候选；已有 Markdown 导出保留。PDF 是浏览器打印，不是服务端 PDF 生成，须检查本机中文字体和分页，不能保证所有阅读器排版一致。
 
-可临时打开单份 ≤ 8 MiB 的 DOCX / PDF，旧 `.doc` 须先用 Word / LibreOffice 转换。阅读副本仅存服务端内存，30 分钟过期、重启丢失，不自动导入章节或设定，也不上传第三方。每项目最多 10 份、进程最多 64 份 / 64 MiB；ZIP 最多 512 项、实际总解压 ≤ 32 MiB、单项压缩比 ≤ 200:1，验证 5 秒，DOCX 转换 10 秒 / 输出 4 MiB，最多同时处理两份。Word 仅保留清理后的文本结构，不保留图片和活动内容；PDF 仅检查文件头尾、由浏览器阅读，**不是杀毒或完整 PDF 合规扫描**，无文本提取 / OCR。详见 [文档模块边界](packages/server/src/features/documents/README.md)。
+可临时打开单份 ≤ 8 MiB 的 DOCX；旧 `.doc` 须先用 Word / LibreOffice 转为 DOCX。阅读副本仅存服务端内存，30 分钟过期、重启丢失，不自动导入章节或设定，也不上传第三方。每项目最多 10 份、进程最多 64 份 / 64 MiB；ZIP 最多 512 项、实际总解压 ≤ 32 MiB、单项压缩比 ≤ 200:1，验证 5 秒，DOCX 转换 10 秒 / 输出 4 MiB，最多同时处理两份。Word 仅保留清理后的文本结构，不保留图片和活动内容。**PDF 上传目前拒绝**：未提供可靠的 PDF 内容重构能力，不再依靠文件头尾检查放行原始文件；无文本提取 / OCR。PDF 打印导出仍可使用。详见 [文档模块边界](packages/server/src/features/documents/README.md)及[文件沙箱](docs/文件沙箱.md)。
 
 ### 界面
 

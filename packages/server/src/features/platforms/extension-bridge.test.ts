@@ -1,0 +1,120 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import express from 'express';
+import http from 'node:http';
+import { ExtensionBridge, createExtensionBridgeRouter } from './extension-bridge.js';
+import { PlatformRuntime } from './platform-runtime.js';
+import { Store } from '../projects/store.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+const origin = `chrome-extension://${'a'.repeat(32)}`;
+const other = `chrome-extension://${'b'.repeat(32)}`;
+const token = '1'.repeat(64);
+function pair(bridge: ExtensionBridge, projectId = 'project') {
+  const start = bridge.start(projectId, 'a'.repeat(32));
+  const claim = bridge.claim(origin, start.challenge, 12);
+  bridge.confirm(projectId, start.id);
+  const state = bridge.finish(origin, start.id, claim.claimToken, token);
+  return { start, claim, state };
+}
+test('pairing binds origin/project and needs both explicit confirmations; token cannot elevate capabilities', () => {
+  const bridge = new ExtensionBridge();
+  const start = bridge.start('project', 'a'.repeat(32));
+  assert.equal(bridge.list('project')[0].challenge, '');
+  assert.throws(() => bridge.claim(other, start.challenge, 12), { code: 'EXTENSION_PAIRING_INVALID' });
+  assert.throws(() => bridge.confirm('project', start.id), { code: 'EXTENSION_POPUP_CONFIRM_REQUIRED' });
+  assert.throws(() => bridge.claim(origin, start.challenge, 2 ** 40));
+  const claim = bridge.claim(origin, start.challenge, 12);
+  assert.throws(() => bridge.claim(origin, start.challenge, 12), { code: 'EXTENSION_PAIRING_USED' });
+  assert.throws(() => bridge.confirm('foreign-project', start.id), { code: 'EXTENSION_PAIRING_NOT_FOUND' });
+  assert.throws(() => bridge.finish(origin, start.id, claim.claimToken, token), { code: 'EXTENSION_APP_CONFIRM_REQUIRED' });
+  bridge.confirm('project', start.id);
+  const state = bridge.finish(origin, start.id, claim.claimToken, token);
+  assert.deepEqual(bridge.finish(origin, start.id, claim.claimToken, token), state);
+  assert.throws(() => bridge.finish(origin, start.id, claim.claimToken, '2'.repeat(64)), { code: 'EXTENSION_PAIRING_USED' });
+  assert.throws(() => bridge.authenticate(other, token), { code: 'EXTENSION_SESSION_EXPIRED' });
+  assert.equal(state.accountVerified, false); assert.equal(state.listWorks, false); assert.equal(state.saveDraft, false);
+  bridge.cancel('project', start.id);
+  assert.throws(() => bridge.authenticate(origin, token), { code: 'EXTENSION_SESSION_EXPIRED' });
+});
+test('active sessions remain visible and revocable after the pairing challenge expires', () => {
+  let now = 1000;
+  const bridge = new ExtensionBridge(() => now);
+  const { start } = pair(bridge);
+  now += 5 * 60000;
+  assert.equal(bridge.list('project').find(item => item.id === start.id)?.status, 'confirmed');
+  bridge.revokeSession(bridge.sessionsFor('project')[0].id);
+  assert.equal(bridge.list('project').find(item => item.id === start.id)?.sessionId, undefined);
+  assert.throws(() => bridge.authenticate(origin, token), { code: 'EXTENSION_SESSION_EXPIRED' });
+});
+test('expired credentials, replacement pairing and shutdown revoke access', () => {
+  let now = 1000;
+  const bridge = new ExtensionBridge(() => now);
+  const first = bridge.start('project', 'a'.repeat(32));
+  now += 120001;
+  assert.throws(() => bridge.claim(origin, first.challenge, 1), { code: 'EXTENSION_PAIRING_EXPIRED' });
+  const paired = pair(bridge);
+  bridge.start('project', 'a'.repeat(32));
+  assert.throws(() => bridge.authenticate(origin, token), { code: 'EXTENSION_SESSION_EXPIRED' });
+  assert.equal(bridge.list('project').find(item => item.id === paired.start.id)?.status, 'closed');
+  pair(bridge, 'another'); now += 30 * 60000 + 1;
+  assert.throws(() => bridge.authenticate(origin, token), { code: 'EXTENSION_SESSION_EXPIRED' });
+  bridge.close(); assert.equal(bridge.allowsOrigin(origin), false);
+  assert.throws(() => bridge.start('project', 'a'.repeat(32)), { code: 'PLATFORM_CLOSING' });
+});
+test('runtime project removal and repeated close revoke actual extension credentials', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-extension-lifecycle-'));
+  const store = new Store(dir);
+  const runtime = new PlatformRuntime(store);
+  t.after(async () => { await runtime.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const projectId = store.projects[0].id;
+  pair(runtime.extension, projectId);
+  await runtime.removeProject(projectId);
+  assert.throws(() => runtime.extension.authenticate(origin, token), { code: 'EXTENSION_SESSION_EXPIRED' });
+  pair(runtime.extension, projectId);
+  await runtime.close(); await runtime.close();
+  assert.equal(runtime.extension.allowsOrigin(origin), false);
+  assert.throws(() => runtime.extension.authenticate(origin, token), { code: 'EXTENSION_SESSION_EXPIRED' });
+  assert.throws(() => runtime.extension.start(projectId, 'a'.repeat(32)), { code: 'PLATFORM_CLOSING' });
+});
+test('HTTP bridge rejects foreign origins, cookies, bad hosts/messages, excessive input and publication', async t => {
+  const extension = new ExtensionBridge();
+  const paired = pair(extension);
+  let exists = true;
+  const app = express();
+  const server = http.createServer(app);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  app.use('/api/platform-extension', createExtensionBridgeRouter({ extension, store: { get: () => exists ? {} : undefined } } as unknown as PlatformRuntime, address.port));
+  const root = `http://127.0.0.1:${address.port}/api/platform-extension`;
+  const request = (route: string, method = 'GET', body?: string, headers: Record<string, string> = {}) => fetch(root + route, { method, headers: { Origin: origin, Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers }, body });
+  assert.equal((await request('/session', 'GET', undefined, { Origin: other })).status, 403);
+  assert.equal((await request('/session', 'GET', undefined, { Cookie: 'sid=secret' })).status, 403);
+  // Node fetch may normalize/ignore Host; use the HTTP wire client for this boundary.
+  const wrongHost = await new Promise<number | undefined>((resolve, reject) => {
+    const req = http.get(`${root}/session`, { headers: { Origin: origin, Authorization: `Bearer ${token}`, Host: `localhost:${address.port}` } }, res => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject);
+  });
+  assert.equal(wrongHost, 403);
+  assert.equal((await request('/session', 'GET', undefined, { Authorization: 'Bearer nope' })).status, 401);
+  assert.equal((await request('/claim', 'POST', JSON.stringify({ challenge: 'x'.repeat(5000), tabId: 1, approved: true }))).status, 413);
+  assert.equal((await request('/claim', 'POST', '{')).status, 400);
+  assert.equal((await request('/claim', 'POST', JSON.stringify({ challenge: token, tabId: 1, approved: true, publish: true }))).status, 400);
+  assert.equal((await request('/publish', 'POST', '{}')).status, 404);
+  assert.equal((await request('/session', 'OPTIONS', undefined, { 'Access-Control-Request-Method': 'PUT' })).status, 403);
+  const report = await (await request('/capabilities')).json();
+  assert.equal(report.projectId, 'project'); assert.equal(report.sessionId, paired.state.id);
+  for (const name of ['accountVerified', 'listWorks', 'saveDraft', 'submitReview', 'publishChapter']) { assert.equal(report[name], false); assert.ok(report.unsupported[name]); }
+  assert.equal(JSON.stringify(report).includes(token), false);
+  const limited = await Promise.all(Array.from({ length: 121 }, () => request('/session')));
+  assert.ok(limited.some(response => response.status === 429));
+  // Each router has its own bounded request window; isolate project deletion from the quota test.
+  const fresh = express();
+  fresh.use('/api/platform-extension', createExtensionBridgeRouter({ extension, store: { get: () => exists ? {} : undefined } } as unknown as PlatformRuntime, address.port));
+  server.removeAllListeners('request'); server.on('request', fresh);
+  exists = false;
+  assert.equal((await request('/capabilities')).status, 410);
+  assert.equal((await request('/session')).status, 401);
+});

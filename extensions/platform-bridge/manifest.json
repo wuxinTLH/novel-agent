@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Novel Agent 本机平台配对",
+  "version": "0.1.0",
+  "description": "仅配对本机 Novel Agent；不读取账号、不写入或发布章节。",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "worker.js", "type": "module" },
+  "action": { "default_popup": "popup.html" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:3001" }
+}

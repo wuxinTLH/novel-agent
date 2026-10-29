@@ -24,6 +24,9 @@ export function createTenantApplication(options: TenantApplicationOptions) {
     string,
     { context: ServiceContext; app: express.Express; unbind(): void; assertHealthy(): void }
   >();
+  app.use(['/api/platform-extension', '/api/projects/:projectId/platform-extension-pairings'], (_req, res) => {
+    res.status(501).json({ code: 'EXTENSION_AUTH_MODE_UNSUPPORTED', error: '扩展配对目前仅支持单用户模式；认证多租户模式尚未实现唯一来源路由。' });
+  });
   // Outer policy protects login/control plane, but delegates business CSRF to tenant app.
   installHttpPolicy(app, undefined, options.port);
   app.use('/api/auth', options.auth.router);

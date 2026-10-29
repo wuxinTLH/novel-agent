@@ -1,4 +1,5 @@
 import express from 'express';
+import { createExtensionBridgeRouter } from '../features/platforms/extension-bridge.js';
 import type { FeatureService, ServiceContext } from './context.js';
 import { installHttpFallbacks, installHttpPolicy } from './http.js';
 import { coreServices, registerServices } from './registry.js';
@@ -14,6 +15,9 @@ export interface ApplicationOptions {
 /** Creates the guarded application without listening or installing process signal handlers. */
 export function createApplication(context: ServiceContext, options: ApplicationOptions) {
   const app = express();
+  // This router has its own strict extension origin, fixed Host and scoped bearer checks.
+  // Never delegate ordinary business APIs through this exception.
+  app.use('/api/platform-extension', createExtensionBridgeRouter(context.platformRuntime, options.port));
   installHttpPolicy(app, context, options.port);
   if (options.assertStorageHealthy)
     app.use('/api', (_req, _res, next) => {

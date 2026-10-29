@@ -136,7 +136,7 @@ export function unsupported(provider: PlatformProvider, capability: PlatformCapa
   throw new PlatformError(
     501,
     'PLATFORM_CAPABILITY_UNSUPPORTED',
-    `${provider.name} 尚未开放已核验的 ${capability} 能力。`,
+    `${provider.name} 尚未开放已核验的 ${capability} 能力。${provider.readinessReason || provider.description}`,
     capability,
   );
 }

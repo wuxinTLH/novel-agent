@@ -9,6 +9,18 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const matches = (value: string, expected: string) => timingSafeEqual(Buffer.from(hash(value)), Buffer.from(expected));
 const secret = z.string().regex(/^[a-f0-9]{64}$/);
 const originPattern = /^chrome-extension:\/\/[a-p]{32}$/;
+const tabIdentifier = z.number().int().nonnegative().max(2_147_483_647);
+const capabilityReport = {
+  paired: true, accountVerified: false, listWorks: false, saveDraft: false,
+  submitReview: false, publishChapter: false,
+  unsupported: {
+    accountVerified: '仅完成扩展配对；未实现真实作者身份的只读核验。',
+    listWorks: '尚无经过账号身份核验的作品读取协议。',
+    saveDraft: '尚无经准确作品绑定、逐项批准和全文回读验证的扩展写入协议。',
+    submitReview: '扩展不提供提交审核；配对凭据不能授权远端写入。',
+    publishChapter: '不提供正式发布或自动发布。',
+  },
+} as const;
 export interface ExtensionSessionState {
   kind: 'browser_extension';
   id: string;
@@ -40,7 +52,7 @@ export class ExtensionBridge {
     for (const [id, entry] of this.sessions)
       if (Date.parse(entry.state.expiresAt) <= this.clock()) this.sessions.delete(id);
     for (const [id, entry] of this.pairings)
-      if (Date.parse(entry.view.expiresAt) + 60_000 <= this.clock()) this.pairings.delete(id);
+      if (Date.parse(entry.view.expiresAt) + 60_000 <= this.clock() && (!entry.view.sessionId || !this.sessions.has(entry.view.sessionId))) this.pairings.delete(id);
   }
   start(projectId: string, extensionId: string): ExtensionPairing {
     if (this.stopped) throw new PlatformError(503, 'PLATFORM_CLOSING', '扩展服务正在关闭。');
@@ -68,7 +80,10 @@ export class ExtensionBridge {
   list(projectId: string) {
     this.prune();
     return [...this.pairings.values()].filter((entry) => entry.view.projectId === projectId).map(({ view }) => ({
-      ...view, status: Date.parse(view.expiresAt) <= this.clock() && view.status !== 'closed' ? 'expired' as const : view.status,
+      ...view,
+      sessionId: view.sessionId && this.sessions.has(view.sessionId) ? view.sessionId : undefined,
+      message: view.status === 'closed' ? view.message : view.sessionId && !this.sessions.has(view.sessionId) ? '扩展会话已断开或到期；请重新配对。' : view.message,
+      status: Date.parse(view.expiresAt) <= this.clock() && view.status !== 'closed' && (!view.sessionId || !this.sessions.has(view.sessionId)) ? 'expired' as const : view.status,
     }));
   }
   allowsOrigin(origin: string) {
@@ -79,6 +94,8 @@ export class ExtensionBridge {
     );
   }
   claim(origin: string, challenge: string, tabId: number) {
+    secret.parse(challenge);
+    tabIdentifier.parse(tabId);
     const entry = [...this.pairings.values()].find((item) => item.view.extensionOrigin === origin && matches(challenge, item.challengeHash));
     if (!entry) throw new PlatformError(403, 'EXTENSION_PAIRING_INVALID', '配对码或扩展来源无效。');
     this.entry(entry.view.id);
@@ -97,6 +114,8 @@ export class ExtensionBridge {
     return { ...entry.view };
   }
   finish(origin: string, id: string, claimToken: string, token: string) {
+    secret.parse(claimToken);
+    secret.parse(token);
     const entry = this.entry(id);
     if (entry.view.extensionOrigin !== origin || !entry.claimHash || !matches(claimToken, entry.claimHash)) throw new PlatformError(403, 'EXTENSION_AUTH_INVALID', '扩展配对凭据无效。');
     if (entry.view.status !== 'confirmed') throw new PlatformError(409, 'EXTENSION_APP_CONFIRM_REQUIRED', '请先返回应用明确确认配对。');
@@ -118,6 +137,7 @@ export class ExtensionBridge {
   }
   authenticate(origin: string, token: string) {
     this.prune();
+    if (!secret.safeParse(token).success) throw new PlatformError(401, 'EXTENSION_AUTH_REQUIRED', '需要有效的扩展配对凭据。');
     const entry = [...this.sessions.values()].find((item) => item.state.extensionOrigin === origin && matches(token, item.tokenHash));
     if (this.stopped || !entry) throw new PlatformError(401, 'EXTENSION_SESSION_EXPIRED', '扩展配对已过期或断开，请重新配对。');
     return { ...entry.state };
@@ -143,16 +163,23 @@ export class ExtensionBridge {
 }
 
 /** Mount ONLY at /api/platform-extension, before general app origin/CSRF guards. */
-export function createExtensionBridgeRouter(runtime: PlatformRuntime) {
+export function createExtensionBridgeRouter(runtime: PlatformRuntime, port = Number(process.env.PORT || 3001)) {
   const router = Router();
+  const windows = new Map<string, { since: number; count: number }>();
   router.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     const origin = req.get('origin') || '';
-    if (req.get('host') !== `127.0.0.1:${process.env.PORT || '3001'}` || !runtime.extension.allowsOrigin(origin))
+    if (req.get('host') !== `127.0.0.1:${port}` || !runtime.extension.allowsOrigin(origin))
       throw new PlatformError(403, 'EXTENSION_ORIGIN_REJECTED', '仅允许本次配对指定的扩展来源和固定本机地址。');
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
+    const now = Date.now();
+    for (const [key, value] of windows) if (now - value.since >= 60_000) windows.delete(key);
+    const window = windows.get(origin) || { since: now, count: 0 };
+    windows.set(origin, window);
+    if (++window.count > 120) throw new PlatformError(429, 'EXTENSION_RATE_LIMITED', '扩展请求过于频繁，请稍后重试。');
+    if (req.get('cookie')) throw new PlatformError(403, 'EXTENSION_COOKIE_REJECTED', '扩展桥不接受 Cookie。');
     if (req.method === 'OPTIONS') {
       if (!['GET', 'POST', 'DELETE'].includes(req.get('access-control-request-method') || '') ||
         (req.get('access-control-request-headers') || '').split(',').some((header) => header.trim() && !['authorization', 'content-type'].includes(header.trim().toLowerCase())))
@@ -162,13 +189,12 @@ export function createExtensionBridgeRouter(runtime: PlatformRuntime) {
       res.status(204).end();
       return;
     }
-    if (req.get('cookie')) throw new PlatformError(403, 'EXTENSION_COOKIE_REJECTED', '扩展桥不接受 Cookie。');
     if (req.method === 'POST' && !req.is('application/json')) throw new PlatformError(415, 'EXTENSION_JSON_REQUIRED', '扩展桥仅接受 JSON。');
     next();
   });
   router.use(json({ limit: '4kb' }));
   router.post('/claim', (req, res) => {
-    const input = z.object({ challenge: secret, tabId: z.number().int().nonnegative(), approved: z.literal(true) }).strict().parse(req.body);
+    const input = z.object({ challenge: secret, tabId: tabIdentifier, approved: z.literal(true) }).strict().parse(req.body);
     res.json(runtime.extension.claim(req.get('origin')!, input.challenge, input.tabId));
   });
   router.post('/finish', (req, res) => {
@@ -186,10 +212,16 @@ export function createExtensionBridgeRouter(runtime: PlatformRuntime) {
     return state;
   };
   router.get('/session', (req, res) => res.json(session(req)));
+  router.get('/capabilities', (req, res) => {
+    const state = session(req);
+    res.json({ sessionId: state.id, projectId: state.projectId, tabId: state.tabId, expiresAt: state.expiresAt, ...capabilityReport });
+  });
   router.delete('/session', (req, res) => { runtime.extension.revokeSession(session(req).id); res.json({ ok: true }); });
   router.use((_req, res) => res.status(404).json({ code: 'EXTENSION_ROUTE_NOT_FOUND', error: '扩展桥不提供此操作。' }));
   router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    res.status(error instanceof PlatformError ? error.status : error instanceof z.ZodError ? 400 : 500).json({
+    const bodyError = error as { type?: string } | null;
+    const status = error instanceof PlatformError ? error.status : error instanceof z.ZodError || bodyError?.type === 'entity.parse.failed' ? 400 : bodyError?.type === 'entity.too.large' ? 413 : 500;
+    res.status(status).json({
       code: error instanceof PlatformError ? error.code : 'EXTENSION_REQUEST_INVALID',
       error: error instanceof PlatformError ? error.message : '扩展请求无效。', retryable: false,
     });

@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { GenerationError } from '../features/generation/generation.js';
 import type { ServiceContext } from './context.js';
 import { createOriginPolicy } from './trusted-origin.js';
+import { safeUploadReader } from '../features/file-sandbox/safe-read.js';
+import { createRequestLimiter } from './request-limiter.js';
 export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number) {
   const originAllowed = createOriginPolicy(port);
   app.use((req, res, next) => {
@@ -33,29 +35,21 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext 
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     next();
   });
-  const requestWindows = new Map<string, number[]>();
+  const requestLimiter = createRequestLimiter();
   app.use('/api', (req, res, next) => {
-    const now = Date.now();
-    const key = req.ip || 'local';
-    const recent = (requestWindows.get(key) || []).filter((time) => now - time < 60_000);
-    recent.push(now);
-    requestWindows.set(key, recent);
-    if (recent.length > 240)
+    const result = requestLimiter.check(req.ip || 'local');
+    if (!result.allowed)
       return res
         .status(429)
-        .json({ error: '本机请求过于频繁，请稍后重试。', code: 'RATE_LIMITED', retryable: true });
+        .setHeader('Retry-After', String(result.retryAfter))
+        .json({ error: '请求过于频繁，请稍后重试。', code: 'RATE_LIMITED', retryable: true });
     next();
   });
   app.use(express.json({ limit: '16mb' }));
   if (context)
     app.use(
       '/uploads',
-      express.static(path.join(context.dir, 'uploads'), {
-        setHeaders(res) {
-          res.setHeader('X-Content-Type-Options', 'nosniff');
-          res.setHeader('Cache-Control', 'private, no-store');
-        },
-      }),
+      safeUploadReader(path.join(context.dir, 'uploads')),
       (_req, res) => res.status(404).json({ code: 'UPLOAD_NOT_FOUND', error: '文件不存在。' }),
     );
 }

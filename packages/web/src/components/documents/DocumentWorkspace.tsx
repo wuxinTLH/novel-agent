@@ -36,7 +36,7 @@ export function DocumentWorkspace({ projectId }: { projectId: string }) {
     const epoch = generation.current;
     setError('');
     if (/\.doc$/i.test(file.name)) {
-      setError('旧版 .doc 不支持；请先在 Word / LibreOffice 中另存为 DOCX 或 PDF。');
+      setError('旧版 .doc 不支持；请先在 Word / LibreOffice 中另存为 DOCX。');
       return;
     }
     if (file.size > DOCUMENT_MAX_BYTES) {
@@ -77,11 +77,11 @@ export function DocumentWorkspace({ projectId }: { projectId: string }) {
       <h3>文档阅读与稿件导出</h3>
       <p>文档只在本机临时阅读，30 分钟过期；不会自动写入章节或资料，不上传到第三方。每份 ≤ 8 MiB。</p>
       <label>
-        打开 DOCX / PDF{' '}
+        打开 DOCX{' '}
         <input
-          aria-label="打开 DOCX 或 PDF"
+          aria-label="打开 DOCX"
           type="file"
-          accept=".docx,.pdf"
+          accept=".docx"
           disabled={busy}
           onChange={(event) => {
             const file = event.target.files?.[0];

@@ -53,6 +53,11 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
   let maintenanceFailed = false;
   const inFlight = new Set<express.Response>();
 
+  // Authenticated mode needs explicit unique runtime ownership discovery before extension support.
+  app.use(['/api/platform-extension', '/api/projects/:projectId/platform-extension-pairings'], (_req, res, next) => {
+    if (options.enabled) return res.status(501).json({ code: 'EXTENSION_AUTH_MODE_UNSUPPORTED', error: '扩展配对目前仅支持单用户模式；认证多租户模式尚未实现唯一来源路由。' });
+    next();
+  });
   // Deliberately no global body parser: delegation preserves exact wire bytes and uploads.
   const windows = new Map<string, number[]>();
   const originAllowed = createOriginPolicy(options.port);
@@ -61,7 +66,8 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     // bypasses the fetch-site test; its handler verifies single-use state,
     // browser binding, PKCE and signed nonce before issuing a session.
     const oidcCallback = req.method === 'GET' && req.path === '/api/auth/account/oidc/callback';
-    if (!originAllowed(req, oidcCallback))
+    const localExtension = !options.enabled && /^\/api\/platform-extension(?:\/|$)/i.test(req.path) && req.get('host') === `127.0.0.1:${options.port}` && /^chrome-extension:\/\/[a-p]{32}$/.test(req.get('origin') || '') && !req.get('cookie');
+    if (!localExtension && !originAllowed(req, oidcCallback))
       return res.status(403).json({ code: 'LOCAL_ORIGIN_REJECTED', error: '只允许本机或局域网来源访问。' });
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');

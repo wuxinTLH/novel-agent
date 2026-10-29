@@ -1,0 +1,3 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>本机平台配对</title><link rel="stylesheet" href="popup.css"></head>
+<body><h1>Novel Agent 本机配对</h1><p>仅支持本机 127.0.0.1:3001 的单用户模式。配对不会授予账号、作品、草稿或发布权限。</p><p>扩展 ID：<code id="extension-id"></code></p><label for="challenge">应用生成的 64 位配对码</label><input id="challenge" maxlength="64" autocomplete="off" spellcheck="false"><label><input id="approval" type="checkbox">我批准与此本机项目及当前番茄作者标签页配对</label><button id="claim">批准配对</button><button id="finish">应用确认后，完成配对</button><button id="status">检查真实能力</button><button id="disconnect">断开并清除凭据</button><pre id="result" role="status" aria-live="polite"></pre><script type="module" src="popup.js"></script></body></html>

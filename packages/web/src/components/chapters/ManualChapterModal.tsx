@@ -2,7 +2,8 @@ import { useRef, useState } from 'react';
 import type { Project } from '../../../../../shared/types';
 import { manualChapterRequestSchema } from '../../../../../shared/manual-chapters';
 import { nextChapterNumber } from '../../hooks/generation/generationState';
-import { decodeChapterFile, MAX_TEXT_FILE_BYTES } from '../../hooks/chapters/manualChapter';
+import { MAX_TEXT_FILE_BYTES } from '../../hooks/chapters/manualChapter';
+import { api } from '../../services/api';
 import Modal from '../common/Modal';
 
 export default function ManualChapterModal({ project, busy, onClose, onSave }: {
@@ -46,7 +47,8 @@ export default function ManualChapterModal({ project, busy, onClose, onSave }: {
         try {
           if (!/\.txt$/i.test(file.name)) throw new Error('目前支持 TXT 纯文本正文，请先将文档另存为 TXT。');
           if(file.size > MAX_TEXT_FILE_BYTES) throw new Error('文件不能超过 2 MB。');
-          const text = decodeChapterFile(await file.arrayBuffer(),encoding);
+          const body = new FormData(); body.append('file', file); body.append('encoding', encoding);
+          const { text } = await api<{ text: string }>('/file-sandbox/chapter', { method: 'POST', body });
           if(sequence !== fileSequence.current) return;
           setContent(text); setFileName(file.name);
           if(!title.trim()) setTitle(file.name.replace(/\.txt$/i,'').slice(0,120));

@@ -47,6 +47,7 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
   router.use('/platforms', guarded);
   const base = '/projects/:projectId';
   for (const suffix of [
+    'platform-extension-pairings',
     'platform-staging',
     'platform-publication-batches',
     'platform-connections',
@@ -160,6 +161,19 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
     genre: z.string().max(80).default(''),
   });
 
+  router.get(`${base}/platform-extension-pairings`, (req, res) => res.json(runtime.extension.list(pid(req))));
+  router.post(`${base}/platform-extension-pairings`, (req, res) => {
+    const input = z.object({ extensionId: z.string().regex(/^[a-p]{32}$/) }).strict().parse(req.body);
+    res.status(201).json(runtime.extension.start(pid(req), input.extensionId));
+  });
+  router.post(`${base}/platform-extension-pairings/:pairingId/confirm`, (req, res) => {
+    z.object({}).strict().parse(req.body);
+    res.json(runtime.extension.confirm(pid(req), z.string().uuid().parse(req.params.pairingId)));
+  });
+  router.delete(`${base}/platform-extension-pairings/:pairingId`, (req, res) => {
+    runtime.extension.cancel(pid(req), z.string().uuid().parse(req.params.pairingId));
+    res.json({ ok: true });
+  });
   router.get('/platforms/providers', (_req, res) => res.json(runtime.registry.providers()));
   router.get('/platforms/session', (_req, res) => res.json(runtime.status()));
   router.get(`${base}/platform-connections`, (req, res) =>

@@ -63,6 +63,9 @@ import { platformFromPath, platformPath } from '../hooks/platforms/platformNavig
 import GenerationModal, { type GenerationEntry } from '../components/generation/GenerationModal';
 import GenerationCandidates from '../components/generation/GenerationCandidates';
 import GenerationProgress from '../components/generation/GenerationProgress';
+import GenerationRuntimePanel from '../components/generation/GenerationRuntimePanel';
+import WorkflowScheduleSettings from '../components/workflow/WorkflowScheduleSettings';
+import WorkflowSchedulePreview from '../components/workflow/WorkflowSchedulePreview';
 import { DocumentWorkspace } from '../components/documents/DocumentWorkspace';
 import Modal from '../components/common/Modal';
 import AddNodeDialog from '../components/workflow/AddNodeDialog';
@@ -70,9 +73,11 @@ import ErrorBanner, { errorMessage } from '../components/common/ErrorBanner';
 import ModelSettingsPanel from '../components/settings/ModelSettingsPanel';
 import ProjectSettingsPanel from '../components/projects/ProjectSettingsPanel';
 import ProjectsLibrary from '../components/projects/ProjectsLibrary';
+import KnowledgePanel from '../components/knowledge/KnowledgePanel';
 import '../styles/workspace-navigation.scss';
 import { useLocale } from '../locals';
 import { useChapterEditor } from '../hooks/chapters/useChapterEditor';
+import ChapterHistory from '../components/chapters/ChapterHistory';
 import {
   canApplyProject,
   filterAssets,
@@ -907,7 +912,9 @@ export default function App() {
     task(async () => {
       if (!file.type.startsWith('image/')) throw new Error('头像必须是图片文件');
       if (file.size > 8 * 1024 * 1024) throw new Error('头像文件不能超过 8 MiB');
-      const source = await createImageBitmap(file);
+      const body = new FormData(); body.append('file', file);
+      const checked = await api<{ dataUrl: string }>('/file-sandbox/avatar', { method: 'POST', body });
+      const source = await createImageBitmap(await (await fetch(checked.dataUrl)).blob());
       if (source.width > 6000 || source.height > 6000) {
         source.close();
         throw new Error('头像图片尺寸不能超过 6000 × 6000 像素');
@@ -934,7 +941,7 @@ export default function App() {
       if (avatarRef.current) avatarRef.current.value = '';
     });
   const selectChapter = async (c: Chapter) => {
-    if (dirty && !(await confirmDialog('切换章节将丢弃未保存的修改，是否继续？'))) return;
+    if (dirty && !(await confirmDialog('当前修改会保留为本地草稿，切换章节吗？'))) return;
     chapterEditor.selectChapter(c);
   };
   const retryFailedChapter = (number: number, mode: 'create' | 'regenerate') => {
@@ -2380,6 +2387,7 @@ export default function App() {
           )}
           {page === 'assets' && (
             <>
+              {project && <KnowledgePanel key={project.id} projectId={project.id} chapters={project.chapters} />}
               <section className="asset-category-grid">
                 {categories.map((cat) => {
                   const Icon = assetIcons[cat];
@@ -2612,6 +2620,13 @@ export default function App() {
                 savedChapters={project.chapters.length}
                 onRetry={retryFailedChapter}
               />
+              <GenerationRuntimePanel project={project} busy={busy || running || dirty} onResume={() => void task(async () => {
+                const run = project.run!;
+                const updated = await projectRequest(`/projects/${project.id}/runs/${run.id}/resume`, {
+                  method: 'POST', body: JSON.stringify({ snapshotFingerprint: run.resumeSnapshot!.fingerprint }),
+                });
+                if (acceptProject(updated)) showToast('已恢复剩余章节任务');
+              })} />
               <GenerationCandidates
                 project={project}
                 busy={busy || running}
@@ -2716,6 +2731,36 @@ export default function App() {
                             <ArrowDownToLine size={15} />
                             导出
                           </button>
+                          {chapterEditor.currentChapter && <ChapterHistory
+                            key={`${project.id}/${chapterId}`}
+                            chapter={chapterEditor.currentChapter}
+                            editor={editor}
+                            disabled={dirty || busy || running || chapterConflict}
+                            restore={async (revision, expectedRevision) => {
+                              const submitted = { ...chapterEditor.stateRef.current };
+                              let restored = false;
+                              await task(async () => {
+                                let saved: Project;
+                                try {
+                                  saved = await projectRequest(`/projects/${projectId}/chapters/${submitted.chapterId}/restore`, {
+                                    method: 'POST',
+                                    body: JSON.stringify({ revision, expectedRevision, workflowId: workflowIdOf(project) }),
+                                  });
+                                } catch (error) {
+                                  if (error instanceof ApiError && error.status === 409) {
+                                    try { acceptProject(await projectRequest(`/projects/${projectId}`)); } catch { /* Keep local input. */ }
+                                  }
+                                  throw error;
+                                }
+                                const chapter = saved.chapters.find((item) => item.id === submitted.chapterId);
+                                if (!acceptProject(saved) || !chapter) return;
+                                chapterEditor.acknowledgeSave(submitted, chapter);
+                                showToast('历史版本已恢复为新版本，恢复前的正式稿已保留');
+                                restored = true;
+                              });
+                              return restored;
+                            }}
+                          />}
                           <button
                             className="button primary"
                             disabled={!dirty || busy || running || chapterConflict}
@@ -2729,10 +2774,16 @@ export default function App() {
                           {chapterConflict
                             ? '服务器版本已变化，可继续编辑；请先导出，再载入最新版本后保存。'
                             : dirty
-                              ? '修改尚未保存。'
+                              ? chapterEditor.draftWarning
+                                ? '修改尚未提交，请保存或导出当前输入。'
+                                : '修改尚未提交，已保留本地草稿；再次打开本章节可恢复。'
                               : '当前章节已与服务器版本一致。'}
                         </p>
                       </div>
+                      {chapterEditor.draftWarning && <p role="alert">{chapterEditor.draftWarning}</p>}
+                      {dirty && <button className="text-button" onClick={async () => {
+                        if (await confirmDialog('确定丢弃本章节的本地草稿并载入正式版本吗？')) chapterEditor.discardDraft();
+                      }}>丢弃本地草稿</button>}
                       {chapterConflict && (
                         <div className="generation-warning" role="alert">
                           服务器上的章节已更新或删除。你的未保存文字仍在编辑器中，可先导出再载入最新版本。
@@ -2744,9 +2795,7 @@ export default function App() {
                                   '先导出或复制当前草稿。确定丢弃编辑器内容并载入最新版本吗？',
                                 )
                               ) {
-                                if (chapterEditor.currentChapter)
-                                  chapterEditor.selectChapter(chapterEditor.currentChapter);
-                                else chapterEditor.resetEditor(project.chapters);
+                                chapterEditor.discardDraft();
                               }
                             }}
                           >
@@ -3153,7 +3202,7 @@ export default function App() {
                 acceptProject(
                   await projectRequest(`/projects/${project.id}/assets/${editAsset.id}`, {
                     method: 'PATCH',
-                    body: JSON.stringify(Object.fromEntries(f)),
+                    body: JSON.stringify({ ...Object.fromEntries(f), expectedRevision: editAsset.revision || 1 }),
                   }),
                 );
                 setEditAsset(null);
@@ -3293,6 +3342,8 @@ export default function App() {
                     chapterCount: Number(f.get('chapterCount')),
                     autoGenerate: f.get('autoGenerate') === 'on',
                     automationMode: String(f.get('automationMode') || 'manual'),
+                    maxAutoRepairs: Number(f.get('maxAutoRepairs') || 0),
+                    maxParallelNodes: Number(f.get('maxParallelNodes') || 1),
                     auditNodeId: String(f.get('auditNodeId') || ''),
                     outputName: String(f.get('outputName') || ''),
                   }),
@@ -3323,6 +3374,14 @@ export default function App() {
                 <option value="manual">手动采用重生成候选</option>
                 <option value="automatic">全自动 · 启动后无需逐章确认</option>
               </select>
+            </label>
+            <label>
+              独立节点并发数（正文、审校保持串行）
+              <input name="maxParallelNodes" type="number" min={1} max={4} defaultValue={project.workflow?.maxParallelNodes ?? 1} />
+            </label>
+            <label>
+              自动返修上限（仅全自动模式，0 表示关闭）
+              <input name="maxAutoRepairs" type="number" min={0} max={3} defaultValue={project.workflow?.maxAutoRepairs ?? 0} />
             </label>
             <p className="info-note">
               全自动模式启动后连续执行所选章节，审校完成且硬性文本校验通过时自动保存、采用重生成版本；校验、审校或版本冲突会立即停止并保留恢复稿，不跳过安全检查。
@@ -3359,6 +3418,14 @@ export default function App() {
               保存工作流
             </button>
           </form>
+          <WorkflowSchedulePreview steps={project.steps} edges={project.workflow?.edges || []} />
+          <WorkflowScheduleSettings project={project} busy={busy || running} onSave={async patch => {
+            await updateGraph({
+              workflow: { edges: patch.edges, maxParallelNodes: patch.maxParallelNodes },
+              steps: (patch.steps || []).filter(step => step.kind !== 'start' && step.kind !== 'end').map(step => ({ id: step.id, join: step.join })),
+            });
+            showToast('节点调度设置已保存');
+          }} />
         </Modal>
       )}
       {preview && (

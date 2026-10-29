@@ -16,7 +16,15 @@ import { useConfirm } from '../common/AppDialog';
 import type { ModelProtocol, ModelSettings } from '../../../../../shared/types';
 import { protocolLabels } from '../../../../../shared/types';
 
+import { modelRuntimeDefaults, modelRuntimeNumericRules, validateModelRuntime, type ModelRuntimeOptions } from '../../../../../shared/model-runtime';
+
 type ModelView = 'switch' | 'add' | 'edit';
+type RuntimeField = keyof typeof modelRuntimeNumericRules;
+const runtimeLabels: Record<RuntimeField, string> = {
+  temperature: '温度', maxOutputTokens: '最大输出 token', timeoutMs: '超时（毫秒）', contextWindow: '上下文窗口（token）',
+  maxImages: '图片上限', inputPricePerMillion: '输入价格 / 百万 token', outputPricePerMillion: '输出价格 / 百万 token',
+  perCallBudgetTokens: '每次调用 token 预算（留空不限）', maxEstimatedCostPerCall: '每次调用预估费用预算（留空不限）',
+};
 type ModelForm = {
   name: string;
   baseUrl: string;
@@ -24,6 +32,8 @@ type ModelForm = {
   protocol: ModelProtocol;
   apiKey: string;
   clearKey: boolean;
+  runtime: Record<RuntimeField, string>;
+  vision: boolean;
 };
 
 const emptyForm: ModelForm = {
@@ -33,6 +43,8 @@ const emptyForm: ModelForm = {
   protocol: 'chat-completions',
   apiKey: '',
   clearKey: false,
+  runtime: Object.fromEntries(Object.keys(modelRuntimeNumericRules).map(key => [key, ''])) as Record<RuntimeField, string>,
+  vision: modelRuntimeDefaults.vision,
 };
 
 function formForModel(settings: ModelSettings, id: string): ModelForm {
@@ -45,6 +57,8 @@ function formForModel(settings: ModelSettings, id: string): ModelForm {
         protocol: model.protocol,
         apiKey: '',
         clearKey: false,
+        runtime: Object.fromEntries(Object.keys(modelRuntimeNumericRules).map(key => [key, (model as ModelRuntimeOptions)[key as RuntimeField]?.toString() || ''])) as Record<RuntimeField, string>,
+        vision: (model as ModelRuntimeOptions).vision ?? modelRuntimeDefaults.vision,
       }
     : emptyForm;
 }
@@ -115,7 +129,20 @@ export default function ModelSettingsPanel({
   const submitForm = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!form.name.trim() || !form.baseUrl.trim() || !form.model.trim()) return;
+    const runtime: ModelRuntimeOptions = { vision: form.vision };
+    for (const key of Object.keys(modelRuntimeNumericRules) as RuntimeField[]) {
+      const raw = form.runtime[key].trim();
+      // Clearing explicit generation options restores defaults; clearing prices means unknown.
+      if (raw) runtime[key] = Number(raw);
+      else if (key in modelRuntimeDefaults && view === 'edit' && (models.find(m => m.id === editingId) as ModelRuntimeOptions | undefined)?.[key] !== undefined)
+        runtime[key] = modelRuntimeDefaults[key as keyof typeof modelRuntimeDefaults] as number;
+    }
+    const errors = validateModelRuntime(runtime);
+    if (form.protocol === 'anthropic-messages' && (runtime.temperature ?? 0) > 1) errors.push('Anthropic 温度必须在 0–1 范围内。');
+    if (errors.length) { onError(errors.join(' ')); return; }
     const payload = {
+      ...runtime,
+      ...(view === 'edit' ? { clearInputPrice: !form.runtime.inputPricePerMillion.trim(), clearOutputPrice: !form.runtime.outputPricePerMillion.trim(), clearTokenBudget: !form.runtime.perCallBudgetTokens.trim(), clearCostBudget: !form.runtime.maxEstimatedCostPerCall.trim() } : {}),
       name: form.name.trim(),
       baseUrl: form.baseUrl.trim(),
       model: form.model.trim(),
@@ -161,7 +188,7 @@ export default function ModelSettingsPanel({
             <p>{view === 'add' ? '保存一个新的模型连接配置。' : `正在修改：${editingModel?.name || '模型配置'}`}</p>
           </div>
         </div>
-        <form className="model-editor-page" onSubmit={submitForm}>
+        <form className="model-editor-page" onSubmit={submitForm} aria-busy={modelBusy || busy}>
           <div className="model-editor-heading">
             <Sparkles size={20} />
             <div>
@@ -171,15 +198,15 @@ export default function ModelSettingsPanel({
           </div>
           <label>
             显示名称
-            <input value={form.name} onChange={(event) => update('name', event.target.value)} required maxLength={100} placeholder="例如：工作室 Qwen" />
+            <input disabled={modelBusy || busy} value={form.name} onChange={(event) => update('name', event.target.value)} required maxLength={100} placeholder="例如：工作室 Qwen" />
           </label>
           <label>
             服务地址 <span>Base URL</span>
-            <input type="url" value={form.baseUrl} onChange={(event) => update('baseUrl', event.target.value)} required placeholder="https://api.openai.com/v1" />
+            <input type="url" disabled={modelBusy || busy} value={form.baseUrl} onChange={(event) => update('baseUrl', event.target.value)} required placeholder="https://api.openai.com/v1" />
           </label>
           <label>
             接口协议
-            <select value={form.protocol} onChange={(event) => update('protocol', event.target.value as ModelProtocol)}>
+            <select disabled={modelBusy || busy} value={form.protocol} onChange={(event) => update('protocol', event.target.value as ModelProtocol)}>
               {(Object.keys(protocolLabels) as ModelProtocol[]).map((protocol) => (
                 <option key={protocol} value={protocol}>{protocolLabels[protocol]}</option>
               ))}
@@ -187,23 +214,37 @@ export default function ModelSettingsPanel({
           </label>
           <label>
             模型 ID
-            <input value={form.model} onChange={(event) => update('model', event.target.value)} required maxLength={100} placeholder="gpt-4.1-mini" />
+            <input disabled={modelBusy || busy} value={form.model} onChange={(event) => update('model', event.target.value)} required maxLength={100} placeholder="gpt-4.1-mini" />
           </label>
           <label>
             API Key
-            <input type="password" autoComplete="off" value={form.apiKey} onChange={(event) => update('apiKey', event.target.value)} placeholder={view === 'edit' ? '留空以保留原密钥' : '输入 API Key'} />
+            <input type="password" disabled={modelBusy || busy} autoComplete="off" value={form.apiKey} onChange={(event) => update('apiKey', event.target.value)} placeholder={view === 'edit' ? '留空以保留原密钥' : '输入 API Key'} />
           </label>
           {view === 'edit' && editingModel?.hasKey && (
             <label className="checkbox-label">
-              <input type="checkbox" checked={form.clearKey} onChange={(event) => update('clearKey', event.target.checked)} />
+              <input type="checkbox" disabled={modelBusy || busy} checked={form.clearKey} onChange={(event) => update('clearKey', event.target.checked)} />
               清除当前密钥
             </label>
           )}
+          <fieldset disabled={modelBusy || busy}>
+            <legend>生成参数与能力</legend>
+            <p className="info-note">留空使用兼容默认值。上下文预检为保守估算；价格按同一货币每百万 token 填写，未填写时不估算费用。每次预算预留最大输出 token，超限将在请求前拒绝；费用预算须配置两项价格，0 表示只允许预估免费调用。费用为估算，不能保证服务商实际账单上限。</p>
+            {(Object.keys(modelRuntimeNumericRules) as RuntimeField[]).map(key => {
+              const rule = modelRuntimeNumericRules[key];
+              return <label key={key}>{runtimeLabels[key]}
+                <input type="number" min={rule.min} max={key === 'temperature' && form.protocol === 'anthropic-messages' ? 1 : rule.max} step={rule.integer ? 1 : 'any'}
+                  value={form.runtime[key]} placeholder={key in modelRuntimeDefaults ? String(modelRuntimeDefaults[key as keyof typeof modelRuntimeDefaults]) : '未配置'}
+                  onChange={event => setForm(current => ({ ...current, runtime: { ...current.runtime, [key]: event.target.value } }))} />
+              </label>;
+            })}
+            <label className="checkbox-label"><input type="checkbox" checked={form.vision} onChange={event => update('vision', event.target.checked)} />启用视觉输入</label>
+          </fieldset>
           <p className="info-note">{form.protocol === 'anthropic-messages' ? 'Anthropic 使用 x-api-key 与 anthropic-version。' : form.protocol === 'responses' ? 'Responses API 使用 /responses 与 input。' : 'Chat Completions 使用 /chat/completions 与 messages。'}</p>
           <div className="model-editor-actions">
             <button type="button" className="button secondary" onClick={closeForm} disabled={modelBusy || busy}><X size={15} /> 取消</button>
-            <button type="submit" className="button primary" disabled={modelBusy || busy}><Check size={15} /> {view === 'add' ? '保存模型' : '保存修改'}</button>
+            <button type="submit" className="button primary" disabled={modelBusy || busy}><Check size={15} /> {modelBusy ? '保存中…' : view === 'add' ? '保存模型' : '保存修改'}</button>
           </div>
+          {modelBusy && <p role="status">正在保存模型配置…</p>}
         </form>
       </div>
     );
@@ -244,8 +285,8 @@ export default function ModelSettingsPanel({
       <section className="model-mode-card" aria-labelledby="model-mode-title">
         <div className="model-section-heading"><div><h3 id="model-mode-title">运行模式</h3><p>演示模式不请求外部服务，连接模型会使用上方当前配置。</p></div><ShieldCheck size={19} /></div>
         <div className="mode-options">
-          <button type="button" className={mode === 'demo' ? 'active' : ''} onClick={() => setMode('demo')}><WandSparkles size={18} /><strong>演示模式</strong><small>无需密钥，体验创作流程</small>{mode === 'demo' && <Check size={15} />}</button>
-          <button type="button" className={mode === 'live' ? 'active' : ''} onClick={() => setMode('live')}><Sparkles size={18} /><strong>连接模型</strong><small>使用当前模型生成小说内容</small>{mode === 'live' && <Check size={15} />}</button>
+          <button type="button" className={mode === 'demo' ? 'active' : ''} aria-pressed={mode === 'demo'} disabled={busy || modelBusy} onClick={() => setMode('demo')}><WandSparkles size={18} /><strong>演示模式</strong><small>无需密钥，体验创作流程</small>{mode === 'demo' && <Check size={15} />}</button>
+          <button type="button" className={mode === 'live' ? 'active' : ''} aria-pressed={mode === 'live'} disabled={busy || modelBusy} onClick={() => setMode('live')}><Sparkles size={18} /><strong>连接模型</strong><small>使用当前模型生成小说内容</small>{mode === 'live' && <Check size={15} />}</button>
         </div>
         {mode !== settings.mode && activeModel && <button type="button" className="button primary model-mode-save" onClick={() => onSave({ mode, baseUrl: activeModel.baseUrl, model: activeModel.model, protocol: activeModel.protocol, activeModelId: activeModel.id })} disabled={busy || modelBusy}><Check size={15} /> 保存运行模式</button>}
       </section>

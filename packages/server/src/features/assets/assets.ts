@@ -1,4 +1,6 @@
-import multer from 'multer';
+import { quarantinedUpload } from '../file-sandbox/upload.js';
+import { inspectUpload } from '../file-sandbox/sandbox.js';
+import { archiveAssetRevision } from '../../../../../shared/asset-history.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,11 +16,8 @@ export const assetsService: FeatureService = {
   register(app, context) {
     const { dir, store } = context;
     const { persistProject, mutateProject } = createProjectOperations(store);
-    const upload = multer({
-      storage: multer.memoryStorage(),
-      limits: { fileSize: IMAGE_ASSET_MAX_BYTES, files: 10 },
-    });
-    app.post('/api/projects/:projectId/assets/upload', upload.array('files', 10), (req, res) => {
+    app.post('/api/projects/:projectId/assets/upload', quarantinedUpload('files', 10, IMAGE_ASSET_MAX_BYTES, 1), async (req, res) => {
+      try {
       const category = z.enum(categories).parse(req.body.category);
       const files = req.files as Express.Multer.File[];
       if (!files?.length) return res.status(400).json({ error: '请选择上传文件。' });
@@ -36,43 +35,29 @@ export const assetsService: FeatureService = {
       const p = res.locals.project as Project;
       if (p.assets.length + files.length > 100)
         return res.status(400).json({ error: '每个项目最多保存 100 份资料。' });
-      for (const f of files) {
-        const ext = path.extname(f.originalname).toLowerCase();
-        const mime = allowed.get(ext)!;
+      // Scan the entire batch before publishing any file or mutating project state.
+      const checked = [];
+      for (const file of files) checked.push(await inspectUpload(file, 'asset', undefined, res.locals.uploadLease.signal));
+      const createdPaths: string[] = [];
+      const originalAssets = p.assets.slice();
+      try {
+      for (const f of checked) {
+        const ext = f.extension, mime = f.mime, id = randomUUID();
         const isImage = mime.startsWith('image/');
-        if (!isImage && f.size > TEXT_ASSET_MAX_BYTES)
-          return res
-            .status(413)
-            .json({ error: '文本资料单个文件不能超过 2 MiB。', code: 'TEXT_ASSET_TOO_LARGE' });
-        if (isImage && f.size > IMAGE_ASSET_MAX_BYTES)
-          return res
-            .status(413)
-            .json({ error: '图片资料单个文件不能超过 4 MiB。', code: 'IMAGE_ASSET_TOO_LARGE' });
         if (isImage) {
-          const valid =
-            ext === '.png'
-              ? f.buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-              : ext === '.webp'
-                ? f.buffer.toString('ascii', 0, 4) === 'RIFF' && f.buffer.toString('ascii', 8, 12) === 'WEBP'
-                : f.buffer[0] === 255 && f.buffer[1] === 216 && f.buffer[2] === 255;
-          if (!valid) return res.status(400).json({ error: '图片内容与文件格式不匹配。' });
+          const target = path.join(dir, 'uploads', id + ext);
+          fs.writeFileSync(target, f.buffer, { flag: 'wx', mode: 0o600 });
+          createdPaths.push(target);
         }
-      }
-      for (const f of files) {
-        const ext = path.extname(f.originalname).toLowerCase(),
-          mime = allowed.get(ext)!,
-          id = randomUUID();
-        const isImage = mime.startsWith('image/');
-        if (isImage) fs.writeFileSync(path.join(dir, 'uploads', id + ext), f.buffer);
-        const decoded = Buffer.from(f.originalname, 'latin1').toString('utf8');
+        const decoded = Buffer.from(f.name, 'latin1').toString('utf8');
         p.assets.push({
           id,
           category,
-          name: decoded.includes('\ufffd') ? f.originalname : decoded,
-          content: isImage ? '' : f.buffer.toString('utf8').replace(/^\uFEFF/, ''),
+          name: decoded.includes('\ufffd') ? f.name : decoded,
+          content: isImage ? '' : f.text!,
           url: isImage ? `/uploads/${id}${ext}` : undefined,
           mime,
-          size: f.size,
+          size: f.buffer.length,
           createdAt: new Date().toISOString(),
         });
       }
@@ -81,26 +66,23 @@ export const assetsService: FeatureService = {
       });
       persistProject(p);
       res.status(201).json(p);
+      } catch (error) {
+        p.assets = originalAssets;
+        for (const target of createdPaths) fs.rmSync(target, { force: true });
+        throw error;
+      }
+      } finally { res.locals.uploadLease.release(); }
     });
-    app.post('/api/projects/:projectId/cover', upload.single('cover'), (req, res) => {
-      const file = req.file;
+    app.post('/api/projects/:projectId/cover', quarantinedUpload('cover', 1, IMAGE_ASSET_MAX_BYTES), async (req, res) => {
+      try {
+      const file = (req.files as Express.Multer.File[] | undefined)?.[0];
       if (!file) return res.status(400).json({ error: '请选择封面图片。' });
-      const ext = path.extname(file.originalname).toLowerCase();
-      const valid =
-        ext === '.png'
-          ? file.buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-          : ext === '.webp'
-            ? file.buffer.toString('ascii', 0, 4) === 'RIFF' &&
-              file.buffer.toString('ascii', 8, 12) === 'WEBP'
-            : ['.jpg', '.jpeg'].includes(ext) &&
-              file.buffer[0] === 255 &&
-              file.buffer[1] === 216 &&
-              file.buffer[2] === 255;
-      if (!valid) return res.status(400).json({ error: '封面仅支持有效的 PNG、JPG 或 WebP 图片。' });
+      const safe = await inspectUpload(file, 'cover', undefined, res.locals.uploadLease.signal);
+      const ext = safe.extension;
       const p = res.locals.project as Project;
       const id = randomUUID();
       const url = `/uploads/${id}${ext}`;
-      fs.writeFileSync(path.join(dir, 'uploads', `${id}${ext}`), file.buffer);
+      fs.writeFileSync(path.join(dir, 'uploads', `${id}${ext}`), safe.buffer, { flag: 'wx', mode: 0o600 });
       const previous = p.coverUrl;
       p.coverUrl = url;
       try {
@@ -112,6 +94,7 @@ export const assetsService: FeatureService = {
       }
       if (previous) fs.rmSync(path.join(dir, 'uploads', path.basename(previous)), { force: true });
       res.status(201).json(p);
+      } finally { res.locals.uploadLease.release(); }
     });
     app.post('/api/projects/:projectId/assets', (req, res) => {
       if (
@@ -150,6 +133,7 @@ export const assetsService: FeatureService = {
         return res.status(413).json({ error: '文本资料不能超过 2 MiB。', code: 'TEXT_ASSET_TOO_LARGE' });
       const v = z
         .object({
+          expectedRevision: z.number().int().positive(),
           name: z.string().trim().min(1).max(120).optional(),
           category: z.enum(categories).optional(),
           content: z
@@ -163,10 +147,16 @@ export const assetsService: FeatureService = {
       if (!asset) return res.status(404).json({ error: '资料不存在。' });
       if (asset.url && v.content !== undefined)
         return res.status(400).json({ error: '图片资料不能在线编辑，请替换文件。' });
-      Object.assign(asset, v);
-      if (v.content !== undefined) asset.size = Buffer.byteLength(v.content);
-      p.steps.forEach((s) => (s.status = 'idle'));
-      persistProject(p);
+      if ((asset.revision || 1) !== v.expectedRevision)
+        return res.status(409).json({ code: 'REVISION_CONFLICT', error: '资料已被修改，请刷新后重试。' });
+      const { expectedRevision: _expected, ...changes } = v;
+      mutateProject(p, (draft) => {
+        const target = draft.assets.find((item) => item.id === asset.id)!;
+        archiveAssetRevision(target);
+        Object.assign(target, changes);
+        if (v.content !== undefined) target.size = Buffer.byteLength(v.content);
+        draft.steps.forEach((s) => (s.status = 'idle'));
+      });
       res.json(p);
     });
     app.post('/api/projects/:projectId/assets/delete', (req, res) => {

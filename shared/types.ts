@@ -1,3 +1,7 @@
+import type { ModelRuntimeOptions, ModelUsage } from './model-runtime.js';
+import type { KnowledgeFact } from './knowledge.js';
+import type { AssetRevision } from './asset-history.js';
+
 export const categories = ['world', 'characters', 'plot', 'chapters'] as const;
 export type Category = (typeof categories)[number];
 export const categoryLabels: Record<Category, string> = {
@@ -36,6 +40,9 @@ export type StepId = string;
 export type Status = 'idle' | 'running' | 'done' | 'error';
 export interface Asset {
   id: string;
+  revision?: number;
+  revisions?: AssetRevision[];
+  updatedAt?: string;
   name: string;
   category: Category;
   content: string;
@@ -72,6 +79,8 @@ export interface Step {
   modelId?: string;
   assetIds?: string[];
   enabled?: boolean;
+  /** Conditional joins require all selected inputs by default. */
+  join?: 'all' | 'any';
   /** Identifies the target/snapshot that produced output; old unscoped output is never reused. */
   generationContext?: StepGenerationContext;
   /** Preserved diagnostic from the latest failed attempt. */
@@ -144,6 +153,8 @@ export interface WorkflowEdge {
   source: StepId;
   target: StepId;
   label?: string;
+  /** Activate only when the source explicitly returns this branch. */
+  when?: string;
 }
 export interface WorkflowSettings {
   id?: string;
@@ -156,6 +167,9 @@ export interface WorkflowSettings {
   autoGenerate: boolean;
   /** Automatic execution adopts validated, completed regeneration at the original revision. */
   automationMode?: 'manual' | 'automatic';
+  maxAutoRepairs?: number;
+  /** Bounds independent ordinary nodes; writer and audit commits remain serial. */
+  maxParallelNodes?: number;
   /** Explicit opt-in publication binding; never inferred from a connected account. */
   publication?: {
     enabled: boolean;
@@ -222,6 +236,8 @@ export interface ChapterCandidate {
   outputWriterNodeId: string;
   requirements: Requirements;
   reviewOutput?: string;
+  reviewResult?: { status: 'passed' | 'failed' | 'unknown'; issues: { message: string; evidence?: string }[] };
+  repairAttempts?: number;
   recoveryStatus?: 'pending-review' | 'review-failed' | 'ready';
   graphRevision?: number;
   errorCode?: string;
@@ -245,6 +261,8 @@ export interface RunChapterProgress {
 }
 export interface Run {
   id: string;
+  resumeSnapshot?: { workflowId: string; graphRevision: number; fingerprint: string; targetOriginals?: Array<{ number: number; chapterId?: string; revision?: number; contentHash?: string }> };
+  resumedFromRunId?: string;
   status: 'running' | 'done' | 'error' | 'cancelled';
   stepId?: StepId;
   mode: 'demo' | 'live';
@@ -273,6 +291,8 @@ export interface Run {
 }
 export interface Project {
   id: string;
+  modelUsage?: Array<ModelUsage & { stepId: string; modelId?: string; createdAt: string; runId?: string }>;
+  knowledgeFacts?: KnowledgeFact[];
   title: string;
   genre: string;
   description: string;
@@ -303,7 +323,7 @@ export const protocolLabels: Record<ModelProtocol, string> = {
   'chat-completions': 'Chat Completions',
   'anthropic-messages': 'Anthropic Messages',
 };
-export interface ModelProfile {
+export interface ModelProfile extends ModelRuntimeOptions {
   id: string;
   name: string;
   baseUrl: string;
@@ -313,7 +333,7 @@ export interface ModelProfile {
   enabled: boolean;
   createdAt: string;
 }
-export interface ModelSettings {
+export interface ModelSettings extends ModelRuntimeOptions {
   baseUrl: string;
   model: string;
   hasKey: boolean;

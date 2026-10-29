@@ -1212,7 +1212,7 @@ export class PlatformRuntime {
       throw new PlatformError(409, 'PUBLICATION_PENDING', '存在未完成或结果未知的发布队列，禁止删除恢复所需的项目或连接。');
   }
   async removeProject(projectId: string) {
-    if (!this.platformStore) return;
+    if (!this.platformStore) { this.extension.revokeProject(projectId); return; }
     this.assertPublicationRemovable(projectId);
     this.assertProjectIdle(projectId);
     if (
@@ -1231,6 +1231,7 @@ export class PlatformRuntime {
         await this.browser.closeConnection(connection.id);
         this.secrets.delete(connection.credentialRef);
       }
+      this.extension.revokeProject(projectId);
       this.platforms.removeProject(projectId);
     });
   }
@@ -1240,6 +1241,7 @@ export class PlatformRuntime {
   }
   async close() {
     this.closing = true;
+    this.extension.close();
     for (const batch of this.publicationQueue?.list() ?? []) {
       if (['queued', 'running'].includes(batch.state)) this.publicationQueue!.pause(batch.id);
     }

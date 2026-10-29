@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { archiveChapterRevision } from '../../../../../shared/chapter-history.js';
 import {
   chapterRequirementsSchema,
   emptyRequirements,
@@ -88,8 +89,18 @@ export interface PreparedRun {
   orderedStepIds: string[];
 }
 
+/** Unicode letters and numbers count as one character each; punctuation, whitespace,
+ * emoji and Markdown symbols do not count. CJK extension characters count once.
+ * The entire saved chapter text (including a textual heading) is measured. */
+export function countChapterWords(content: string): number {
+  return Array.from(content.matchAll(/[\p{L}\p{N}]/gu)).length;
+}
 export function literalIssues(content: string, requirements: Requirements): string[] {
+  const count = countChapterWords(content);
+  const limits = requirements.wordCount;
   return [
+    ...(limits?.min !== undefined && count < limits.min ? [`字数不足：实际 ${count} 字，最少 ${limits.min} 字（Unicode 字母与数字逐字符计数，不含标点、空白和表情）。`] : []),
+    ...(limits?.max !== undefined && count > limits.max ? [`字数超限：实际 ${count} 字，最多 ${limits.max} 字（Unicode 字母与数字逐字符计数，不含标点、空白和表情）。`] : []),
     ...requirements.requiredText
       .filter((text) => !content.includes(text))
       .map((text) => `缺少必须原文出现的文本：${text}`),
@@ -135,6 +146,8 @@ export function resolveRequirements(
         'REQUIREMENTS_CONFLICT',
       );
   }
+  if (wordCount.min !== undefined && wordCount.max !== undefined && wordCount.min > wordCount.max)
+    throw new GenerationError(`第 ${number} 章有效最少字数大于最多字数。`, 400, 'REQUIREMENTS_CONFLICT');
   return combined;
 }
 export function isWriter(step: Step): boolean {
@@ -293,6 +306,8 @@ export function prepareRun(
       const audit = p.steps.find((step) => step.id === auditId && step.enabled !== false);
       if (!audit || audit.id === writerId || !downstreamIds(p, writerId).has(auditId))
         throw new GenerationError('指定审校节点必须启用且位于最终正文节点的下游。');
+      if (p.workflow?.automationMode === 'automatic' && audit.reusePreviousOutput)
+        throw new GenerationError('自动模式必须重新审校本次正文，请关闭审校节点的前次输出复用。', 409, 'AUDIT_REUSE_UNSAFE');
     }
   } else if (selectedStep) {
     const targetContext = targets[0];
@@ -357,7 +372,8 @@ export function automaticallyAcceptCandidate(p: Project, id: string): Chapter {
     !candidate || candidate.runId !== p.run.id ||
     candidate.workflowId !== p.activeWorkflowId ||
     candidate.generationMode !== 'regenerate' ||
-    candidate.recoveryStatus !== 'ready'
+    candidate.recoveryStatus !== 'ready' ||
+    (p.workflow?.auditNodeId && candidate.reviewResult?.status !== 'passed')
   )
     throw new GenerationError('自动采用条件不满足，已保留候选且停止运行。', 409, 'AUTO_ADOPTION_UNSAFE');
   return adoptCandidate(p, id, candidate.baseRevision);
@@ -413,14 +429,7 @@ function adoptCandidate(
         409,
         'REVISION_CONFLICT',
       );
-    original.revisions ||= [];
-    original.revisions.push({
-      revision: original.revision,
-      title: original.title,
-      content: original.content,
-      updatedAt: original.updatedAt,
-      mode: original.mode,
-    });
+    archiveChapterRevision(original);
     original.revision++;
     chapter = original;
   } else {

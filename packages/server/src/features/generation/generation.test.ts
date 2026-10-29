@@ -68,6 +68,8 @@ interface ModelControl {
   wait: number;
   status: number;
   onRequest?: (index: number) => void;
+  active?: number;
+  maxActive?: number;
 }
 async function withModel(
   fn: (settings: RuntimeSettings, requests: string[], control: ModelControl) => Promise<void>,
@@ -84,8 +86,11 @@ async function withModel(
     for await (const chunk of req) body += String(chunk);
     const data = JSON.parse(body);
     requests.push(data.messages?.[1]?.content || data.input?.[0]?.content?.[0]?.text || '');
+    control.active = (control.active || 0) + 1;
+    control.maxActive = Math.max(control.maxActive || 0, control.active);
     control.onRequest?.(requests.length);
     if (control.wait) await delay(control.wait);
+    control.active -= 1;
     res.writeHead(control.status, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
@@ -492,6 +497,112 @@ test('automatic regeneration never adopts when a downstream review request fails
     assert.equal(p.run!.status, 'error');
     assert.equal(p.chapters[0].revision, 1);
     assert.equal(p.candidates![0].recoveryStatus, 'review-failed');
+  }));
+});
+
+test('automatic structured review repairs within bound and explicit failure never saves a chapter', async () => {
+  await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    p.steps = p.steps.filter((step) => [SYSTEM_START_NODE_ID, 'draft', 'review', SYSTEM_END_NODE_ID].includes(step.id));
+    p.workflow!.edges = [
+      { id: 'sd', source: SYSTEM_START_NODE_ID, target: 'draft' },
+      { id: 'dr', source: 'draft', target: 'review' },
+      { id: 're', source: 'review', target: SYSTEM_END_NODE_ID },
+    ];
+    p.workflow!.automationMode = 'automatic';
+    p.workflow!.maxAutoRepairs = 1;
+    control.onRequest = (index) => {
+      control.response = index === 2 ? '{"status":"failed","issues":[{"message":"缺乏行动","evidence":"静止"}]}'
+        : index === 4 ? '{"status":"passed","issues":[]}' : '第1章\n主角采取了行动。';
+    };
+    await new Runner(store).run(p, settings, { target: { kind: 'single', number: 1 } });
+    assert.equal(requests.length, 4);
+    assert.equal(p.run!.status, 'done');
+    assert.equal(p.chapters.length, 1);
+    assert.match(requests[2], /缺乏行动/);
+    control.onRequest = () => { control.response = '审校不通过'; };
+    await new Runner(store).run(p, settings, { target: { kind: 'single', number: 2 } });
+    assert.equal(requests.length, 8);
+    assert.equal(p.run!.errorCode, 'REVIEW_VALIDATION_FAILED');
+    assert.equal(p.chapters.length, 1);
+    assert.equal(p.candidates!.at(-1)!.repairAttempts, 1);
+    assert.equal(p.candidates!.at(-1)!.reviewResult!.status, 'failed');
+  }));
+});
+
+test('resume executes only unfinished targets under the original verified snapshot', async () => {
+  await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    writerOnly(p);
+    control.onRequest = (index) => { control.status = index === 2 ? 503 : 200; };
+    const runner = new Runner(store);
+    await runner.run(p, settings, { target: { kind: 'range', from: 1, to: 2 } });
+    const original = structuredClone(p.chapters[0]);
+    const interrupted = p.run!;
+    assert.equal(interrupted.status, 'error');
+    assert.equal(p.chapters.length, 1);
+    const handle = runner.start(p, settings, {}, undefined, { runId: interrupted.id, fingerprint: interrupted.resumeSnapshot!.fingerprint });
+    await handle.promise;
+    assert.equal(requests.length, 3);
+    assert.equal(p.chapters.length, 2);
+    assert.deepEqual(p.chapters[0], original);
+    assert.equal(p.run!.resumedFromRunId, interrupted.id);
+    assert.equal(p.run!.status, 'done');
+  }));
+});
+
+test('actual ready siblings overlap within cap while writers wait, and failure saves no chapter', async () => {
+  for (const failing of [false, true]) await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    p.steps = p.steps.filter((step) => [SYSTEM_START_NODE_ID, 'outline', 'plan', 'draft', SYSTEM_END_NODE_ID].includes(step.id));
+    p.workflow!.edges = [
+      { id: 'so', source: SYSTEM_START_NODE_ID, target: 'outline' },
+      { id: 'sp', source: SYSTEM_START_NODE_ID, target: 'plan' },
+      { id: 'od', source: 'outline', target: 'draft' },
+      { id: 'pd', source: 'plan', target: 'draft' },
+      { id: 'de', source: 'draft', target: SYSTEM_END_NODE_ID },
+    ];
+    delete p.workflow!.auditNodeId;
+    p.workflow!.maxParallelNodes = 2;
+    control.wait = 30;
+    control.status = failing ? 503 : 200;
+    await new Runner(store).run(p, settings, { target: { kind: 'single', number: 1 } });
+    assert.equal(control.maxActive, 2);
+    assert.equal(p.chapters.length, failing ? 0 : 1);
+    assert.equal(requests.length, failing ? 2 : 3);
+    assert.equal(p.run!.status, failing ? 'error' : 'done');
+    if (!failing) {
+      assert.match(requests[2], /上游结果/);
+      assert.equal(p.modelUsage?.length, 3);
+    }
+  }));
+});
+
+test('conditional branch uses explicit JSON selection and any join excludes stale unselected output', async () => {
+  await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    p.steps = p.steps.filter((step) => [SYSTEM_START_NODE_ID, 'lore', 'outline', 'plan', 'draft', SYSTEM_END_NODE_ID].includes(step.id));
+    const branch = p.steps.find((step) => step.id === 'lore')!;
+    branch.kind = 'custom';
+    const unselected = p.steps.find((step) => step.id === 'plan')!;
+    unselected.output = 'STALE_UNSELECTED';
+    const writer = p.steps.find((step) => step.id === 'draft')!;
+    writer.join = 'any';
+    p.workflow!.edges = [
+      { id: 'sl', source: SYSTEM_START_NODE_ID, target: 'lore' },
+      { id: 'lo', source: 'lore', target: 'outline', when: 'left' },
+      { id: 'lp', source: 'lore', target: 'plan', when: 'right' },
+      { id: 'od', source: 'outline', target: 'draft' },
+      { id: 'pd', source: 'plan', target: 'draft' },
+      { id: 'de', source: 'draft', target: SYSTEM_END_NODE_ID },
+    ];
+    delete p.workflow!.auditNodeId;
+    control.onRequest = (index) => { control.response = index === 1 ? '{"branch":"left"}' : '完整章节正文'; };
+    await new Runner(store).run(p, settings, { target: { kind: 'single', number: 1 } });
+    assert.equal(requests.length, 3);
+    assert.equal(p.run!.status, 'done');
+    assert.doesNotMatch(requests[2], /STALE_UNSELECTED/);
+    control.onRequest = () => { control.response = '没有合法分支'; };
+    await new Runner(store).run(p, settings, { target: { kind: 'single', number: 2 } });
+    assert.equal(requests.length, 4);
+    assert.equal(p.chapters.length, 1);
+    assert.equal(p.run!.status, 'error');
   }));
 });
 

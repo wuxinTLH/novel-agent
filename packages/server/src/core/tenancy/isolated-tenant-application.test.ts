@@ -6,6 +6,7 @@ import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createHash } from 'node:crypto';
 import express from 'express';
+import sharp from 'sharp';
 import { AuthService } from '../../features/auth/auth.js';
 import {
   createIsolatedTenantApplication,
@@ -25,6 +26,22 @@ test('only the exact OIDC GET callback admits cross-site navigation and still ch
   assert.equal((await f.request('GET', '/api/auth/session', undefined, headers)).status, 403);
   assert.equal((await f.request('GET', callback, undefined, { ...headers, host: 'evil.example:3001' })).status, 403);
   assert.equal((await f.request('GET', callback, undefined, { ...headers, origin: 'https://evil.example' })).status, 403);
+  assert.equal(f.tenant.contexts.size, 0);
+});
+test('single-user extension exception never opens ordinary business routes', async t => {
+  const f = await fixture(t);
+  const headers = { origin: `chrome-extension://${'a'.repeat(32)}`, host: `127.0.0.1:${policyPort}` };
+  assert.equal((await f.request('GET', '/api/projects', undefined, headers)).status, 403);
+  assert.equal((await f.request('GET', '/api/platform-extension/session', undefined, headers)).status, 403);
+});
+test('authenticated mode explicitly rejects extension pairing without creating any tenant', async t => {
+  const f = await fixture(t, true);
+  const headers = { origin: `chrome-extension://${'a'.repeat(32)}` };
+  for (const route of ['/api/platform-extension/session', '/api/projects/example/platform-extension-pairings']) {
+    const response = await f.request('GET', route, undefined, headers);
+    assert.equal(response.status, 501);
+    assert.equal(response.body.code, 'EXTENSION_AUTH_MODE_UNSUPPORTED');
+  }
   assert.equal(f.tenant.contexts.size, 0);
 });
 async function fixture(t: TestContext, enabled = false, services: IsolatedTenantService[] = []) {
@@ -122,10 +139,8 @@ test('auth-off business stays in persistent isolated worker; raw JSON, CSRF and 
   assert.equal(created.status, 201);
   assert.equal(created.body.title, 'Streamed JSON');
   const boundary = 'isolated-exact-upload';
-  const image = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH3sAAAAASUVORK5CYII=',
-    'base64',
-  );
+  const image = await sharp({ create: { width: 2, height: 3, channels: 4, background: '#3478abcd' } })
+    .png().toBuffer();
   const upload = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="category"\r\n\r\nworld\r\n--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="private.png"\r\nContent-Type: image/png\r\n\r\n`,
@@ -139,7 +154,12 @@ test('auth-off business stays in persistent isolated worker; raw JSON, CSRF and 
   });
   assert.equal(uploaded.status, 201);
   const downloaded = await f.request('GET', uploaded.body.assets[0].url);
-  assert.deepEqual(downloaded.bytes, image);
+  assert.equal(downloaded.status, 200);
+  const expectedPixels = await sharp(image).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const downloadedPixels = await sharp(downloaded.bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  assert.equal(downloadedPixels.info.width, expectedPixels.info.width);
+  assert.equal(downloadedPixels.info.height, expectedPixels.info.height);
+  assert.deepEqual(downloadedPixels.data, expectedPixels.data);
   await f.tenant.close();
   assert.equal(f.tenant.contexts.size, 0);
   assert.equal(entry.worker.threadId, -1);

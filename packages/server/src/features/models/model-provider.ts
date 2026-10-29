@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import { runtimeValues } from './model-runtime-schema.js';
 import path from 'node:path';
 import { type ModelProfile } from '../../../../../shared/types.js';
 import { normalizeProtocol, type RuntimeSettings } from '../generation/engine.js';
@@ -74,6 +74,7 @@ export function createModelProvider(dir: string, inheritEnvironment = true) {
     hasKey: !!m.apiKey,
     enabled: m.enabled !== false,
     createdAt: m.createdAt || new Date().toISOString(),
+    ...runtimeValues(m),
   });
   const publicSettings = () => ({
     baseUrl: settings.baseUrl,
@@ -81,6 +82,7 @@ export function createModelProvider(dir: string, inheritEnvironment = true) {
     mode: settings.mode,
     protocol: normalizeProtocol(settings.protocol),
     hasKey: !!settings.apiKey,
+    ...runtimeValues(settings),
     activeModelId: settings.activeModelId || defaultModelId,
     models: Array.from(models.values()).map(publicModel),
   });

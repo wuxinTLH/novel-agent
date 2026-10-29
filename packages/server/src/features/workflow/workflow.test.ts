@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
+import sharp from 'sharp';
 import {
   createCharacterWorkflowGraph,
   createProject,
@@ -336,10 +337,11 @@ test(
         ).status,
         413,
       );
+      const image = await sharp({ create: { width: 2, height: 3, channels: 4, background: '#3478abcd' } })
+        .png().toBuffer();
       const png = (bytes: number) => {
-        const body = Buffer.alloc(bytes);
-        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(body);
-        return new Blob([body]);
+        // Keep a valid decodable PNG while exercising the exact transport byte limit.
+        return new Blob([image, Buffer.alloc(bytes - image.length)]);
       };
       const exactImage = new FormData();
       exactImage.append('category', 'world');

@@ -1,0 +1,1 @@
+body { width: 360px; margin: 16px; font: 14px/1.5 system-ui, sans-serif; color: #18212f; } h1 { font-size: 18px; } label { display: block; margin: 10px 0; } #challenge { box-sizing: border-box; width: 100%; } button { display: block; width: 100%; margin: 8px 0; padding: 8px; } code { overflow-wrap: anywhere; } pre { white-space: pre-wrap; overflow-wrap: anywhere; }

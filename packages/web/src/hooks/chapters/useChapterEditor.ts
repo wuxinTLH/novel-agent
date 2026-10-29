@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Chapter, Project } from '../../../../../shared/types';
-import { projectIdentity, sortedChapters } from '../generation/generationState';
+import { projectIdentity, sortedChapters, workflowIdOf } from '../generation/generationState';
+import { api } from '../../services/api';
+import type { AuthStatus } from '../../../../../shared/auth';
+import { ChapterDraftStore, chapterDraftKey } from './chapterDrafts';
 
 export type ChapterEditorState = {
   identity: string;
@@ -98,26 +101,96 @@ export function reconcileChapterEditor(
 export function useChapterEditor(project: Project | null, active: boolean) {
   const [state, setState] = useState(() => emptyEditor());
   const stateRef = useRef(state);
-  const update = useCallback((fn: (value: ChapterEditorState) => ChapterEditorState) => {
-    const next = fn(stateRef.current);
+  const [actor, setActor] = useState<string | null>(null);
+  const actorRef = useRef<string | null>(null);
+  const draftStore = useRef(new ChapterDraftStore(() => window.localStorage));
+  const scopes = useRef(new Map<string, [string, string]>());
+  const pendingDrafts = useRef(new Map<string, ChapterEditorState>());
+  const identity = project ? projectIdentity(project) : '';
+  if (project) scopes.current.set(identity, [project.id, workflowIdOf(project)]);
+  const draftKey = (value: ChapterEditorState) => {
+    const scope = scopes.current.get(value.identity);
+    return actorRef.current && scope && value.chapterId
+      ? chapterDraftKey(actorRef.current, scope[0], scope[1], value.chapterId) : undefined;
+  };
+  const persist = (value: ChapterEditorState) => {
+    const key = draftKey(value);
+    if (!key) {
+      if (value.chapterId) pendingDrafts.current.set(JSON.stringify([value.identity, value.chapterId]), { ...value });
+      return;
+    }
+    if (editorDirty(value)) draftStore.current.write(key, value);
+    else draftStore.current.remove(key);
+  };
+  const recover = (value: ChapterEditorState) => {
+    const key = draftKey(value);
+    const draft = key ? draftStore.current.read(key)
+      : pendingDrafts.current.get(JSON.stringify([value.identity, value.chapterId]));
+    return draft && draft.identity === value.identity && draft.chapterId === value.chapterId
+      ? { ...draft, selectionVersion: value.selectionVersion, editVersion: 0 } : value;
+  };
+  const update = useCallback((fn: (value: ChapterEditorState) => ChapterEditorState, keepPrevious = true) => {
+    const previous = stateRef.current;
+    const next = fn(previous);
+    // Persist before selection changes so storage failure never drops the in-memory copy.
+    if (keepPrevious && (previous.identity !== next.identity || previous.chapterId !== next.chapterId)) persist(previous);
+    persist(next);
     stateRef.current = next;
     setState(next);
   }, []);
-  const identity = project ? projectIdentity(project) : '';
   useEffect(() => {
-    update((current) => reconcileChapterEditor(current, identity, project?.chapters || [], active));
-  }, [identity, project?.chapters, active, update]);
+    let disposed = false;
+    void api<AuthStatus>('/auth/session').then((session) => {
+      if (disposed) return;
+      const value = !session.enabled ? 'auth-disabled' : session.authenticated ? session.user?.id : undefined;
+      if (value) {
+        actorRef.current = value;
+        for (const draft of pendingDrafts.current.values()) if (editorDirty(draft)) persist(draft);
+        pendingDrafts.current.clear();
+        setActor(value);
+      }
+    }).catch(() => { /* Editing remains available; do not guess an account storage scope. */ });
+    return () => { disposed = true; };
+  }, []);
+  useEffect(() => {
+    update((current) => {
+      const next = reconcileChapterEditor(current, identity, project?.chapters || [], active);
+      return !editorDirty(next) ? recover(next) : next;
+    });
+  }, [identity, project?.chapters, active, actor, update]);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      persist(stateRef.current);
+      if (editorDirty(stateRef.current)) { event.preventDefault(); event.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, []);
   const selectChapter = (chapter: Chapter) =>
-    update((current) => editorForChapter(identity, chapter, current.selectionVersion + 1));
+    update((current) => recover(editorForChapter(identity, chapter, current.selectionVersion + 1)));
+  const discardDraft = () => {
+    const key = draftKey(stateRef.current);
+    if (key) draftStore.current.remove(key);
+    update((current) => {
+      const chapter = project?.chapters.find((item) => item.id === current.chapterId);
+      return chapter ? editorForChapter(identity, chapter, current.selectionVersion + 1)
+        : emptyEditor(identity, current.selectionVersion + 1);
+    }, false);
+  };
   const resetEditor = (chapters?: Chapter[]) =>
     update((current) => {
       const empty = emptyEditor(identity, current.selectionVersion + 1);
-      return chapters ? reconcileChapterEditor(empty, identity, chapters, true) : empty;
+      return chapters ? recover(reconcileChapterEditor(empty, identity, chapters, true)) : empty;
     });
   const changeEditor = (field: 'title' | 'content', value: string) =>
     update((current) => ({ ...current, [field]: value, editVersion: current.editVersion + 1 }));
-  const acknowledgeSave = (submitted: ChapterEditorState, chapter: Chapter) =>
+  const acknowledgeSave = (submitted: ChapterEditorState, chapter: Chapter) => {
+    const key = draftKey(submitted);
+    const stored = key ? draftStore.current.read(key)
+      : pendingDrafts.current.get(JSON.stringify([submitted.identity, submitted.chapterId]));
+    if (stored) persist(acknowledgeChapterSave(stored, submitted, chapter));
     update((current) => acknowledgeChapterSave(current, submitted, chapter));
+  };
   const currentChapter = project?.chapters.find((chapter) => chapter.id === state.chapterId);
   const conflict =
     state.chapterId !== '' && (!currentChapter || currentChapter.revision !== state.baseRevision);
@@ -133,5 +206,9 @@ export function useChapterEditor(project: Project | null, active: boolean) {
     resetEditor,
     changeEditor,
     acknowledgeSave,
+    discardDraft,
+    draftWarning: draftStore.current.failed
+      ? '浏览器草稿存储不可用，文字仍保留在本次会话中；离开前请保存或导出。'
+      : !actor ? '正在确认草稿身份；请在离开前保存或导出。' : '',
   };
 }

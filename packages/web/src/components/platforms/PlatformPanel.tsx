@@ -3,6 +3,7 @@ import { useHiddenPlatformRecords } from '../../hooks/platforms/useHiddenPlatfor
 import { accessiblePlatformStep, platformStepAccess, type PlatformStep } from '../../hooks/platforms/platformSteps';
 import { platformWorkChoices } from '../../hooks/platforms/platformWorkChoices';
 import PublicationPanel, { ensureAutoApprovedBatchStarted } from './PublicationPanel';
+import ExtensionPairingPanel from './ExtensionPairingPanel';
 import type { PublicationBatch } from '../../../../../shared/publication';
 import { useConfirm } from '../common/AppDialog';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -662,6 +663,7 @@ export default function PlatformPanel({
           ))}
         </div>
       </section>}
+      {selectedPlatform === 'tomato' && <ExtensionPairingPanel key={projectId} projectId={projectId} disabled={mutateDisabled} />}
       {stepAccess.work && <button type="button" className="button primary platform-next" onClick={() => setStep('work')}>下一步：绑定作品 <ChevronRight size={14} /></button>}
       </>}
       {visibleStep === 'work' && <>

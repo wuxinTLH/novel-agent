@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { manualChapterRequestSchema } from '../../../../../shared/manual-chapters.js';
 import { type Project } from '../../../../../shared/types.js';
 import { addManualChapter } from './manual-chapters.js';
+import { archiveChapterRevision, normalizeChapterHistory } from '../../../../../shared/chapter-history.js';
+import { restoreChapterRevision } from './chapter-history.js';
 import type { FeatureService } from '../../core/context.js';
 import { checkWorkflow, createProjectOperations, inputError, invalidateSteps } from '../projects/project-operations.js';
 export const chaptersService: FeatureService = {
@@ -44,14 +46,7 @@ export const chaptersService: FeatureService = {
         const firstLine = content.split('\n')[0];
         if (v.title !== chapter.title && firstLine.replace(/^#+\s*/, '').trim() === chapter.title)
           content = v.title + content.slice(firstLine.length);
-        chapter.revisions ||= [];
-        chapter.revisions.push({
-          revision: chapter.revision,
-          title: chapter.title,
-          content: chapter.content,
-          updatedAt: chapter.updatedAt,
-          mode: chapter.mode,
-        });
+        archiveChapterRevision(chapter);
         Object.assign(chapter, {
           title: v.title,
           content,
@@ -70,6 +65,22 @@ export const chaptersService: FeatureService = {
             step.status = 'idle';
             delete step.generationContext;
           }
+      });
+      res.json(p);
+    });
+    app.get('/api/projects/:projectId/chapters/:chapterId/history', (req, res) => {
+      const p = res.locals.project as Project;
+      const chapter = p.chapters.find((item) => item.id === req.params.chapterId);
+      if (!chapter) throw inputError(404, 'CHAPTER_NOT_FOUND', '章节不存在。');
+      res.json({ chapterId: chapter.id, revision: chapter.revision, revisions: normalizeChapterHistory(chapter.revisions) });
+    });
+    app.post('/api/projects/:projectId/chapters/:chapterId/restore', (req, res) => {
+      const v = z.object({ ...chapterScopeSchema, revision: z.number().int().min(1) }).strict().parse(req.body);
+      const p = res.locals.project as Project;
+      checkWorkflow(p, v);
+      mutateProject(p, (draft) => {
+        restoreChapterRevision(draft, req.params.chapterId, v.expectedRevision, v.revision);
+        invalidateSteps(draft);
       });
       res.json(p);
     });

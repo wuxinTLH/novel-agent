@@ -1,4 +1,5 @@
-import multer from 'multer';
+import { quarantinedUpload } from '../file-sandbox/upload.js';
+import { inspectUpload } from '../file-sandbox/sandbox.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { FeatureService } from '../../core/context.js';
@@ -8,7 +9,7 @@ import {
   DOCUMENT_TTL_MS,
   type DocumentPreview,
 } from '../../../../../shared/documents.js';
-import { documentError, readDocx } from './parser.js';
+import { documentError } from './parser.js';
 import { exportManuscript, manuscriptHtml, safeDocumentFilename } from './exports.js';
 
 /** Register after core project/auth middleware; documents never enter project.assets. */
@@ -19,14 +20,10 @@ export const documentsService: FeatureService = {
       string,
       { projectId: string; preview: DocumentPreview; data?: Buffer; expires: number }
     >();
-    let parsing = 0;
     const sweep = () => {
       for (const [id, copy] of copies) if (copy.expires <= Date.now()) copies.delete(id);
     };
-    const upload = multer({
-      storage: multer.memoryStorage(),
-      limits: { fileSize: DOCUMENT_MAX_BYTES, files: 1, fields: 0, parts: 1 },
-    }).single('file');
+    const upload = quarantinedUpload('file', 1, DOCUMENT_MAX_BYTES);
     const base = '/api/projects/:projectId/documents';
     app.get(`${base}/export/:format`, async (req, res) => {
       const format = req.params.format;
@@ -52,20 +49,12 @@ export const documentsService: FeatureService = {
       res.json({ title: project.title, html: manuscriptHtml(project) });
     });
     app.post(base, (req, res, next) => {
-      // Admission before multipart buffering; at most two concurrent uploads/parsers per service.
-      if (parsing >= 2)
-        return res.status(429).json({ code: 'DOCUMENT_BUSY', error: '文档处理繁忙，请稍后再试。' });
-      parsing++;
+      // The shared lease bounds buffering and parsing until the worker has actually exited.
       upload(req, res, (error) => {
-        if (error) {
-          parsing--;
-          return res
-            .status(error instanceof multer.MulterError ? 413 : 400)
-            .json({ code: 'DOCUMENT_UPLOAD_LIMIT', error: '仅支持一个文件，大小不超过 8 MiB。' });
-        }
+        if (error) return next(error);
         void (async () => {
           sweep();
-          const file = req.file;
+          const file = (req.files as Express.Multer.File[] | undefined)?.[0];
           if (!file) throw documentError('请选择 DOCX 或 PDF 文件。');
           const extension = path.extname(file.originalname).toLowerCase();
           if (extension === '.doc')
@@ -76,6 +65,7 @@ export const documentsService: FeatureService = {
             );
           if (!['.docx', '.pdf'].includes(extension))
             throw documentError('只支持 DOCX 和 PDF。', 'UNSUPPORTED_DOCUMENT_FORMAT', 415);
+          const safe = await inspectUpload(file, 'document', undefined, res.locals.uploadLease.signal);
           const project = res.locals.project as Project;
           const own = [...copies.values()].filter((copy) => copy.projectId === project.id);
           const total = [...copies.values()].reduce(
@@ -110,7 +100,7 @@ export const documentsService: FeatureService = {
               '使用浏览器内置 PDF 阅读器；不提取文本、不执行服务端 PDF 解析。加密或损坏文件可能无法预览。',
             );
           } else {
-            preview.html = await readDocx(file.buffer);
+            preview.html = safe.html!;
             preview.warnings.push('仅保留语义正文；图片、外部链接、样式和嵌入对象已移除。');
           }
           // Parsing yields; recheck retained-memory and per-project quotas against concurrent uploads.
@@ -136,7 +126,7 @@ export const documentsService: FeatureService = {
         })()
           .catch(next)
           .finally(() => {
-            parsing--;
+            res.locals.uploadLease.release();
           });
       });
     });
