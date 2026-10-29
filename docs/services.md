@@ -1,5 +1,7 @@
 # 后端分层、服务与用户边界
 
+语言 / Language：[中文](services.md) · [English](en/services.md) · [English documentation index](en/README.md)
+
 ## 组织方式
 
 [服务入口](../packages/server/src/index.ts) 负责环境、数据锁、服务装配、监听及关闭。后端包名为 `space.syjx.agent.novel.server`，源码分为 [core](../packages/server/src/core/)、[features](../packages/server/src/features/) 和 [infrastructure](../packages/server/src/infrastructure/)，不再将全部服务混放在 models 目录。当前是一个应用内的控制面、租户 Worker 和数据库 Worker，不是分别部署的分布式微服务。具体目录职责见 [后端包说明](../packages/server/README.md)。下列文件名在对应功能目录中定位，API 路径不变。
@@ -31,7 +33,7 @@
 
 认证、Turnstile 仍默认关闭。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。首次超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建，没有 HTTP 管理员引导；可选邮箱确认注册仅创建普通用户，默认关闭。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
 
-管理界面分“用户、数据库、备份与维护、系统与安全”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，局域网访问免登录业务不等于拥有管理员权限。认证开启后须已验证的超级管理员会话，写入另需认证 CSRF；超级管理员不能据此浏览其他租户业务或秘密。
+管理界面分“用户、数据库、备份与维护、系统与安全”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，局域网访问免登录业务不等于拥有管理员权限。认证开启后按[显式角色权限矩阵](roles-permissions.md)逐接口授权，写入另需认证 CSRF；具备管理权限也不能据此浏览其他租户业务或秘密。
 
 身份只来自服务端验证会话，不接受 `X-User-Id`、查询参数或客户端自报 owner。legacy owner 沿用原目录，其余用户使用 `DATA_DIR/users/<SHA-256(user UUID)>`；SQL 按 owner 隔离。每个租户 Worker 有固定 owner 的 Store、Runner、密钥、平台浏览器、队列及上传。未认证请求失败关闭，不回落共享目录。最多保留 32 个租户运行时，达到容量返回 `TENANT_RUNTIME_CAPACITY`，不是自动无界扩容。
 
@@ -67,7 +69,7 @@ OIDC 显式配置端点，使用 code + PKCE S256、state / 浏览器绑定 cook
 
 [文档服务及限制](../packages/server/src/features/documents/README.md) 已挂入受现有项目授权 / CSRF / 来源限制保护的业务路由；章节书稿页“文稿格式与阅读”使用同一服务。DOCX / EPUB 导出读取按章号排列的已保存 canonical 章节，不含候选和未保存编辑；PDF 是浏览器稿件专用打印 / 另存，不是服务端 PDF 生成，字体 / 分页需人工确认。
 
-DOCX / PDF 单份 ≤ 8 MiB，服务端内存副本 30 分钟过期、重启丢失，不进入项目或资料存储；每项目 10 份、进程 64 份 / 64 MiB，最多同时处理两份。DOCX ZIP 全项验证（512 项 / 32 MiB 实际解压 / 单项 200:1 / 5 秒），转换独立进程（128 MiB V8 heap / 10 秒 / 4 MiB 输出）并清理图片、链接及活动内容；不是 OS 级内存上限或杀毒。PDF 仅验证头尾并由沙箱浏览器原生阅读，无文本提取 / OCR；旧 `.doc` 必须自行转换。
+DOCX 单份 ≤ 8 MiB，服务端内存副本 30 分钟过期、重启丢失，不进入项目或资料存储；每项目 10 份、进程 64 份 / 64 MiB，最多同时处理两份。DOCX ZIP 全项验证（512 项 / 32 MiB 实际解压 / 单项 200:1 / 5 秒），转换独立进程（128 MiB V8 heap / 10 秒 / 4 MiB 输出）并清理图片、链接及活动内容；不是 OS 级内存上限或杀毒。**PDF 上传因缺少可靠内容重构而拒绝**，不能仅凭头尾签名放行原件；无文本提取 / OCR，PDF 打印导出保留。旧 `.doc` 必须自行转换为 DOCX。
 
 ## 在线维护任务
 

@@ -1,5 +1,9 @@
 # Storage admission benchmark and acceptance report
 
+[English documentation index](../docs/en/README.md) · [中文服务说明](../docs/services.md#模拟基准与真实验收)
+
+> Historical report: measurements and test counts below are retained from the original storage-admission change. The original report does not record an execution date; none is invented here. Documentation review does not rerun or refresh those measurements. Current verification must be reported separately.
+
 ## Scope
 
 **Local simulated concurrency only; not real database performance evidence.** The adapter supplies four connection permits and nominal 5 ms commit delay, with no network, SQL execution, durable storage, rollback simulation or database locking. Baseline adds a profile-wide serial queue around the current storage implementation, approximating the old admission bottleneck, not an old-version SQL benchmark. Host timer granularity made individual nominal 5 ms waits roughly 15 ms. Node v24.11.1, 80 operations, one unreported warm-up, three measured samples.

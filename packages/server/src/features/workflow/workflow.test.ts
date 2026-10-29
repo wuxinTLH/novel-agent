@@ -29,10 +29,10 @@ import type { Project } from '../../../../../shared/types.js';
 
 test('context includes assets, upstream results, and only the latest three chapters', () => {
   const p = starterProject();
-  const lore = p.steps.find((step) => step.id === 'lore')!;
-  lore.output = 'UPSTREAM_LORE';
-  lore.status = 'done';
-  lore.generationContext = {
+  const plan = p.steps.find((step) => step.id === 'plan')!;
+  plan.output = 'UPSTREAM_PLAN';
+  plan.status = 'done';
+  plan.generationContext = {
     runId: '',
     workflowId: p.activeWorkflowId!,
     number: 5,
@@ -50,8 +50,8 @@ test('context includes assets, upstream results, and only the latest three chapt
     mode: 'demo',
     updatedAt: '',
   }));
-  const context = buildContext(p, 'outline');
-  assert.match(context, /UPSTREAM_LORE/);
+  const context = buildContext(p, 'draft');
+  assert.match(context, /UPSTREAM_PLAN/);
   assert.match(context, /沉钟港/);
   assert.doesNotMatch(context, /DOWNSTREAM_REVIEW|UNIQUE_CHAPTER_0/);
   assert.match(context, /UNIQUE_CHAPTER_3/);
@@ -115,7 +115,7 @@ test('model adapter sends context and handles provider failures without exposing
   };
   try {
     assert.equal(
-      await generate(createProject('测试'), 'lore', config, '', new AbortController().signal),
+      await generate(createProject('测试'), 'plan', config, '', new AbortController().signal),
       '模型测试输出',
     );
     assert.equal(captured.model, 'test-model');
@@ -140,8 +140,8 @@ test('model adapter sends context and handles provider failures without exposing
         createdAt: '',
       },
     ];
-    selected.steps.find((step) => step.id === 'lore')!.assetIds = ['text'];
-    assert.equal(await generate(selected, 'lore', config, '', new AbortController().signal), '模型测试输出');
+    selected.steps.find((step) => step.id === 'plan')!.assetIds = ['text'];
+    assert.equal(await generate(selected, 'plan', config, '', new AbortController().signal), '模型测试输出');
     const userMessage = (captured.messages as { role: string; content: unknown }[]).find(
       (message) => message.role === 'user',
     )!;
@@ -150,7 +150,7 @@ test('model adapter sends context and handles provider failures without exposing
     assert.doesNotMatch(userMessage.content as string, /未选中的图片/);
     responseStatus = 401;
     await assert.rejects(
-      generate(createProject('测试'), 'lore', config, '', new AbortController().signal),
+      generate(createProject('测试'), 'plan', config, '', new AbortController().signal),
       /HTTP 401/,
     );
   } finally {
@@ -471,7 +471,7 @@ test(
       );
       assert.equal((await request(url, 'PATCH', { workflow: { chapterCount: 101 } })).status, 400);
       // Every creatable kind must also survive edit and graph restoration validation.
-      for (const kind of ['agent', 'audit', 'writer', 'custom', 'world', 'outline', 'plan', 'expand', 'character', 'dialogue', 'scene', 'continuity']) {
+      for (const kind of ['agent', 'audit', 'writer', 'custom', 'world', 'outline', 'plan', 'expand', 'character', 'dialogue', 'scene', 'continuity', 'conflict', 'foreshadow', 'twist', 'climax']) {
         response = await request(`${url}/nodes`, 'POST', { id: `config-${kind}`, title: kind, kind });
         assert.equal(response.status, 201, `${kind} creation`);
         p = await response.json() as Project;

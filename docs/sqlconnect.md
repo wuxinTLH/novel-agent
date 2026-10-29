@@ -1,5 +1,7 @@
 # SQLconnect: optional SQL connection infrastructure
 
+[English documentation index](en/README.md) · [English operating guide](en/user-guide.md#sql-and-maintenance) · [中文使用手册](使用手册.md#sqlconnect-数据库连接可选)
+
 SQLconnect prepares and tests connections to MySQL, PostgreSQL and Microsoft SQL Server (`mssql` is an alias for `sqlserver`). **Local JSON remains the default.** Saving this legacy connection or initializing its reserved schema does not migrate data, switch storage or enable authentication. The current v3 relational repository is configured separately with `storage-profiles.json` and activated only by offline `maintenance migrate-all` below. The old PostgreSQL v2 `admin migrate-sql` command remains legacy. MySQL / SQL Server repository adapters currently have mocked coverage only, not proven live-server compatibility.
 
 ## Integration

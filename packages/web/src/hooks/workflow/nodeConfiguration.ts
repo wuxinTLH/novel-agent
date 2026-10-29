@@ -18,9 +18,18 @@ export function nodeContextSummary(step: Step, project: Project) {
   const assets = step.assetIds?.length
     ? project.assets.filter((asset) => step.assetIds!.includes(asset.id))
     : project.assets;
-  const upstream = (project.workflow?.edges || [])
-    .filter((edge) => edge.target === step.id)
-    .map((edge) => project.steps.find((item) => item.id === edge.source))
-    .filter((item): item is Step => !!item && item.kind !== 'start' && item.enabled !== false);
+  // The runtime includes every transitive ancestor's completed output, not only direct inputs.
+  const ancestors = new Set<string>();
+  const pending = [step.id];
+  while (pending.length) {
+    const target = pending.pop()!;
+    for (const edge of project.workflow?.edges || []) {
+      if (edge.target !== target || edge.source === step.id || ancestors.has(edge.source)) continue;
+      ancestors.add(edge.source);
+      pending.push(edge.source);
+    }
+  }
+  const upstream = project.steps.filter(item =>
+    ancestors.has(item.id) && item.kind !== 'start' && item.enabled !== false);
   return { assets, upstream };
 }

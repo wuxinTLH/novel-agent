@@ -91,8 +91,13 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     min-width: 0;
+    row-gap: 10px;
+
+    .language-switcher {
+      min-height: 38px;
+    }
   }
 
   &__button {
@@ -100,10 +105,10 @@
     align-items: center;
     justify-content: center;
     gap: 7px;
-    min-height: 34px;
-    padding: 7px 11px;
+    min-height: 38px;
+    padding: 7px 14px;
     border: 1px solid transparent;
-    border-radius: 9px;
+    border-radius: 10px;
     background: transparent;
     color: var(--muted-text);
     font: inherit;
@@ -202,6 +207,11 @@
     &__button {
       min-height: 42px;
       padding-inline: 10px;
+    }
+
+    .language-switcher__trigger {
+      height: 42px;
+      min-height: 42px;
     }
 
     &--local &__actions {

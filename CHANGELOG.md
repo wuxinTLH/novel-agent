@@ -1,6 +1,36 @@
 # 更新记录
 
+[English unreleased summary](#english-unreleased-summary) · [English documentation index](docs/en/README.md)
+
+## English unreleased summary
+
+This is a maintained English summary of unreleased changes, not a translation of every historical release entry. Chinese entries and their original historical evidence remain below. Historical test counts are not refreshed by documentation work; no new real-service acceptance is claimed here.
+
+- **Chapter throughput and optional composition:** new chapter graphs use planning → prose → consistency review (three ordinary model calls, excluding retries, repairs and custom nodes), preserving saved graphs/prompts. Production branch concurrency is configurable 1–8, default 1; linear dependencies, writer/review barriers and chapter commits remain sequential. Recent-chapter context prioritizes the latest ending, mode mismatches reject before paid calls, and previews expose indirect upstream context. Conflict, twist, climax and foreshadow nodes are optional author-selected presets, never mandatory stages for every chapter.
+- **Themes and menus:** the optional blue/pink/white palette uses a soft full-page gradient, white manuscript cards and high-contrast dark controls/focus states. Theme and language have separate keyboard-accessible menus with browser-local persistence. Registry/CSS reload failures preserve the active appearance, and other themes/custom images remain unaffected.
+- **Authoring protections:** hard min/max word-count checks, bounded automatic review/repair, earlier-prose retrieval, local draft recovery, bounded chapter/asset history with CAS, unfinished-target resume, structured knowledge, model parameters/usage-budget preflight, incremental progress and safe graph branches/joins. Text retrieval is not vector semantics; model judgments and estimated costs are not factual/billing guarantees.
+- **Files:** unified strict admission and reconstruction covers uploads, avatars, old image downloads and model-image outbound use. DOCX is bounded and sanitized; PDF uploads are rejected without reliable reconstruction. PDF export remains browser printing. Child-process limits are not OS isolation or antivirus.
+- **Identity and administration:** authentication and optional registration/mail recovery/OIDC/MFA/Turnstile remain off by default. CLI-only first-superadmin bootstrap, explicit legacy ownership, independent tenant runtimes, session revocation, exact role/module permissions and strict loopback management remain. Role weights do not inherit permissions. Account settings have grouped switches, explicit Save and expandable OIDC details; English UI coverage remains partial.
+- **Storage and maintenance:** v3 profiles support explicit owner mappings and canonical entities/revisions/receipts, persistent DB pools and acknowledged COMMIT. Ordinary owner admission can overlap; snapshots/import/migration remain exclusive. Single-instance platform-account locks coordinate verified accounts across tenants, not other hosts/apps. Full backups cover all configured application repositories and the safe local tree, not an entire database dump. Online backup requires global quiescence; restore/migration stay offline with explicit empty targets and safe journal reconciliation. External encryption keys require independent retention.
+- **Publication:** Fanqie is isolated-browser automation, not an official API. Explicit binding/volume selection, full previews, approved create/reuse/same-ID overwrite, read-back and separate review receipts remain. Local auto-approval and persistent workflow continuation are separate opt-ins. Unknown results use exact-ID read-only reconciliation, never blind resend. Review submission is not approval/public publication. Qidian/Qimao remain unavailable; MV3 supports only local single-user pairing/capability inspection/revocation.
+- **Engineering/docs:** npm workspaces retain root commands/output/data compatibility and copy required SQL resources. Bounded rate limiting and CSRF/role/tenant checks remain enforced. English counterparts now cover all Chinese-first operational guides, package/theme entry points and a complete [English navigation index](docs/en/README.md); existing English contracts/reports are indexed, not duplicated.
+
+**Validation boundaries:** local tests and browser stubs do not establish real paid-provider, platform review, SMTP/OIDC/Turnstile, proxy or vendor-database acceptance. MySQL/SQL Server are simulated-only; historical PostgreSQL v2 success is not v3 proof. The [benchmark report](scripts/benchmark-storage-report.md) retains historical simulated four-permit results (eight owners about 254–261 vs 64–66 ops/s; no SQL/network/disk evidence). Single-instance/trusted-LAN restrictions, partial localization, absent OS-level file isolation and non-atomic cross-database recovery remain explicit. See the [English acceptance record](docs/en/acceptance-checklist.md).
+
 ## 未发布
+
+### 蓝粉白主题视觉优化
+
+- 蓝粉白可选主题采用浅蓝、粉色与白色的全页柔和渐变；侧栏、顶部、项目栏、工作流及章节选中态保留清晰层次，正文卡片保持白底。
+- 交互控件使用高对比度深蓝和深粉色文字/描边，支持键盘焦点提示和窄屏背景滚动；不影响其他主题或用户上传图片。
+
+### 生成吞吐与默认章节模板
+
+- 新增冲突、反转、高潮与伏笔四类可选创作节点，按目标自主添加与连接；推荐编排不代表每章必须全部运行，默认三节点章节图不变。
+
+- 新建章节图采用章节规划、正文生成、一致性审校三个节点；保留审校与旧作品已有工作流及提示词，避免每章重复生成世界观和总体大纲。独立设定图继续可用。
+- 分支节点并发上限可调至 8，单一章节的上下游依赖、审校顺序及章节落盘仍受串行约束；最近章节上下文优先保留最新章节末尾，避免长篇截断造成续写断层。
+- 正文与设定模式不匹配时在模型调用前拒绝；节点上下文预览显示传递的间接上游。
 
 ### 创作功能完善、界面与安全加固
 

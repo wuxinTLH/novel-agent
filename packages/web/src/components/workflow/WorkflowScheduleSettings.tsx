@@ -37,7 +37,7 @@ export default function WorkflowScheduleSettings({ project, busy, onSave }: {
     event.preventDefault();
     if (disabled || !project.workflow) return;
     const numericCap = Number(cap);
-    if (!cap.trim() || !Number.isInteger(numericCap) || numericCap < 1 || numericCap > 4) { setError('节点并发上限必须为 1–4 的整数。'); return; }
+    if (!cap.trim() || !Number.isInteger(numericCap) || numericCap < 1 || numericCap > 8) { setError('节点并发上限必须为 1–8 的整数。'); return; }
     const edges = project.workflow.edges.map(edge => {
       const { when: _old, ...base } = edge;
       const when = (conditions[edge.id] || '').trim();
@@ -52,8 +52,8 @@ export default function WorkflowScheduleSettings({ project, busy, onSave }: {
   };
   return <form onSubmit={submit} aria-label="工作流调度设置" aria-busy={saving}>
     <h3>节点调度与条件分支</h3>
-    <p className="info-note">独立普通节点可在上限内并行，正文与审校节点保持串行。默认 1 保持原执行顺序；提高上限可能同时发起多个模型请求。章节仍逐章生成。</p>
-    <label>普通节点并发上限<input type="number" min={1} max={4} step={1} required value={cap} disabled={disabled} onChange={event => setCap(event.target.value)} /></label>
+    <p className="info-note">独立普通节点可在上限内并行，正文与审校节点保持串行。默认值随工作流模板而定；提高上限可能同时发起多个付费模型请求。章节仍逐章生成。</p>
+    <label>普通节点并发上限<input type="number" min={1} max={8} step={1} required value={cap} disabled={disabled} onChange={event => setCap(event.target.value)} /></label>
     <p className="info-note">条件边只匹配来源节点完整输出的严格 JSON 顶层 branch 字符串，例如 {JSON.stringify({ branch: 'approved', content: '内容' })}。branch 值区分大小写；边的显示标签不参与判断。留空表示普通依赖。缺少或无效的显式分支应停止该分支，不能从自然语言猜测。</p>
     <fieldset disabled={disabled}>
       <legend>连线条件</legend>

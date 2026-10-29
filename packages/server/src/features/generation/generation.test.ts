@@ -14,7 +14,7 @@ import {
   type Project,
   type Step,
 } from '../../../../../shared/types.js';
-import { createProject, createWorkflowGraph } from '../projects/defaults.js';
+import { createProject, createSteps, createWorkflowGraph, createWorldWorkflowGraph } from '../projects/defaults.js';
 import {
   buildContext,
   parseProtocolResponse,
@@ -31,6 +31,7 @@ import {
 } from './generation.js';
 import { migrateProjects, Store } from '../projects/store.js';
 import { downstreamIds, orderedSteps, validateGraph } from '../workflow/workflow-graph.js';
+import { editableWorkflowSchema } from '../workflow/workflow-support.js';
 
 const demoSettings: RuntimeSettings = { mode: 'demo', apiKey: '', hasKey: false, model: '', baseUrl: '' };
 function chapter(number: number): Chapter {
@@ -53,6 +54,12 @@ function writerOnly(p: Project) {
   delete p.workflow!.auditNodeId;
   if (p.workflows?.[0]) p.workflows[0].steps = p.steps;
 }
+function legacyChapterGraph(p: Project) {
+  p.steps = [p.steps.find((step) => step.id === SYSTEM_START_NODE_ID)!, ...createSteps(), p.steps.find((step) => step.id === SYSTEM_END_NODE_ID)!];
+  p.workflow!.edges = p.steps.slice(1).map((step, index) => ({ id: `legacy-${index}`, source: p.steps[index].id, target: step.id }));
+  p.workflow!.auditNodeId = 'review';
+  p.workflows![0].steps = p.steps;
+}
 async function withStore(fn: (store: Store, p: Project) => void | Promise<void>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-generation-'));
   try {
@@ -70,6 +77,7 @@ interface ModelControl {
   onRequest?: (index: number) => void;
   active?: number;
   maxActive?: number;
+  respond?: (prompt: string) => Promise<{ response: string; status?: number }>;
 }
 async function withModel(
   fn: (settings: RuntimeSettings, requests: string[], control: ModelControl) => Promise<void>,
@@ -89,12 +97,13 @@ async function withModel(
     control.active = (control.active || 0) + 1;
     control.maxActive = Math.max(control.maxActive || 0, control.active);
     control.onRequest?.(requests.length);
+    const custom = await control.respond?.(requests[requests.length - 1]);
     if (control.wait) await delay(control.wait);
     control.active -= 1;
-    res.writeHead(control.status, { 'Content-Type': 'application/json' });
+    res.writeHead(custom?.status ?? control.status, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
-        choices: [{ finish_reason: control.finish, message: { content: control.response } }],
+        choices: [{ finish_reason: control.finish, message: { content: custom?.response ?? control.response } }],
       }),
     );
   });
@@ -258,6 +267,7 @@ test('preflight handles single, range, high watermark, conflicts and multiple wr
 
 test('graph join uses stable topological order and rejects cycles, dangling edges, disabled dependencies', () => {
   const p = createProject('join');
+  legacyChapterGraph(p);
   const clone = p.steps.find((step) => step.id === 'lore')!;
   p.steps = [p.steps[0], ...['a', 'join', 'b', 'c'].map((id) => ({ ...clone, id })), p.steps.at(-1)!];
   const pairs = [
@@ -286,6 +296,7 @@ test('graph join uses stable topological order and rejects cycles, dangling edge
 
 test('context uses prior-only chapters, isolated original and matching upstream snapshot', () => {
   const p = createProject('context');
+  legacyChapterGraph(p);
   p.chapters = [6, 1, 4, 2, 5, 3].map(chapter);
   p.requirements = { instructions: 'project requirement', requiredText: ['must'], forbiddenText: ['never'] };
   p.chapterRequirements = {
@@ -372,6 +383,7 @@ test('provider completion failures never return partial prose', () => {
 test('range generates exactly one chapter per target with target-aware requirements, even with two writers', async () => {
   await withModel(async (settings, requests) =>
     withStore(async (store, p) => {
+      legacyChapterGraph(p);
       p.requirements = { instructions: 'GLOBAL_INSTRUCTION', requiredText: ['必须原文'], forbiddenText: [] };
       p.chapterRequirements = { '4': { instructions: 'CHAPTER_FOUR', requiredText: [], forbiddenText: [] } };
       const writer = {
@@ -551,6 +563,7 @@ test('resume executes only unfinished targets under the original verified snapsh
 
 test('actual ready siblings overlap within cap while writers wait, and failure saves no chapter', async () => {
   for (const failing of [false, true]) await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    legacyChapterGraph(p);
     p.steps = p.steps.filter((step) => [SYSTEM_START_NODE_ID, 'outline', 'plan', 'draft', SYSTEM_END_NODE_ID].includes(step.id));
     p.workflow!.edges = [
       { id: 'so', source: SYSTEM_START_NODE_ID, target: 'outline' },
@@ -575,8 +588,168 @@ test('actual ready siblings overlap within cap while writers wait, and failure s
   }));
 });
 
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+function schedulingGraph(p: Project, protectedKind: 'writer' | 'audit' = 'writer') {
+  const template = p.steps.find((step) => step.id === 'plan')!;
+  const ordinary = ['fast', 'slow', 'descendant'].map((id) => ({ ...structuredClone(template), id, kind: 'custom' as const, prompt: `TASK_${id}` }));
+  p.steps = [p.steps.find((step) => step.id === SYSTEM_START_NODE_ID)!, ...ordinary,
+    p.steps.find((step) => step.id === 'draft')!,
+    ...(protectedKind === 'audit' ? [p.steps.find((step) => step.id === 'review')!] : []),
+    p.steps.find((step) => step.id === SYSTEM_END_NODE_ID)!];
+  p.steps.find((step) => step.id === 'draft')!.prompt = 'TASK_writer';
+  const entry = protectedKind === 'audit' ? 'draft' : SYSTEM_START_NODE_ID;
+  const protectedId = protectedKind === 'audit' ? 'review' : 'draft';
+  if (protectedKind === 'audit') p.steps.find((step) => step.id === 'review')!.prompt = 'TASK_audit';
+  else delete p.workflow!.auditNodeId;
+  const pairs = [
+    ...(protectedKind === 'audit' ? [[SYSTEM_START_NODE_ID, 'draft']] : []),
+    [entry, 'fast'], [entry, 'slow'], ['fast', 'descendant'],
+    ['descendant', protectedId], ['slow', SYSTEM_END_NODE_ID], [protectedId, SYSTEM_END_NODE_ID],
+  ];
+  p.workflow!.edges = pairs.map(([source, target], index) => ({ id: `edge-${index}`, source, target }));
+  p.workflow!.maxParallelNodes = 2;
+  p.workflows![0].steps = p.steps;
+}
+
+test('ordinary descendants refill freed slots before slow siblings; writer and audit remain singleton barriers', { timeout: 15_000 }, async () => {
+  for (const protectedKind of ['writer', 'audit'] as const) await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    schedulingGraph(p, protectedKind);
+    const slow = gate();
+    const descendant = gate();
+    const slowStarted = gate();
+    let descendantPersisted = false;
+    const touch = store.touch.bind(store);
+    store.touch = (project) => {
+      touch(project);
+      if (project.steps.find((step) => step.id === 'descendant')?.status === 'done') {
+        descendantPersisted = true;
+        descendant.resolve();
+      }
+    };
+    control.respond = async (prompt) => {
+      if (prompt.endsWith('TASK_slow')) { slowStarted.resolve(); await slow.promise; }
+      return { response: prompt.endsWith('TASK_fast') ? 'FAST_UPSTREAM_EVIDENCE' : '完整正文' };
+    };
+    const runner = new Runner(store);
+    const handle = runner.start(p, settings, { target: { kind: 'single', number: 1 } });
+    try {
+      await Promise.all([slowStarted.promise, descendant.promise]);
+      assert.equal(descendantPersisted, true);
+      assert.match(requests.find((prompt) => prompt.endsWith('TASK_descendant'))!, /FAST_UPSTREAM_EVIDENCE/);
+      assert.equal(p.steps.find((step) => step.id === 'slow')!.status, 'running');
+      assert.equal(requests.some((prompt) => prompt.includes(`当前任务：TASK_${protectedKind}`)), false);
+      assert.throws(() => runner.start(p, settings), /已有运行中的任务/);
+    } finally { slow.resolve(); }
+    await handle.promise;
+    assert.equal(p.run!.status, 'done');
+    assert.equal(control.maxActive, 2);
+    assert.equal(p.modelUsage?.length, protectedKind === 'audit' ? 5 : 4);
+    assert.equal(runner.controllers.size, 0);
+  }));
+});
+
+test('failure stops admissions and drains active siblings before persisting terminal state and unlocking', { timeout: 10_000 }, async () => {
+  await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    schedulingGraph(p);
+    const slow = gate();
+    const slowStarted = gate();
+    control.respond = async (prompt) => {
+      if (prompt.endsWith('TASK_slow')) { slowStarted.resolve(); await slow.promise; }
+      if (prompt.endsWith('TASK_fast')) { await slowStarted.promise; return { response: '', status: 400 }; }
+      return { response: 'DRAINED_SIBLING_OUTPUT' };
+    };
+    const touch = store.touch.bind(store);
+    // Failure is observed while the runner still owns its lock and drains slow.
+    const runner = new Runner(store);
+    const handle = runner.start(p, settings, { target: { kind: 'single', number: 1 } });
+    let finished = false;
+    void handle.promise.then(() => { finished = true; });
+    // The sibling response is held while the fast failure reaches the scheduler.
+    await slowStarted.promise;
+    for (let attempt = 0; attempt < 100 && p.steps.find((step) => step.id === 'fast')!.status !== 'error'; attempt++) await delay(5);
+    try {
+      assert.equal(p.steps.find((step) => step.id === 'fast')!.status, 'error');
+      assert.equal(finished, false);
+      assert.throws(() => runner.start(p, settings), /已有运行中的任务/);
+      assert.equal(requests.length, 2);
+    } finally { slow.resolve(); store.touch = touch; }
+    await handle.promise;
+    assert.equal(p.run!.status, 'error');
+    assert.equal(p.steps.find((step) => step.id === 'slow')!.status, 'done');
+    assert.equal(p.steps.find((step) => step.id === 'descendant')!.status, 'idle');
+    assert.equal(p.chapters.length, 0);
+    assert.equal(runner.controllers.size, 0);
+  }));
+});
+
+test('cancellation drains parallel work, stops descendants and permits a subsequent run', { timeout: 10_000 }, async () => {
+  await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    schedulingGraph(p);
+    const bothStarted = gate();
+    const release = gate();
+    control.respond = async () => {
+      if (requests.length === 2) bothStarted.resolve();
+      await release.promise;
+      return { response: 'UNSAVED_CANCELLED_OUTPUT' };
+    };
+    const runner = new Runner(store);
+    const handle = runner.start(p, settings, { target: { kind: 'single', number: 1 } });
+    await bothStarted.promise;
+    runner.controllers.get(p.id)!.abort();
+    try { await handle.promise; } finally { release.resolve(); }
+    assert.equal(p.run!.status, 'cancelled');
+    assert.equal(requests.length, 2);
+    assert.equal(p.chapters.length, 0);
+    assert.equal(p.steps.some((step) => step.status === 'running'), false);
+    assert.equal(p.steps.some((step) => step.output.includes('UNSAVED_CANCELLED_OUTPUT')), false);
+    assert.equal(runner.controllers.size, 0);
+    control.respond = undefined;
+    await runner.run(p, settings, { target: { kind: 'single', number: 1 } });
+    assert.equal(p.run!.status, 'done');
+  }));
+});
+
+test('workflow parallelism accepts eight ordinary nodes and rejects values outside the bound', async () => {
+  assert.equal(editableWorkflowSchema.safeParse({ maxParallelNodes: 8 }).success, true);
+  for (const maxParallelNodes of [0, 9, 1.5]) assert.equal(editableWorkflowSchema.safeParse({ maxParallelNodes }).success, false);
+  await withModel(async (settings, _requests, control) => withStore(async (store, p) => {
+    writerOnly(p);
+    const template = p.steps.find((step) => step.id === 'draft')!;
+    const ordinary = Array.from({ length: 10 }, (_, index) => ({ ...structuredClone(template), id: `ordinary-${index}`, kind: 'custom' as const }));
+    p.steps.splice(1, 0, ...ordinary);
+    p.workflow!.edges = ordinary.flatMap((step) => [
+      { id: `in-${step.id}`, source: SYSTEM_START_NODE_ID, target: step.id },
+      { id: `out-${step.id}`, source: step.id, target: 'draft' },
+    ]).concat([{ id: 'end', source: 'draft', target: SYSTEM_END_NODE_ID }]);
+    p.workflow!.maxParallelNodes = 8;
+    p.workflows![0].steps = p.steps;
+    control.wait = 30;
+    await new Runner(store).run(p, settings, { target: { kind: 'single', number: 1 } });
+    assert.equal(control.maxActive, 8);
+    assert.equal(p.run!.status, 'done');
+  }));
+});
+
+test('newest oversized chapter retains its ending within recent-chapter budget', () => {
+  const p = createProject('latest continuation');
+  p.chapters = [1, 2, 3].map((number) => ({ ...chapter(number), content: `${number}:` + '旧'.repeat(12_000) + `LATEST_TAIL_${number}` }));
+  const prompt = buildContext(p, 'draft', {
+    runId: 'test', workflowId: p.workflow!.id!, number: 4, mode: 'create',
+    requirements: emptyRequirements(), graphRevision: p.workflow!.graphRevision || 0,
+  });
+  assert.match(prompt, /LATEST_TAIL_3/);
+  assert.match(prompt, /章节前文因上下文预算截断/);
+  assert.doesNotMatch(prompt, /LATEST_TAIL_1/);
+  assert.ok(prompt.length < 30_000);
+});
+
 test('conditional branch uses explicit JSON selection and any join excludes stale unselected output', async () => {
   await withModel(async (settings, requests, control) => withStore(async (store, p) => {
+    legacyChapterGraph(p);
     p.steps = p.steps.filter((step) => [SYSTEM_START_NODE_ID, 'lore', 'outline', 'plan', 'draft', SYSTEM_END_NODE_ID].includes(step.id));
     const branch = p.steps.find((step) => step.id === 'lore')!;
     branch.kind = 'custom';
@@ -608,6 +781,7 @@ test('conditional branch uses explicit JSON selection and any join excludes stal
 
 test('automatic mode uses configured batch defaults but single-node runs remain single-target', () => {
   const p = createProject('automatic defaults');
+  legacyChapterGraph(p);
   p.workflow!.automationMode = 'automatic';
   p.workflow!.chapterCount = 3;
   p.workflow!.autoGenerate = false;
@@ -707,6 +881,7 @@ test('cancellation, concurrent runs and persistence errors release locks without
 test('standalone reruns invalidate actual descendants and reject different target upstream', async () => {
   await withModel(async (settings) =>
     withStore(async (store, p) => {
+      legacyChapterGraph(p);
       const runner = new Runner(store);
       await runner.run(p, settings, { stepId: 'lore', target: { kind: 'single', number: 5 } });
       assert.equal(p.chapters.length, 0);
@@ -733,6 +908,7 @@ test('standalone reruns invalidate actual descendants and reject different targe
 test('checkpoint is durable before downstream 524, retry before writer retains prose, explicit adoption checks warnings', async () => {
   await withModel(async (settings, requests, control) =>
     withStore(async (store, p) => {
+      legacyChapterGraph(p);
       const runner = new Runner(store);
       const request = { target: { kind: 'single' as const, number: 5 } };
       let diskCheckpoint: Project['candidates'];
@@ -837,6 +1013,7 @@ test('admission persists before execution, archives previous runs and never forg
 test('cancel and restart preserve pending checkpoint and original revision', async () => {
   await withModel(async (settings, _requests, control) =>
     withStore(async (store, p) => {
+      legacyChapterGraph(p);
       p.chapters = [chapter(5)];
       const original = structuredClone(p.chapters[0]);
       const runner = new Runner(store);
@@ -927,6 +1104,24 @@ test('automatic adoption and explicit overwrite roll back on storage failure and
       });
     }
   });
+});
+
+test('preflight rejects incompatible workflow modes without making model requests', async () => {
+  await withModel(async (settings, requests) => withStore(async (store, p) => {
+    const runner = new Runner(store);
+    assert.throws(() => runner.start(p, settings, { workflowMode: 'world' }), { code: 'WORKFLOW_MODE_MISMATCH' });
+    assert.equal(requests.length, 0);
+    const graph = createWorldWorkflowGraph();
+    p.workflows = [graph];
+    p.activeWorkflowId = graph.id;
+    p.steps = graph.steps;
+    p.workflow = graph.workflow;
+    assert.throws(() => runner.start(p, settings, { workflowMode: 'chapter' }), { code: 'WORKFLOW_MODE_MISMATCH' });
+    assert.equal(requests.length, 0);
+    await runner.run(p, settings, { workflowMode: 'world' });
+    assert.equal(p.run!.status, 'done');
+    assert.equal(p.chapters.length, 0);
+  }));
 });
 
 test('world workflow runs without reserving chapter numbers or creating prose', async () => {

@@ -6,7 +6,9 @@
 
 `runWorkflowSchedule(nodes, edges, { concurrency = 1, signal, execute, onState })` is an independently tested generic coordinator. It admits ready nodes under the cap, clones dependency results, drains cooperative tasks on cancellation and blocks failed descendants. Production uses the shared planning and dependency rules with its own persistence coordinator.
 
-`WorkflowSchedulePreview` renders possible topology waves. Its local preview cap does not change saved execution settings. `WorkflowScheduleSettings` persists an atomic `{ maxParallelNodes, edges, steps }` graph patch through the existing graph endpoint. Production accepts concurrency 1–4, default 1.
+`WorkflowSchedulePreview` renders possible topology waves. Its local preview cap does not change saved execution settings. `WorkflowScheduleSettings` persists an atomic `{ maxParallelNodes, edges, steps }` graph patch through the existing graph endpoint. Production accepts concurrency 1–8, default 1. New chapter workflows use planning → prose generation → consistency review (three ordinary model calls, excluding retries/repairs/custom nodes); this three-node template does not imply concurrency 3, and its linear dependencies remain sequential. Existing saved graphs/prompts are not automatically migrated. Optional conflict, twist, climax and foreshadow presets are author-selected additions, not mandatory stages for every chapter.
+
+For author-facing setup and operational limits, see the [English user guide](../docs/en/user-guide.md#chapter-generation-and-scheduling) and [English documentation index](../docs/en/README.md).
 
 ## Production integration
 

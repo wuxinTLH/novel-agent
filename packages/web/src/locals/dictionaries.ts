@@ -1,5 +1,15 @@
 /** Chinese source phrases are stable keys; keep both dictionaries in exact parity. */
 export const zhCN = {
+  冲突设计: '冲突设计',
+  '用目标、阻碍与代价推进剧情': '用目标、阻碍与代价推进剧情',
+  伏笔安排: '伏笔安排',
+  '区分埋设、强化与回收时机': '区分埋设、强化与回收时机',
+  反转设计: '反转设计',
+  让新信息改变理解而非推翻规则: '让新信息改变理解而非推翻规则',
+  高潮编排: '高潮编排',
+  以关键选择兑现积累与后果: '以关键选择兑现积累与后果',
+  '默认章节顺序：章节规划 → 正文生成 → 一致性审校。': '默认章节顺序：章节规划 → 正文生成 → 一致性审校。',
+  '可选剧情设计参考：剧情编排 → 冲突设计 → 伏笔安排 → 反转设计 → 高潮编排 → 章节规划。按故事需要选用，不必全部添加或每章运行；连接后才会参与执行，每个运行节点会增加模型调用。': '可选剧情设计参考：剧情编排 → 冲突设计 → 伏笔安排 → 反转设计 → 高潮编排 → 章节规划。按故事需要选用，不必全部添加或每章运行；连接后才会参与执行，每个运行节点会增加模型调用。',
   语言: '语言',
   返回密码登录: '返回密码登录',
   '登录 Novel Agent': '登录 Novel Agent',
@@ -183,6 +193,16 @@ export type TranslationKey = keyof typeof zhCN;
 export type Dictionary = Record<TranslationKey, string>;
 
 export const en = {
+  冲突设计: 'Conflict design',
+  '用目标、阻碍与代价推进剧情': 'Advance the plot through goals, obstacles, and costs',
+  伏笔安排: 'Foreshadowing',
+  '区分埋设、强化与回收时机': 'Plan when to plant, reinforce, and pay off clues',
+  反转设计: 'Twist design',
+  让新信息改变理解而非推翻规则: 'Change understanding with new information, not broken rules',
+  高潮编排: 'Climax design',
+  以关键选择兑现积累与后果: 'Pay off the buildup through decisive choices and consequences',
+  '默认章节顺序：章节规划 → 正文生成 → 一致性审校。': 'Default chapter order: Chapter planning → Prose generation → Consistency review.',
+  '可选剧情设计参考：剧情编排 → 冲突设计 → 伏笔安排 → 反转设计 → 高潮编排 → 章节规划。按故事需要选用，不必全部添加或每章运行；连接后才会参与执行，每个运行节点会增加模型调用。': 'Optional plot-design reference: Plot outline → Conflict → Foreshadowing → Twist → Climax → Chapter planning. Choose only what the story needs, not every node for every chapter. Nodes participate only when connected; each executed node adds a model call.',
   语言: 'Language',
   返回密码登录: 'Back to password sign-in',
   '登录 Novel Agent': 'Sign in to Novel Agent',

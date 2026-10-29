@@ -136,10 +136,14 @@ try {
     localStorage.setItem('novel-project', id);
     localStorage.setItem('novel-theme', 'mtf');
   }, project.id);
-  const language = () => page.getByRole('combobox', { name: /语言|Language/ });
+  const language = () => page.getByRole('button', { name: /^(语言|Language): / });
+  const selectLocale = async (locale) => {
+    await language().click();
+    await page.getByRole('menuitemradio', { name: locale === 'en' ? 'English' : '中文', exact: true }).click();
+  };
   const expectLocale = async (locale) => {
     await page.waitForFunction((value) => document.documentElement.lang === value, locale);
-    assert.equal(await language().inputValue(), locale, 'language selector matches document language');
+    assert.equal((await language().textContent()).trim(), locale === 'en' ? 'English' : '中文', 'language selector matches document language');
   };
   const openAccount = async (heading) => {
     await page.getByRole('button', { name: /^(管理控制台|Admin console)$/ }).click();
@@ -215,14 +219,10 @@ try {
   stage = 'Chinese default and English persistence';
   await page.goto(`${base}/projects`);
   await expectLocale('zh-CN');
-  assert.deepEqual(
-    await language()
-      .locator('option')
-      .evaluateAll((options) => options.map((option) => option.value)),
-    ['zh-CN', 'en'],
-    'supported language options are explicit',
-  );
-  await language().selectOption('en');
+  await language().click();
+  assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['中文', 'English'], 'supported language options are explicit');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
   await expectLocale('en');
   await page.reload();
   await expectLocale('en');
@@ -342,7 +342,7 @@ try {
     'disabled OIDC is collapsed on fresh mount',
   );
   await page.reload();
-  await language().selectOption('zh-CN');
+  await selectLocale('zh-CN');
   await expectLocale('zh-CN');
   await page.reload();
   await expectLocale('zh-CN');

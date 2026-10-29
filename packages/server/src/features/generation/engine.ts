@@ -420,12 +420,23 @@ export function buildContext(
         `【${s.title}${s.id === context.outputWriterNodeId ? ' · 最终正文输出（审校以此为准）' : ''}】\n${s.output}`,
     )
     .join('\n\n');
-  let chapters = p.chapters
+  const recentChapters = p.chapters
     .filter((chapter) => chapter.number < context.number)
-    .sort((a, b) => a.number - b.number)
-    .slice(-3)
-    .map((c) => `【已有第 ${c.number} 章：${c.title}】\n${c.content}`)
-    .join('\n\n');
+    .sort((a, b) => b.number - a.number)
+    .slice(0, 3);
+  // Reserve the newest chapter first; oversized chapters keep their ending so
+  // continuation never loses the latest scene to an oldest-first prefix cut.
+  let recentBudget = 18_000;
+  let chapters = recentChapters.map((chapter) => {
+    const heading = `【已有第 ${chapter.number} 章：${chapter.title}】\n`;
+    const available = Math.max(0, recentBudget - heading.length - 2);
+    const marker = '[章节前文因上下文预算截断]\n';
+    const content = chapter.content.length <= available ? chapter.content
+      : available > marker.length ? marker + chapter.content.slice(-(available - marker.length)) : '';
+    const text = content ? heading + content : '';
+    recentBudget = Math.max(0, recentBudget - text.length - 2);
+    return text;
+  }).reverse().filter(Boolean).join('\n\n');
   const original =
     context.mode === 'regenerate'
       ? p.chapters.find((chapter) => chapter.id === context.chapterId && chapter.number === context.number)
@@ -822,18 +833,14 @@ export class Runner {
           const step = selected.find((item) => item.id === id)!;
           return isWriter(step) || step.kind === 'audit' || id === p.workflow?.auditNodeId;
         };
-        while (true) {
-          controller.signal.throwIfAborted();
-          const ready = readyScheduleNodes(schedule, states);
-          for (const step of selected) if (states[step.id].status === 'skipped' || states[step.id].status === 'blocked') {
-            step.status = 'idle';
-            delete step.generationContext;
-          }
-          if (!ready.length) break;
-          const ordinary = ready.filter((id) => !protectedNode(id));
-          const batch = ordinary.length ? ordinary.slice(0, Math.min(4, Math.max(1, p.workflow?.maxParallelNodes ?? 1))) : ready.slice(0, 1);
-          for (const id of batch) states[id] = { status: 'running' };
-          const results = await Promise.allSettled(batch.map(async (id) => {
+        const concurrency = Math.min(8, Math.max(1, p.workflow?.maxParallelNodes ?? 1));
+        const active = new Map<string, Promise<void>>();
+        let failed = false;
+        let failure: unknown;
+        const admit = (id: string) => {
+          states[id] = { status: 'running' };
+          // Defer execution until the active entry exists, including synchronous/system nodes.
+          const task = Promise.resolve().then(async () => {
             const step = selected.find((item) => item.id === id)!;
             await executeStep(step);
             let branch: string | undefined;
@@ -843,23 +850,43 @@ export class Runner {
                 if (output && typeof output === 'object' && 'branch' in output && typeof output.branch === 'string' && output.branch.trim().length > 0 && output.branch.length <= 128) branch = output.branch;
               } catch { /* Missing explicit branch selects no conditional successors. */ }
             }
-            return { branch };
-          }));
-          let failed: unknown;
-          for (const [index, result] of results.entries()) {
-            const id = batch[index];
-            if (result.status === 'fulfilled') states[id] = { status: 'done', result: result.value };
-            else {
-              states[id] = { status: 'failed', reason: 'execution-failed' };
-              const step = selected.find((item) => item.id === id)!;
-              step.status = controller.signal.aborted ? 'idle' : 'error';
-              step.lastError = runtimeGenerationError(result.reason, controller.signal.aborted).message;
-              failed ??= result.reason;
+            states[id] = { status: 'done', result: { branch } };
+          }).catch((error: unknown) => {
+            states[id] = { status: 'failed', reason: 'execution-failed' };
+            const step = selected.find((item) => item.id === id)!;
+            step.status = controller.signal.aborted ? 'idle' : 'error';
+            step.lastError = runtimeGenerationError(error, controller.signal.aborted).message;
+            if (!failed) failure = error;
+            failed = true;
+          }).finally(() => { active.delete(id); });
+          active.set(id, task);
+        };
+        try {
+          while (true) {
+            controller.signal.throwIfAborted();
+            if (failed) throw failure;
+            const ready = readyScheduleNodes(schedule, states);
+            for (const step of selected) if (states[step.id].status === 'skipped' || states[step.id].status === 'blocked') {
+              step.status = 'idle';
+              delete step.generationContext;
             }
+            // Ordinary descendants can fill a freed slot immediately. Writers/audits
+            // are singleton barriers: neither enter nor admit peers while one is active.
+            if (![...active.keys()].some(protectedNode)) {
+              const ordinary = ready.filter((id) => !protectedNode(id));
+              if (ordinary.length) {
+                for (const id of ordinary.slice(0, concurrency - active.size)) admit(id);
+              } else if (!active.size && ready.length) {
+                admit(ready[0]);
+              }
+            }
+            if (!active.size) break;
+            await Promise.race(active.values());
           }
-          // Drain every active sibling before reporting failure or releasing the project lock.
-          if (failed) throw failed;
-          persist();
+        } finally {
+          // Admission stops on abort/error, but snapshots may still finish or reject.
+          // Drain them before terminal persistence and releasing the project lock.
+          await Promise.all(active.values());
         }
         if (p.workflow?.auditNodeId && states[p.workflow.auditNodeId]?.status !== 'done' && checkpoint)
           throw new GenerationError('审校分支未执行，正文未保存。', 422, 'AUDIT_BRANCH_SKIPPED');

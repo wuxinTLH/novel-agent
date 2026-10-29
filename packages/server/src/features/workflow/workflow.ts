@@ -128,6 +128,10 @@ export const workflowService: FeatureService = {
               'dialogue',
               'scene',
               'continuity',
+              'conflict',
+              'foreshadow',
+              'twist',
+              'climax',
             ])
             .default('custom'),
           outputName: z.string().trim().max(120).optional(),

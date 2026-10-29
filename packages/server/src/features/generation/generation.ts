@@ -273,6 +273,13 @@ export function prepareRun(
     throw new GenerationError('所选最终正文节点不存在、不是正文节点或已禁用。');
   if (!writerId && writers.length === 1) writerId = writers[0].id;
   const writingWorkflow = selected.some(isWriter);
+  if ((parsed.workflowMode === 'world' && writingWorkflow) ||
+      (parsed.workflowMode === 'chapter' && !writingWorkflow && !selectedStep))
+    throw new GenerationError(
+      writingWorkflow ? '当前执行图包含正文节点，请使用正文模式，或切换独立设定工作流。' : '当前执行图没有正文节点，请使用世界观模式，或切换章节工作流。',
+      400,
+      'WORKFLOW_MODE_MISMATCH',
+    );
   const resultWithoutWriter = (): PreparedRun => ({
     request: structuredClone({ ...parsed, workflowId, target, mode, workflowMode: parsed.workflowMode || 'chapter', overwrite: !!parsed.overwrite }),
     workflowId,

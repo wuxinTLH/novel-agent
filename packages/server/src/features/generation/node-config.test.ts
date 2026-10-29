@@ -8,8 +8,8 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { NODE_PRESETS } from '../../../../../shared/node-presets.js';
 import { DEFAULT_CHARACTER_TEMPLATE } from '../../../../../shared/types.js';
-import { createCharacterWorkflowGraph, createProject, createWorldWorkflowGraph, normalizeWorkflow } from '../projects/defaults.js';
-import { buildContext, Runner, type RuntimeSettings } from './engine.js';
+import { createCharacterWorkflowGraph, createProject, createSteps, createWorldWorkflowGraph, normalizeWorkflow } from '../projects/defaults.js';
+import { buildContext, generate, Runner, type RuntimeSettings } from './engine.js';
 import { prepareRun } from './generation.js';
 import { Store } from '../projects/store.js';
 
@@ -22,7 +22,7 @@ function useGraph(p: ReturnType<typeof createProject>, graph: ReturnType<typeof 
 }
 
 test('new defaults share task-specific presets without changing saved prompts or templates', () => {
-  assert.deepEqual(Object.keys(NODE_PRESETS).sort(), ['world', 'expand', 'outline', 'plan', 'writer', 'audit', 'custom', 'character', 'dialogue', 'scene', 'continuity'].sort());
+  assert.deepEqual(Object.keys(NODE_PRESETS).sort(), ['world', 'expand', 'outline', 'plan', 'writer', 'audit', 'custom', 'character', 'dialogue', 'scene', 'continuity', 'conflict', 'foreshadow', 'twist', 'climax'].sort());
   const p = createProject('默认值');
   assert.equal(p.steps.find(s => s.id === 'draft')!.prompt, NODE_PRESETS.writer.prompt);
   assert.doesNotMatch(NODE_PRESETS.writer.prompt, /1500|2500/);
@@ -33,6 +33,65 @@ test('new defaults share task-specific presets without changing saved prompts or
   normalizeWorkflow(p);
   assert.equal(draft.prompt, '作者原有提示词');
   assert.equal(draft.characterTemplate, '作者原有模板');
+});
+
+test('optional plot nodes form executable upstream stages without entering the default graph', async () => {
+  const p = createProject('剧情节点');
+  const kinds = ['conflict', 'foreshadow', 'twist', 'climax'] as const;
+  assert.ok(!p.steps.some((step) => kinds.includes(step.kind as typeof kinds[number])));
+  let previous = p.workflow!.startNodeId!;
+  p.workflow!.edges = p.workflow!.edges.filter((edge) => edge.target !== 'plan');
+  for (const kind of kinds) {
+    p.steps.splice(p.steps.findIndex((step) => step.id === 'plan'), 0, {
+      id: `plot-${kind}`, kind, ...NODE_PRESETS[kind], status: 'idle', output: '',
+      position: { x: 100, y: 100 },
+    });
+    p.workflow!.edges.push({ id: `to-${kind}`, source: previous, target: `plot-${kind}` });
+    previous = `plot-${kind}`;
+  }
+  p.workflow!.edges.push({ id: 'to-plan', source: previous, target: 'plan' });
+  const prepared = prepareRun(p, {}, demo);
+  const order = prepared.orderedStepIds;
+  for (const kind of kinds) {
+    assert.ok(order.indexOf(`plot-${kind}`) < order.indexOf('plan'));
+    const step = p.steps.find((item) => item.id === `plot-${kind}`)!;
+    assert.match(buildContext(p, step.id), new RegExp(NODE_PRESETS[kind].prompt));
+    step.prompt = `作者保留指令-${kind}`;
+    normalizeWorkflow(p);
+    assert.equal(step.prompt, `作者保留指令-${kind}`);
+  }
+
+  for (const kind of kinds) {
+    const step = p.steps.find((item) => item.id === `plot-${kind}`)!;
+    step.output = `上游剧情-${kind}`;
+    step.status = 'done';
+    step.reusePreviousOutput = true;
+  }
+  const planningContext = buildContext(p, 'plan');
+  for (const kind of kinds) assert.ok(planningContext.includes(`上游剧情-${kind}`));
+
+  // Live execution uses the same model transport as every ordinary node, not a UI-only kind.
+  const seen: string[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    seen.push(Buffer.concat(chunks).toString());
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '可用于后续规划的剧情设计' } }] }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const settings: RuntimeSettings = { ...demo, mode: 'live', apiKey: 'test-key', hasKey: true,
+      model: 'test-model', baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1` };
+    for (const kind of kinds) {
+      assert.equal(await generate(p, `plot-${kind}`, settings, '', new AbortController().signal), '可用于后续规划的剧情设计');
+      assert.ok(seen.at(-1)!.includes(`作者保留指令-${kind}`));
+    }
+    assert.equal(seen.length, kinds.length);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('setting-only workflows reject unavailable models before admission but reused outputs need no model', () => {
@@ -51,7 +110,9 @@ test('setting-only workflows reject unavailable models before admission but reus
 
 test('explicitly reused upstream output remains available to standalone downstream context', () => {
   const p = createProject('复用');
-  const lore = p.steps.find(s => s.id === 'lore')!;
+  const [lore, outline] = createSteps();
+  p.steps.splice(1, 0, lore, outline);
+  p.workflow!.edges.push({ id: 'setting-outline', source: lore.id, target: outline.id });
   lore.output = 'REUSED_AUTHOR_APPROVED_SETTING';
   lore.status = 'done';
   lore.reusePreviousOutput = true;

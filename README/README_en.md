@@ -40,15 +40,18 @@ Aliases are entrances to the same application, not separate users or data instan
 
 ## Documentation
 
-The detailed operational and architecture guides are currently in Chinese:
+Use the [English documentation index](../docs/en/README.md) for all guides, package/component references and historical reports. Chinese-first guides now have maintained English counterparts; already-English technical references are kept canonical rather than duplicated:
 
-- [Complete user guide](../docs/使用手册.md): setup, chapters, authentication, publication queues, and maintenance.
-- [Fanqie integration](../docs/番茄平台接入.md): supported operations and troubleshooting.
-- [Services and tenant boundaries](../docs/services.md).
-- [Roles and permissions](../docs/roles-permissions.md).
+- [Complete user guide](../docs/en/user-guide.md): setup, chapters, authentication, publication queues, and maintenance.
+- [Fanqie integration](../docs/en/fanqie-integration.md): supported operations and troubleshooting.
+- [Services and tenant boundaries](../docs/en/services.md).
+- [Roles and permissions](../docs/en/roles-permissions.md).
 - [SQLconnect and storage profiles](../docs/sqlconnect.md).
-- [Theme extensions](../public/themes/README.md).
-- [Changelog](../CHANGELOG.md).
+- [Theme extensions](../public/themes/README_en.md).
+- [Feature completion and acceptance record](../docs/en/acceptance-checklist.md).
+- [File admission and safety](../docs/en/file-sandbox.md).
+- [Platforms and MV3 extension](../docs/en/platform-extension.md).
+- [English unreleased changelog summary](../CHANGELOG.md#english-unreleased-summary).
 
 ## Main features
 
@@ -57,6 +60,7 @@ The detailed operational and architecture guides are currently in Chinese:
 - `/workflow`: create and switch independent chapter, worldbuilding, character, or blank workflows. Arrange nodes in layered, horizontal, vertical, or grid layouts without changing execution semantics.
 - `/assets`: manage worldbuilding, characters, plot, and chapter reference material. Worldbuilding workflows save setting text, not novel chapters.
 - `/chapters`: edit, generate, compare, and export chapters. Manually add one chapter or import TXT as UTF-8 or GB18030/GBK; limits are 2,000,000 bytes per file and 200,000 characters per chapter. Existing chapter numbers are not overwritten. Saving locally does not upload or submit anything remotely.
+- New chapter workflows use **planning → prose generation → consistency review**, normally three model calls per chapter (excluding failures/repairs/custom nodes), without rewriting saved graphs/prompts. Production node concurrency is 1–8, default 1: independent safe branches may overlap, but linear dependencies, writer/review barriers and chapter commits remain sequential. Optional conflict, twist, climax and foreshadow nodes are author-selected additions, not mandatory default stages.
 - Workflow nodes can use the global model or an explicit model. Missing, disabled, or deleted explicit models require configuration repair rather than a silent fallback. Character nodes support templates and a count of 1–100.
 - Manual regeneration produces a candidate that must be adopted explicitly. Automatic mode may adopt the result only after review, hard validation, and original-version checks; failure stops the batch and preserves recovery material.
 
@@ -90,7 +94,7 @@ The default locale is Simplified Chinese (`zh-CN`). Use the global toolbar **Lan
 
 In administration, open **System and security → Account feature configuration** (AccountAdminSettings). Registration, email verification, password recovery, and MFA appear as grouped switches with descriptions and an enabled count. The separate OIDC switch has expandable connection/secret details. Switch cards and OIDC fields use a responsive two-column grid on wide screens and one column on narrow screens. Changes require **Save configuration**; blank client-secret input preserves the stored secret, which is never returned in plaintext. These settings do not enable the independent authentication master switch.
 
-Themes include light, dark, system-following, and blue/pink/white. Theme choice is browser-local; the theme menu can reload the independent CSS registry. Failed loads preserve the current theme, with a light fallback on first load.
+Themes include light, dark, system-following, and blue/pink/white. The separate theme menu is next to the language menu and supports keyboard selection; theme choice is browser-local. Blue/pink/white uses a soft full-page gradient with white reading cards, high-contrast dark blue/pink controls and visible keyboard focus. The menu can reload the independent CSS registry. Failed loads preserve the current theme, with a light fallback on first load; custom images and other themes are not recolored. See the [English theme extension guide](../public/themes/README_en.md).
 
 ## Optional authentication and account capabilities
 
@@ -189,4 +193,4 @@ public/themes/                    Independent theme CSS/registry
 scripts/                          Build resources and acceptance checks
 ```
 
-See the [web package](../packages/web/README.md) and [server package](../packages/server/README.md). Builds still produce root `dist/` (web) and `build/` (server/shared), copying SQL resources automatically; the production entry is `build/packages/server/src/index.js`. Default data remains root `data/`, and root `.env` discovery is independent of the workspace command's current directory.
+See the [web package](../packages/web/README_en.md) and [server package](../packages/server/README_en.md). Builds still produce root `dist/` (web) and `build/` (server/shared), copying SQL resources automatically; the production entry is `build/packages/server/src/index.js`. Default data remains root `data/`, and root `.env` discovery is independent of the workspace command's current directory.

@@ -69,6 +69,7 @@ async function setup(
     service,
     request,
     login,
+    now: () => now,
     advance: (ms: number) => {
       now += ms;
     },
@@ -163,7 +164,7 @@ test('prelogin CSRF, hashed persistent sessions, expiry, logout and session CSRF
     assert.ok(!disk.includes(auth.cookie.split('=')[1]));
     const req = { headers: { cookie: auth.cookie } } as Request;
     assert.equal((await s.service.resolve(req))?.role, 'superadmin');
-    const restarted = new AuthService({ dataDir: s.dir, enabled: true });
+    const restarted = new AuthService({ dataDir: s.dir, enabled: true, now: s.now });
     assert.equal((await restarted.resolve(req))?.username, 'admin');
     assert.equal((await s.request('/logout', 'POST', {}, auth.cookie, 'bad')).status, 403);
     assert.equal((await s.request('/logout', 'POST', {}, auth.cookie, 'é'.repeat(64))).status, 403);

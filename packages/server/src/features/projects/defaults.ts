@@ -3,7 +3,6 @@ import { NODE_PRESETS } from '../../../../../shared/node-presets.js';
 import {
   SYSTEM_END_NODE_ID,
   SYSTEM_START_NODE_ID,
-  stepIds,
   type Project,
   type Step,
   type WorkflowEdge,
@@ -70,7 +69,16 @@ export function createSteps(): Step[] {
     status: 'idle',
     output: '',
     position: { x: 60 + (i % 3) * 295, y: i < 3 ? 75 : 310 },
-    kind: s.id === 'draft' ? 'writer' : s.id === 'review' ? 'audit' : 'agent',
+    kind:
+      s.id === 'draft'
+        ? 'writer'
+        : s.id === 'review'
+          ? 'audit'
+          : s.id === 'lore'
+            ? 'world'
+            : s.id === 'outline'
+              ? 'outline'
+              : 'plan',
     enabled: true,
   }));
 }
@@ -154,9 +162,15 @@ export function createCharacterWorkflowGraph(name = '人物编写'): WorkflowGra
 export function createWorkflowGraph(name = '默认工作流', template = false): WorkflowGraph {
   const now = new Date().toISOString();
   const steps = template
-    ? [createSystemStep('start'), ...createSteps(), createSystemStep('end')]
+    ? [
+        createSystemStep('start'),
+        ...createSteps().filter((step) => ['plan', 'draft', 'review'].includes(step.id)),
+        createSystemStep('end'),
+      ]
     : createBoundarySteps();
-  const workflow = createWorkflow(template ? undefined : [], name);
+  // New chapter templates generate only per-chapter work. Worldbuilding and outlining
+  // remain available as author-added nodes and in independent setting workflows.
+  const workflow = createWorkflow([], name);
   workflow.startNodeId = SYSTEM_START_NODE_ID;
   workflow.endNodeId = SYSTEM_END_NODE_ID;
   workflow.auditNodeId = template ? 'review' : undefined;

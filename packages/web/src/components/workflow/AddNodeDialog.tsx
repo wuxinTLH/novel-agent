@@ -2,6 +2,8 @@ import { useConfirm } from '../common/AppDialog';
 import { useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import Modal from '../common/Modal';
+import { useLocale } from '../../locals/useLocale';
+import { translate } from '../../locals/core';
 
 export type NodeFields = { title: string; subtitle: string; prompt: string };
 export function applyNodePreset(
@@ -27,6 +29,7 @@ export default function AddNodeDialog({
   onAdd: (values: NodeFields & { kind: string }) => Promise<void>;
 }) {
   const confirmDialog = useConfirm();
+  const { locale, t } = useLocale();
   const [kind, setKind] = useState('world');
   const [fields, setFields] = useState(() => ({ ...presets.world }));
   const [edited, setEdited] = useState<Partial<Record<keyof NodeFields, boolean>>>({});
@@ -77,6 +80,8 @@ export default function AddNodeDialog({
           }
         }}
       >
+        <p className="muted">{t('默认章节顺序：章节规划 → 正文生成 → 一致性审校。')}</p>
+        <p className="muted">{t('可选剧情设计参考：剧情编排 → 冲突设计 → 伏笔安排 → 反转设计 → 高潮编排 → 章节规划。按故事需要选用，不必全部添加或每章运行；连接后才会参与执行，每个运行节点会增加模型调用。')}</p>
         <fieldset className="node-presets" disabled={locked}>
           <legend>节点类型</legend>
           <div className="node-preset-grid">
@@ -93,8 +98,8 @@ export default function AddNodeDialog({
                   }}
                 />
                 <span>
-                  <strong>{preset.title || '自定义 Agent'}</strong>
-                  <small>{preset.subtitle}</small>
+                  <strong>{translate(locale, preset.title || '自定义 Agent')}</strong>
+                  <small>{translate(locale, preset.subtitle)}</small>
                 </span>
               </label>
             ))}

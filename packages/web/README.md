@@ -1,5 +1,7 @@
 # Web 前端
 
+中文 | [English](README_en.md)
+
 npm workspace 包名：`space.syjx.agent.novel.web`。本包负责 React 界面、浏览器交互和主题加载；服务端实现位于另一个 workspace，不直接由前端导入。
 
 ## 源码分层
@@ -19,6 +21,7 @@ npm workspace 包名：`space.syjx.agent.novel.web`。本包负责 React 界面�
 - `hooks/` 按 `generation`、`chapters`、`workflow`、`platforms` 分组；除 React hooks，也保留对应领域的纯函数与就近测试。
 - [services](src/services/api.ts)：同源 API 请求、会话令牌与错误处理。
 - [lib/themes](src/lib/themes/themes-load.ts)：主题注册表校验和并发安全的主题加载。
+- [locals](src/locals/README.md)：渐进式中英文支持，不代表全应用已翻译。语言选择器使用主题化自定义按钮及单选菜单，而非原生 select；提供键盘导航、Escape 关闭及焦点恢复。
 - [styles](src/styles/styles.scss)：全局 Sass；[管理样式](src/styles/administration.scss)由管理控制台和账号安全共同使用。
 
 ## 有意保留的根目录边界

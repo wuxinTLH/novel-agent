@@ -1,5 +1,7 @@
 # 角色与权限
 
+语言 / Language：[中文](roles-permissions.md) · [English](en/roles-permissions.md) · [English documentation index](en/README.md)
+
 ## 四种角色与权重
 
 | 角色 ID      | 名称       | 权重 |

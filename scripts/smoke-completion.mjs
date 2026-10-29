@@ -226,6 +226,30 @@ try {
     assert.equal(await restoredCondition.inputValue(), 'approved');
   });
 
+  await check('optional plot presets create real nodes and retain custom prompts across reload', async () => {
+    await page.goto(`${base}/workflow`);
+    for (const [kind, title] of [['conflict', '冲突设计'], ['foreshadow', '伏笔安排'], ['twist', '反转设计'], ['climax', '高潮编排']]) {
+      await page.getByRole('button', { name: '新增节点', exact: true }).first().click();
+      const modal = page.getByRole('dialog', { name: '新增工作流节点', exact: true });
+      await modal.locator(`input[name="kind"][value="${kind}"]`).check();
+      assert.equal(await modal.locator('#new-node-title').inputValue(), title);
+      const prompt = `Smoke ${kind}: preserve this author's plot direction.`;
+      await modal.locator('#new-node-prompt').fill(prompt);
+      const savedResponse = page.waitForResponse(response => response.url() === `${base}/api/projects/${projectId}/nodes` && response.request().method() === 'POST');
+      await modal.getByRole('button', { name: '添加节点', exact: true }).click();
+      const response = await savedResponse;
+      assert.equal(response.status(), 201, await response.text());
+      const project = await getProject();
+      const step = project.steps.find(value => value.kind === kind && value.prompt === prompt);
+      assert.ok(step, `${kind} persisted through UI`);
+    }
+    await page.reload();
+    const restored = await getProject();
+    for (const kind of ['conflict', 'foreshadow', 'twist', 'climax']) {
+      assert.ok(restored.steps.some(step => step.kind === kind && step.prompt === `Smoke ${kind}: preserve this author's plot direction.`));
+    }
+  });
+
   const upload = async (endpoint, field, name, bytes, mime, expected) => {
     const form = new FormData();
     if (endpoint === '/assets/upload') form.append('category', 'world');

@@ -43,6 +43,11 @@ test('node context summary reflects selected assets and real connected upstream 
   const scoped = nodeContextSummary({ ...step, assetIds: ['b'] }, project);
   assert.deepEqual(scoped.assets.map((asset) => asset.id), ['b']);
   assert.deepEqual(scoped.upstream.map((node) => node.id), ['parent']);
+  project.steps.splice(1, 0, { ...step, id: 'ancestor', title: '前置解析' });
+  project.workflow!.edges.push({ id: 'e2', source: 'ancestor', target: 'parent' });
+  assert.deepEqual(nodeContextSummary(step, project).upstream.map((node) => node.id), ['ancestor', 'parent']);
+  project.workflow!.edges.push({ id: 'e3', source: 'parent', target: 'ancestor' });
+  assert.deepEqual(nodeContextSummary(step, project).upstream.map((node) => node.id), ['ancestor', 'parent']);
 });
 
 test('undo graph snapshots retain every editable character, reuse and output naming setting', () => {

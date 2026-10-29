@@ -73,7 +73,11 @@ export interface Step {
     | 'character'
     | 'dialogue'
     | 'scene'
-    | 'continuity';
+    | 'continuity'
+    | 'conflict'
+    | 'foreshadow'
+    | 'twist'
+    | 'climax';
   /** Optional saved result name. Empty means derive one from the generated content. */
   outputName?: string;
   modelId?: string;

@@ -55,6 +55,10 @@ export const editableStepSchema = z
         'dialogue',
         'scene',
         'continuity',
+        'conflict',
+        'foreshadow',
+        'twist',
+        'climax',
       ])
       .optional(),
     outputName: z.string().trim().max(120).optional(),
@@ -93,7 +97,7 @@ export const editableWorkflowSchema = z
     autoGenerate: z.boolean().optional(),
     automationMode: z.enum(['manual', 'automatic']).optional(),
     maxAutoRepairs: z.number().int().min(0).max(3).optional(),
-    maxParallelNodes: z.number().int().min(1).max(4).optional(),
+    maxParallelNodes: z.number().int().min(1).max(8).optional(),
     publication: z
       .object({
         enabled: z.boolean(),

@@ -1,25 +1,68 @@
 .language-switcher {
+  position: relative;
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 0.35rem;
-  font-size: 0.75rem;
-  color: inherit;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-text);
+  white-space: nowrap;
 
-  select {
-    min-height: 30px;
-    max-width: 110px;
-    padding: 0.2rem 0.4rem;
-    border: 1px solid currentColor;
-    border-radius: 6px;
+  &__label { flex: 0 0 auto; white-space: nowrap; }
+  &__trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex: 0 0 auto;
+    min-width: 100px;
+    height: 38px;
+    padding: 0 10px 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
     background: var(--surface, Canvas);
-    color: inherit;
+    color: var(--text);
     font: inherit;
+    text-align: left;
     cursor: pointer;
-
-    &:focus-visible {
-      outline: 2px solid var(--accent, Highlight);
-      outline-offset: 2px;
+    svg { flex: none; color: var(--muted-text); transition: transform 0.18s; }
+    &[aria-expanded='true'] svg { transform: rotate(180deg); }
+    &:hover { border-color: var(--accent-2); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+  }
+  &__menu {
+    position: absolute;
+    z-index: 100;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 154px;
+    padding: 5px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface, Canvas);
+    box-shadow: 0 12px 28px #25364d22;
+    color: var(--text);
+    button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      min-height: 36px;
+      padding: 0 10px;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      &:hover, &:focus-visible { background: var(--soft); }
+      &:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+      &[aria-checked='true'] { color: var(--accent-2); font-weight: 600; }
     }
   }
+  &__unchecked { visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .language-switcher__trigger svg { transition: none; }
 }

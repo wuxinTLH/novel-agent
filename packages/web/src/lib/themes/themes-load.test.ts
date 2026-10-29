@@ -45,3 +45,29 @@ test('shipped registry registers all existing themes and each resource exists', 
   assert.deepEqual(registry.themes.map((item: RegisteredTheme) => item.id).sort(), ['theme-dark','theme-light','theme-mtf','theme-system']);
   for (const theme of registry.themes) assert.ok((await readFile(new URL(`../../../../../public/themes/${theme.css}`, import.meta.url), 'utf8')).trim());
 });
+test('MTF palette keeps flag colors, scoped gradients and dark readable controls', async () => {
+  const css = await readFile(new URL('../../../../../public/themes/theme-mtf.css', import.meta.url), 'utf8');
+  for (const color of ['#5bcefa', '#f5a9b8', '#ffffff']) assert.ok(css.includes(color), `missing ${color}`);
+  for (const selector of ['body', '.sidebar', '.topbar', '.project-strip', '.workflow-node', '.primary']) {
+    assert.ok(css.includes(`:root[data-theme='theme-mtf'] ${selector}`), `missing ${selector}`);
+  }
+  assert.match(css, /background: linear-gradient\(122deg,[^;]+var\(--mtf-white\)/);
+  assert.match(css, /:root\[data-theme='theme-mtf'\] \.primary,[\s\S]*?background: linear-gradient\(105deg, var\(--mtf-blue\)[^;]+var\(--mtf-white\) 50%[^;]+var\(--mtf-pink\) 100%\);\s*color: #25364d;/);
+  for (const state of [':hover:not(:disabled)', ':active:not(:disabled)', ':focus-visible', ':disabled']) {
+    assert.ok(css.includes(`.primary${state}`), `missing primary state ${state}`);
+  }
+  assert.ok(css.includes('@media (prefers-reduced-motion: reduce)'));
+  const contrast = (foreground: string, background: string) => {
+    const luminance = (hex: string) => {
+      const channels = hex.match(/[0-9a-f]{2}/gi)!.map((v) => parseInt(v, 16) / 255);
+      const linear = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+      return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    };
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  };
+  assert.ok(contrast('#25364d', '#ffffff') >= 4.5, 'main text must remain readable on cards');
+  for (const background of ['#5bcefa', '#d9f3ff', '#ffffff', '#ffe5ed', '#f5a9b8', '#79d8fb', '#e5f7ff', '#ffedf3', '#f7bac7']) {
+    assert.ok(contrast('#25364d', background) >= 4.5, `button label must remain readable on ${background}`);
+  }
+});

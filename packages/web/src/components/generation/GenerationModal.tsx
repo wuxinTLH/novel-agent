@@ -209,7 +209,12 @@ export default function GenerationModal({
                   key={value}
                   type="button"
                   aria-pressed={workflowMode === value}
-                  disabled={locked}
+                  disabled={locked || (value === 'world'
+                    ? (entry.stepId ? writers.some((step) => step.id === entry.stepId) : writers.length > 0)
+                    : !entry.stepId && writers.length === 0)}
+                  title={value === 'world' && writers.length > 0
+                    ? '完整正文图不能切换为设定模式，请先切换独立设定工作流。'
+                    : value === 'chapter' && !writers.length ? '此工作流没有正文节点。' : undefined}
                   onClick={() => {
                     setWorkflowMode(value);
                     setModeMenuOpen(false);

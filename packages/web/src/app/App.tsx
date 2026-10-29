@@ -33,6 +33,10 @@ import {
   FileText,
   FolderOpen,
   GitBranch,
+  Swords,
+  Shuffle,
+  Flame,
+  Sprout,
   Globe2,
   Layers3,
   LoaderCircle,
@@ -222,6 +226,10 @@ const kindIcons: Partial<Record<NonNullable<Step['kind']>, LucideIcon>> = {
   writer: WandSparkles,
   audit: ShieldCheck,
   character: UsersRound,
+  conflict: Swords,
+  foreshadow: Sprout,
+  twist: Shuffle,
+  climax: Flame,
 };
 
 const assetIcons: Record<Category, LucideIcon> = {
@@ -2213,7 +2221,7 @@ export default function App() {
                             <GitBranch size={15} />
                             <span>
                               {nodeContext?.upstream.length
-                                ? `上游：${nodeContext.upstream.map((item) => item.title).join('、')}`
+                                ? `潜在上游（含间接节点）：${nodeContext.upstream.map((item) => item.title).join('、')}；实际注入已完成的有效输出`
                                 : '未连接创作上游，仅使用作品资料与本次要求'}
                             </span>
                           </div>
@@ -3377,7 +3385,7 @@ export default function App() {
             </label>
             <label>
               独立节点并发数（正文、审校保持串行）
-              <input name="maxParallelNodes" type="number" min={1} max={4} defaultValue={project.workflow?.maxParallelNodes ?? 1} />
+              <input name="maxParallelNodes" type="number" min={1} max={8} defaultValue={project.workflow?.maxParallelNodes ?? 1} />
             </label>
             <label>
               自动返修上限（仅全自动模式，0 表示关闭）
@@ -3497,7 +3505,7 @@ export default function App() {
               ['收集故事设定', '在设定库上传地图、人物档案、剧情主线与章节要求，也可以直接新建文字设定。'],
               [
                 '运行创作工作流',
-                '可为同一作品创建多条工作流。默认依次执行世界观解析、剧情编排、章节规划、正文生成和一致性审校。可增删节点、编辑指令，或删除不需要的章节。',
+                '可为同一作品创建多条工作流。默认章节仅执行章节规划、正文生成和一致性审校。资料解析、剧情编排及冲突、伏笔、反转、高潮节点按需添加并连接，不必每章全部运行。可增删节点、编辑指令，或删除不需要的章节。',
               ],
               [
                 '打磨与导出',
