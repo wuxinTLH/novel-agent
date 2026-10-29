@@ -219,7 +219,11 @@ try {
     assert.equal(saved.workflow.edges.find(value => value.id === edge.id).when, 'approved');
     await page.reload();
     await page.getByRole('button', { name: '工作流设置', exact: true }).click();
-    assert.equal(await page.getByRole('form', { name: '工作流调度设置' }).getByPlaceholder('留空为普通依赖，例如 approved').first().inputValue(), 'approved');
+    const restoredCondition = page.getByRole('form', { name: '工作流调度设置' }).getByPlaceholder('留空为普通依赖，例如 approved').first();
+    // Inputs can be mounted before the asynchronous project refresh settles.
+    await page.waitForFunction(() => [...document.querySelectorAll('input')].some(input =>
+      input.placeholder === '留空为普通依赖，例如 approved' && input.value === 'approved'));
+    assert.equal(await restoredCondition.inputValue(), 'approved');
   });
 
   const upload = async (endpoint, field, name, bytes, mime, expected) => {

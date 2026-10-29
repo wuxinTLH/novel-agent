@@ -6,6 +6,7 @@ import { coreServices, registerServices } from './registry.js';
 
 export interface ApplicationOptions {
   port: number;
+  trustedAliasPorts?: readonly number[];
   assertStorageHealthy?: () => void;
   appRoot: string;
   /** Optional features register after all core routes, before the API 404/error handlers. */
@@ -18,7 +19,7 @@ export function createApplication(context: ServiceContext, options: ApplicationO
   // This router has its own strict extension origin, fixed Host and scoped bearer checks.
   // Never delegate ordinary business APIs through this exception.
   app.use('/api/platform-extension', createExtensionBridgeRouter(context.platformRuntime, options.port));
-  installHttpPolicy(app, context, options.port);
+  installHttpPolicy(app, context, options.port, options.trustedAliasPorts);
   if (options.assertStorageHealthy)
     app.use('/api', (_req, _res, next) => {
       try {

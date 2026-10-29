@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type R
 import { KeyRound, LogOut, Monitor, Settings2, ShieldCheck, UserRound } from 'lucide-react';
 import { api, resetApiSession } from '../../services/api';
 import './auth-toolbar.scss';
+import { createSessionRevalidator } from './session-revalidation';
 import { hasPermission, ROLES } from '../../../../../shared/permissions';
 import Administration from '../administration/Administration';
 import AccountSecurity from './AccountSecurity';
@@ -329,32 +330,55 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [security, setSecurity] = useState(false);
   const [localAdmin, setLocalAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
-  const refresh = async () => {
-    setError('');
-    try {
-      const next = await api<Session>('/auth/session');
-      prepareIdentity(
-        next.enabled ? (next.authenticated && next.user ? next.user.id : 'anonymous') : 'auth-disabled',
-      );
-      setSession(next);
-    } catch (error) {
-      setError(message(error));
-    }
-  };
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const refresh = () => refreshRef.current();
   useEffect(() => {
+    const revalidator = createSessionRevalidator({
+      read: (signal) => api<Session>('/auth/session', { signal }),
+      initial: (next) => {
+        prepareIdentity(
+          next.enabled ? (next.authenticated && next.user ? next.user.id : 'anonymous') : 'auth-disabled',
+        );
+        setSession(next);
+      },
+      changed: () => {
+        resetApiSession();
+        // Hide the old tenant immediately, even if beforeunload delays a reload.
+        setSession(undefined);
+        window.location.reload();
+      },
+      checking: () => setError(''),
+      error: (error) => setError(message(error)),
+    });
+    const refresh = () => revalidator.check();
+    refreshRef.current = refresh;
     void refresh();
     const expired = () => {
+      revalidator.dispose();
       resetApiSession();
+      setSession(undefined);
       window.location.reload();
     };
+    // Storage is only a hint. Alias ports share cookies but not storage origins;
+    // focus/visibility must independently ask the server for the current identity.
     const switched = (event: StorageEvent) => {
-      if (event.key === 'novel-auth-identity') expired();
+      if (event.key === 'novel-auth-identity' || event.key === null) void refresh();
+    };
+    const focused = () => { void refresh(); };
+    const visible = () => {
+      if (document.visibilityState === 'visible') void refresh();
     };
     window.addEventListener('novel-auth-expired', expired);
     window.addEventListener('storage', switched);
+    window.addEventListener('focus', focused);
+    document.addEventListener('visibilitychange', visible);
     return () => {
+      revalidator.dispose();
+      refreshRef.current = async () => {};
       window.removeEventListener('novel-auth-expired', expired);
       window.removeEventListener('storage', switched);
+      window.removeEventListener('focus', focused);
+      document.removeEventListener('visibilitychange', visible);
     };
   }, []);
   useEffect(() => {

@@ -9,8 +9,8 @@ import type { ServiceContext } from './context.js';
 import { createOriginPolicy } from './trusted-origin.js';
 import { safeUploadReader } from '../features/file-sandbox/safe-read.js';
 import { createRequestLimiter } from './request-limiter.js';
-export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number) {
-  const originAllowed = createOriginPolicy(port);
+export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number, aliasPorts: readonly number[] = []) {
+  const originAllowed = createOriginPolicy(port, undefined, aliasPorts);
   app.use((req, res, next) => {
     if (!originAllowed(req))
       return res.status(403).json({ error: '只允许本机或局域网来源访问。', code: 'LOCAL_ORIGIN_REJECTED' });

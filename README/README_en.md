@@ -23,7 +23,20 @@ npm run build
 npm start
 ```
 
-The production UI is served at `http://127.0.0.1:3001`. The service listens on local and LAN interfaces; restrict access to a trusted LAN and do not expose it directly to the Internet. Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
+The production UI is served at `http://127.0.0.1:3001` by default. The service listens on local and LAN interfaces; restrict access to a trusted LAN and do not expose it directly to the Internet. Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
+
+For optional local aliases, enable the loopback gateway explicitly. This keeps one backend process, one tenant Worker owner, and one data-directory lock:
+
+```powershell
+$env:GATEWAY_ENABLED='true'
+$env:GATEWAY_PORTS='5173,5174,5175'
+$env:GATEWAY_TARGET='http://127.0.0.1:3001'
+npm start
+```
+
+The gateway binds only to `127.0.0.1`, permits only an HTTP loopback target, and preserves methods, paths, cookies, Origins, and statuses. Configured aliases are explicitly admitted by both the entry and tenant Worker origin policies without trusting forwarding headers. Defaults: 1 MiB requests, 16 MiB responses, 32 concurrent requests, 30-second total deadline. It buffers bounded exchanges, does not relay SSE/WebSockets, and never retries writes. Development mode still uses Vite `5173` and API `3001`; avoid port conflicts.
+
+Aliases are entrances to the same application, not separate users or data instances. Cookies on the same host are shared across ports. Use real logout/login to switch authenticated users; focus/visibility revalidation checks server identity and clears/reloads stale UI only when identity changes, preserving drafts for unchanged sessions. Run `npm run build` then `npm run smoke:auth` for disposable identity tests; do not change authentication on a real data directory.
 
 ## Documentation
 

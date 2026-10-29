@@ -25,7 +25,12 @@ export function trustedPublicOrigin(value = process.env.NOVEL_TRUSTED_PUBLIC_ORI
 
 /** TLS terminator must preserve Host and strip untrusted forwarding headers. This does not
  * enable Express proxy trust or change local administrator authority. */
-export function createOriginPolicy(port: number, trusted = trustedPublicOrigin()) {
+export function createOriginPolicy(
+  port: number,
+  trusted = trustedPublicOrigin(),
+  aliasPorts: readonly number[] = [],
+) {
+  const allowedPorts = new Set(['5173', String(port), ...aliasPorts.map(String)]);
   const privateHost = (hostname: string) =>
     ['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname) ||
     /^10\./.test(hostname) ||
@@ -35,7 +40,8 @@ export function createOriginPolicy(port: number, trusted = trustedPublicOrigin()
     try {
       const url = new URL(value);
       return (
-        url.protocol === 'http:' && ['5173', String(port)].includes(url.port) && privateHost(url.hostname)
+        url.protocol === 'http:' && allowedPorts.has(url.port) && privateHost(url.hostname) &&
+        (!aliasPorts.includes(Number(url.port)) || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
       );
     } catch {
       return false;

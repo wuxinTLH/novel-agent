@@ -13,6 +13,7 @@ interface RuntimeData {
   dir: string;
   ownerId?: string;
   port: number;
+  trustedAliasPorts?: readonly number[];
   appRoot: string;
   inheritEnvironment: boolean;
   capability: string;
@@ -81,6 +82,7 @@ async function run(data: RuntimeData) {
     context = createServiceContext(data.dir, data.inheritEnvironment);
     const app = createApplication(context, {
       port: data.port,
+      trustedAliasPorts: data.trustedAliasPorts,
       appRoot: data.appRoot,
       assertStorageHealthy: () => binding?.storage?.assertHealthy(),
     });

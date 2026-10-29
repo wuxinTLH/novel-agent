@@ -9,6 +9,7 @@ import { installHttpFallbacks } from '../http.js';
 import { readAuthMode } from '../../infrastructure/storage/storage-config.js';
 import { mainPlatformAccountLockCoordinator } from './platform-account-lock.js';
 import { createOriginPolicy } from '../trusted-origin.js';
+import { createRequestLimiter } from '../request-limiter.js';
 
 export interface IsolatedTenantService {
   register(app: express.Express): void;
@@ -22,6 +23,8 @@ export interface IsolatedTenantApplicationOptions {
   services?: readonly IsolatedTenantService[];
   enabled: boolean;
   waitForControlPlaneIdle?: () => Promise<void>;
+  /** Explicit local alias ports allowed by the loopback gateway. */
+  trustedAliasPorts?: readonly number[];
 }
 export interface TenantRuntime {
   readonly dir: string;
@@ -59,8 +62,8 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     next();
   });
   // Deliberately no global body parser: delegation preserves exact wire bytes and uploads.
-  const windows = new Map<string, number[]>();
-  const originAllowed = createOriginPolicy(options.port);
+  const limiter = createRequestLimiter();
+  const originAllowed = createOriginPolicy(options.port, undefined, options.trustedAliasPorts);
   app.use((req, res, next) => {
     // OIDC uses a top-level cross-site GET redirect. Only this exact callback
     // bypasses the fetch-site test; its handler verifies single-use state,
@@ -79,12 +82,10 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     if (req.path.toLowerCase().startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
-      const now = Date.now();
-      const key = req.ip || 'local';
-      const recent = (windows.get(key) || []).filter((time) => now - time < 60_000);
-      recent.push(now);
-      windows.set(key, recent);
-      if (recent.length > 240) return res.status(429).json({ code: 'RATE_LIMITED', retryable: true });
+      const quota = limiter.check(req.ip || 'local');
+      if (!quota.allowed)
+        return res.status(429).setHeader('Retry-After', String(quota.retryAfter))
+          .json({ code: 'RATE_LIMITED', retryable: true });
     }
     if (closing) return res.status(503).json({ code: 'TENANT_RUNTIME_CLOSING', retryable: false });
     const maintenanceStatus = /^\/api\/admin\/online-maintenance(?:\/|$)/i.test(req.path);
@@ -163,6 +164,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
       dir,
       ownerId: options.enabled ? ownerId : undefined,
       port: options.port,
+      trustedAliasPorts: options.trustedAliasPorts,
       appRoot: options.appRoot,
       inheritEnvironment: !options.enabled,
       capability,

@@ -15,6 +15,39 @@ import {
 
 const policyPort = 3001;
 
+test('explicit loopback aliases share outer and worker origin policy without weakening CSRF', async (t) => {
+  const f = await fixture(t, false, [], [5174, 5175]);
+  for (const port of [5174, 5175]) {
+    const headers = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` };
+    assert.equal((await f.request('GET', '/api/auth/session', undefined, headers)).status, 200);
+    const health = await f.request('GET', '/api/health', undefined, headers);
+    assert.equal(health.status, 200);
+    const body = Buffer.from(JSON.stringify({ title: `Alias ${port}`, genre: '奇幻', description: '' }));
+    assert.equal((await f.request('POST', '/api/projects', body, { ...headers, 'content-type': 'application/json' })).status, 403);
+    const saved = await f.request('POST', '/api/projects', body, {
+      ...headers, 'content-type': 'application/json', 'x-platform-csrf': health.body.platform.csrfToken,
+    });
+    assert.equal(saved.status, 201);
+    assert.equal((await f.request('GET', '/api/projects', undefined, { ...headers, origin: 'https://evil.example' })).status, 403);
+    assert.equal((await f.request('GET', '/api/projects', undefined, { ...headers, host: `192.168.1.5:${port}` })).status, 403);
+  }
+  assert.equal(f.tenant.contexts.size, 1);
+  assert.equal((await f.request('GET', '/api/auth/session', undefined, { host: '127.0.0.1:5176' })).status, 403);
+});
+
+test('outer API quota is bounded and returns Retry-After on continued rejected traffic', async (t) => {
+  const f = await fixture(t);
+  for (let i = 0; i < 240; i++)
+    assert.equal((await f.request('GET', '/api/auth/session')).status, 200);
+  for (let i = 0; i < 10; i++) {
+    const rejected = await f.request('GET', '/api/auth/session', undefined, { 'x-forwarded-for': `10.0.0.${i}` });
+    assert.equal(rejected.status, 429);
+    assert.equal(rejected.body.code, 'RATE_LIMITED');
+    assert.ok(Number(rejected.headers['retry-after']) >= 1);
+  }
+  assert.equal(f.tenant.contexts.size, 0);
+});
+
 test('only the exact OIDC GET callback admits cross-site navigation and still checks host and origin', async (t) => {
   const f = await fixture(t);
   const headers = { 'sec-fetch-site': 'cross-site', accept: 'text/html' };
@@ -44,7 +77,7 @@ test('authenticated mode explicitly rejects extension pairing without creating a
   }
   assert.equal(f.tenant.contexts.size, 0);
 });
-async function fixture(t: TestContext, enabled = false, services: IsolatedTenantService[] = []) {
+async function fixture(t: TestContext, enabled = false, services: IsolatedTenantService[] = [], trustedAliasPorts: number[] = []) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-isolated-'));
   const auth = new AuthService({ dataDir: dir, enabled });
   const tenant = createIsolatedTenantApplication({
@@ -54,6 +87,7 @@ async function fixture(t: TestContext, enabled = false, services: IsolatedTenant
     auth,
     enabled,
     services,
+    trustedAliasPorts,
   });
   const server = http.createServer(tenant.app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

@@ -19,8 +19,10 @@ export default function WorkflowScheduleSettings({ project, busy, onSave }: {
     edges: project.workflow?.edges.map(({ id, source, target, when }) => ({ id, source, target, when })),
     joins: project.steps.map(({ id, join }) => ({ id, join })),
   });
-  const [conditions, setConditions] = useState<Record<string, string>>({});
-  const [joins, setJoins] = useState<Record<string, 'all' | 'any'>>({});
+  const [conditions, setConditions] = useState<Record<string, string>>(() =>
+    Object.fromEntries((project.workflow?.edges || []).map(edge => [edge.id, edge.when || ''])));
+  const [joins, setJoins] = useState<Record<string, 'all' | 'any'>>(() =>
+    Object.fromEntries(project.steps.map(step => [step.id, step.join || 'all'])));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {

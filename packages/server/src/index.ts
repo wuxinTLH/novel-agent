@@ -6,6 +6,7 @@ import { createIsolatedTenantApplication } from './core/tenancy/isolated-tenant-
 import { acquireDataLock, appRoot } from './core/local-runtime.js';
 import { trustedPublicOrigin } from './core/trusted-origin.js';
 import type { IsolatedTenantService } from './core/tenancy/isolated-tenant-application.js';
+import { readLocalGatewayConfig, startLocalGateway, type LocalGateway } from './core/local-gateway.js';
 import { SQLConnectService, createSQLconnectRouter } from './infrastructure/database/sqlconnect.js';
 import { AuthService } from './features/auth/auth.js';
 import { createAccountEmailTransport } from './features/auth/account-mail.js';
@@ -23,6 +24,8 @@ try {
   if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 }
 const port = Number(process.env.PORT || 3001);
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT_INVALID');
+const gatewayConfig = readLocalGatewayConfig(process.env, port);
 const dir = path.resolve(appRoot, process.env.DATA_DIR || 'data');
 if (fs.existsSync(path.join(dir, '.maintenance-journal.json')))
   throw new Error('MAINTENANCE_RECOVERY_REQUIRED');
@@ -125,6 +128,7 @@ const tenants = createIsolatedTenantApplication({
   auth,
   services,
   enabled: mode.enabled,
+  trustedAliasPorts: gatewayConfig.ports,
   waitForControlPlaneIdle: async () => {
     await auth.waitForIdle();
     await sqlconnect.waitForIdle();
@@ -132,8 +136,25 @@ const tenants = createIsolatedTenantApplication({
 });
 const app = tenants.app;
 const closeRuntime = tenants.close;
-const server = app.listen(port, '0.0.0.0', () => console.log(`Novel Agent API: http://0.0.0.0:${port}`));
+let gateway: LocalGateway | undefined;
 let closing = false;
+let exitCode = 0;
+let gatewayStartup: Promise<void> = Promise.resolve();
+const server = app.listen(port, '0.0.0.0', () => {
+  console.log(`Novel Agent API: http://0.0.0.0:${port}`);
+  if (closing) return;
+  gatewayStartup = (async () => {
+    try {
+      gateway = await startLocalGateway(gatewayConfig);
+      if (gateway.addresses.length)
+        console.log(`Novel Agent local gateway: ${gateway.addresses.map(({ host, port: value }) => `http://${host}:${value}`).join(', ')}`);
+    } catch {
+      exitCode = 1;
+      console.error('本机网关无法启动，请检查配置和端口是否被占用。');
+      void shutdown();
+    }
+  })();
+});
 async function shutdown() {
   if (closing) return;
   closing = true;
@@ -141,12 +162,14 @@ async function shutdown() {
   const deadline = setTimeout(() => process.exit(1), 10_000);
   deadline.unref();
   try {
+    await gatewayStartup;
+    await gateway?.close();
     await onlineMaintenance.close();
     await closeRuntime();
     await authPersistence?.close?.();
     releaseDataLock();
     clearTimeout(deadline);
-    process.exit(0);
+    process.exit(exitCode);
   } catch {
     console.error('关闭未完整完成，下次启动请检查任务和数据目录锁。');
     process.exit(1);
@@ -159,6 +182,7 @@ process.once('SIGTERM', () => {
   void shutdown();
 });
 server.on('error', () => {
+  exitCode = 1;
   console.error('本机服务无法启动，请检查端口是否被占用。');
   void shutdown();
 });
