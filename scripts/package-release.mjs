@@ -26,6 +26,6 @@ for (const dir of ['build', 'dist']) {
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 fs.writeFileSync(path.join(stage, 'RELEASE-MANIFEST.json'), JSON.stringify({ version, commit, runtime: 'Node.js >=22.16', dependenciesIncluded: false, dockerValidated: false, complianceCertified: false, sourceIncluded: true }, null, 2));
 const archive = path.join(output, `novel-agent-${version}.tar.gz`);
-execFileSync('tar', ['-czf', archive, '-C', output, 'novel-agent'], { stdio: 'inherit' });
+execFileSync('tar', ['-czf', path.basename(archive), 'novel-agent'], { cwd: output, stdio: 'inherit' });
 fs.writeFileSync(path.join(output, 'SHA256SUMS.txt'), `${crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex')}  ${path.basename(archive)}\n`);
 console.log(output);
