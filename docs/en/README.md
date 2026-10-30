@@ -39,6 +39,10 @@ Already-English references remain canonical rather than duplicating identical En
 - [Storage admission benchmark](../../scripts/benchmark-storage-report.md): existing English **historical SIMULATED** measurements, original numbers retained. No real SQL/network/disk performance claim; live PostgreSQL v3 acceptance was skipped without credentials/opt-in.
 - [English unreleased changelog summary](../../CHANGELOG.md#english-unreleased-summary): current feature themes and explicit validation boundaries. Chinese historical release entries remain intact rather than being presented as newly verified results.
 
+## Current delivery and navigation changes
+
+The [deployment guide](user-guide.md#separate-builds-and-same-origin-deployment) covers independent `build:web` / `build:server`, default integrated hosting, API-only `SERVE_WEB=false`, trusted `WEB_DIST_DIR`, and same-origin `/api` / `/uploads` reverse proxying without new business CORS or relaxed CSRF. Static hosts need their own SPA fallback and equivalent CSP/security headers. The [authoring guide](user-guide.md#knowledge-facts-and-node-picker-views) covers browser-local node-picker views, the independent `/assets/knowledge` page and discard confirmations; the [acceptance record](acceptance-checklist.md#separate-delivery-knowledge-page-and-http-hardening-increment) separates focused HTTP fixes from historical totals and still-open external/OS-isolation work.
+
 ## Inventory and maintenance policy
 
 The initial Git-tracked Markdown inventory contained **35 files**: three root/language READMEs, changelog, eight guides in docs, 20 package READMEs, the theme README, one benchmark report and one shared scheduler guide. Chinese-first documents receive a sibling English file or an English counterpart here; existing substantial English documents are indexed rather than duplicated. The changelog receives a meaningful English unreleased summary rather than translating all historical entries. New English files join the inventory once staged/committed; the working-tree inventory must include them when checking coverage.

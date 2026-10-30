@@ -13,7 +13,7 @@ function collect(directory) {
 const testFiles = ['shared', 'packages/server/src', 'packages/web/src'].flatMap(collect);
 const result = spawnSync(
   process.execPath,
-  [path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', ...testFiles],
+  [path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', '--test-concurrency=2', ...testFiles],
   {
     cwd: root,
     env: { ...process.env, NODE_ENV: 'test' },

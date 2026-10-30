@@ -28,7 +28,9 @@ Workspace package: `space.syjx.agent.novel.server`. Source lives in `src/`; inst
 ## Cross-directory boundaries
 
 - Shared frontend/backend protocols remain in root `shared/`; do not duplicate their definitions.
-- Root `public/` contains frontend static sources. Root `dist/` contains production frontend output served by the backend.
+- Root `public/` contains frontend static sources; root `dist/` is default frontend output. The optional [web-hosting module](src/core/web-hosting.ts) provides static/SPA delivery; HTTP API errors/unknown APIs never fall back to HTML.
+- Root `npm run build:server` independently builds backend/Workers/SQL resources; `npm run build:web` builds the frontend. `SERVE_WEB=false` disables HTML/themes/SPA delivery without needing frontend artifacts; default is `true`, and other strings fail startup. `WEB_DIST_DIR` defaults to application-root `dist`; relative paths resolve from that root and trusted absolute paths are supported. Hosting requires `index.html`; never select data/backups/source directories.
+- A separate static server must proxy `/api` and `/uploads` on the same browser origin to one backend, preserving Host/Origin/Cookie/CSRF/status. Do not enable cross-origin business CORS. HTTPS needs explicit trusted-origin configuration; forwarding headers are not trusted and local administration stays restricted. See [deployment instructions](../../docs/en/user-guide.md#separate-builds-and-same-origin-deployment).
 - `.env`, default `data/` and relative `DATA_DIR` resolve from the workspace/deployment root, not the current process directory or backend package. Existing user data does not need to move.
 - Compiled backend output lives in root `build/packages/server/src/`. Tenant/database Workers retain their relative position to calling modules. SQL resources are copied to `infrastructure/storage/sql/` in that output.
 - Root discovery walks upward for a manifest named `novel-agent` containing `workspaces`. Retain that root manifest in production; do not infer data paths from the current directory alone.

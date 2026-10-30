@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "concurrently -k -n api,web -c yellow,cyan \"npm run dev --workspace space.syjx.agent.novel.server\" \"npm run dev --workspace space.syjx.agent.novel.web\"",
     "build": "npm run typecheck && npm run build --workspace space.syjx.agent.novel.web && npm run build --workspace space.syjx.agent.novel.server",
+    "build:web": "npm run build --workspace space.syjx.agent.novel.web",
+    "build:server": "npm run build --workspace space.syjx.agent.novel.server",
     "start": "npm run start --workspace space.syjx.agent.novel.server",
     "start:dev": "npm run start:dev --workspace space.syjx.agent.novel.server",
     "admin": "npm run admin --workspace space.syjx.agent.novel.server --",

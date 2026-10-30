@@ -119,6 +119,7 @@ type Page =
   | 'projects'
   | 'workflow'
   | 'assets'
+  | 'assets/knowledge'
   | 'chapters'
   | 'platforms'
   | 'settings'
@@ -131,6 +132,7 @@ const routePages: Page[] = [
   'projects',
   'workflow',
   'assets',
+  'assets/knowledge',
   'chapters',
   'platforms',
   'settings',
@@ -361,6 +363,8 @@ export default function App() {
   });
   const chapterEditor = useChapterEditor(project, page === 'chapters');
   const { chapterId, editor, dirty, conflict: chapterConflict } = chapterEditor;
+  const [knowledgeDirty, setKnowledgeDirty] = useState(false);
+  const unsaved = dirty || knowledgeDirty;
   const [manualChapter, setManualChapter] = useState(false);
   const [documentProjectId, setDocumentProjectId] = useState<string | null>(null);
   const [generationEntry, setGenerationEntry] = useState<GenerationEntry | null>(null);
@@ -493,16 +497,24 @@ export default function App() {
     [],
   );
   useEffect(() => {
-    const sync = () => {
+    let deciding = false;
+    const sync = async () => {
       const next = pageFromLocation();
-      if (next) {
+      if (!next || next === page) return;
+      if (deciding) { window.history.pushState({ page }, '', `/${page}`); return; }
+      deciding = true;
+      try {
+        if (unsaved && !(await confirmDialog('有未保存的修改，确定离开吗？'))) {
+          window.history.pushState({ page }, '', `/${page}`);
+          return;
+        }
         setPage(next);
         setSelectedPlatform(next === 'platforms' ? platformFromLocation() : null);
-      }
+      } finally { deciding = false; }
     };
     window.addEventListener('popstate', sync);
     return () => window.removeEventListener('popstate', sync);
-  }, []);
+  }, [page, unsaved, confirmDialog]);
   useEffect(() => {
     const controller = new AbortController();
     Promise.all([
@@ -715,7 +727,7 @@ export default function App() {
     }
   };
   const switchProject = async (id: string) => {
-    if (dirty && !(await confirmDialog('章节有未保存的修改，确定切换项目吗？'))) return;
+    if (unsaved && !(await confirmDialog('有未保存的修改，确定切换项目吗？'))) return;
     const p = projects.find((p) => p.id === id);
     if (!p) return;
     activateProject(p);
@@ -736,7 +748,7 @@ export default function App() {
   };
   const deleteProject = async () => {
     if (!project || projects.length <= 1 || running || busy) return;
-    if (dirty && !(await confirmDialog('章节有未保存的修改，确定删除当前作品吗？'))) return;
+    if (unsaved && !(await confirmDialog('有未保存的修改，确定删除当前作品吗？'))) return;
     if (!(await confirmDialog(`确定删除作品「${project.title}」吗？作品内的资料、章节和工作流都会被删除。`)))
       return;
     void task(async () => {
@@ -863,7 +875,7 @@ export default function App() {
     });
   };
   const navigate = async (next: Page) => {
-    if (dirty && next !== page && !(await confirmDialog('章节有未保存的修改，确定离开吗？'))) return;
+    if (unsaved && next !== page && !(await confirmDialog('有未保存的修改，确定离开吗？'))) return;
     localStorage.setItem('novel-page', next);
     window.history.pushState({ page: next }, '', `/${next}`);
     setPage(next);
@@ -1307,7 +1319,7 @@ export default function App() {
                 disabled={running || busy}
                 onClick={async () => {
                   setProjectSwitcherOpen(false);
-                  if (!dirty || (await confirmDialog('章节有未保存的修改，确定创建小说吗？')))
+                  if (!unsaved || (await confirmDialog('有未保存的修改，确定创建小说吗？')))
                     setNewProject(true);
                 }}
               >
@@ -1333,7 +1345,7 @@ export default function App() {
         <button
           className="new-project"
           onClick={async () => {
-            if (!dirty || (await confirmDialog('章节有未保存的修改，确定创建小说吗？'))) setNewProject(true);
+            if (!unsaved || (await confirmDialog('有未保存的修改，确定创建小说吗？'))) setNewProject(true);
           }}
         >
           <Plus size={16} /> {t('创建小说')}
@@ -1361,7 +1373,7 @@ export default function App() {
             <button
               type="button"
               key={item.id}
-              className={page === item.id ? 'active' : ''}
+              className={page === item.id || (item.id === 'assets' && page === 'assets/knowledge') ? 'active' : ''}
               onClick={() => {
                 if (item.id === 'character-workflow') {
                   openPresetWorkflow('character');
@@ -1469,6 +1481,8 @@ export default function App() {
                     </strong>
                   </>
                 ) : (
+                  <>
+                  {page === 'assets/knowledge' && <><button type="button" className="breadcrumb-link" onClick={() => void navigate('assets')}>小说设定库</button><ChevronRight size={14} aria-hidden="true" /></>}
                   <strong aria-current="page">
                     {
                       {
@@ -1477,6 +1491,7 @@ export default function App() {
                           project.workflows?.find((graph) => graph.id === project.activeWorkflowId)?.name ||
                           t('创作工作流'),
                         assets: t('小说设定库'),
+                        'assets/knowledge': '结构化知识',
                         chapters: t('章节书稿'),
                         platforms: t('平台作品'),
                         settings: t('模型设置'),
@@ -1486,6 +1501,7 @@ export default function App() {
                       }[page]
                     }
                   </strong>
+                  </>
                 )}
               </>
             )}
@@ -1543,7 +1559,7 @@ export default function App() {
                 <div className="eyebrow">
                   {page === 'workflow'
                     ? 'STORY WORKSPACE'
-                    : page === 'assets'
+                    : page === 'assets' || page === 'assets/knowledge'
                       ? 'STORY BIBLE'
                       : page === 'chapters'
                         ? 'MANUSCRIPT'
@@ -1562,6 +1578,7 @@ export default function App() {
                     {
                       workflow: '让故事，自成宇宙',
                       assets: '每一处设定，皆有回响',
+                      'assets/knowledge': '让故事的事实，有迹可循',
                       chapters: '把灵感，写成下一章',
                       platforms: '为作品，连接新天地',
                       settings: '为灵感，连接动力',
@@ -1576,6 +1593,7 @@ export default function App() {
                     {
                       workflow: '从世界的轮廓到章节的细节，与 Agent 一起让想象落笔。',
                       assets: '收好世界的地图、人物的秘密，以及故事将要抵达的地方。',
+                      'assets/knowledge': '集中记录人物、关系、时间线、伏笔与事实，并按章节控制创作上下文。',
                       chapters: '生成、打磨、留存。在这里，让每一个字找到自己的位置。',
                       platforms:
                         '人工选择账号、作品与一个已保存章节，确认后同步到外部草稿箱，不自动正式发布。',
@@ -1631,6 +1649,7 @@ export default function App() {
                     )}
                   </>
                 )}
+                {page === 'assets/knowledge' && <button type="button" className="button secondary" onClick={() => void navigate('assets')}>返回设定库</button>}
                 {page === 'assets' && (
                   <button className="button primary" disabled={running} onClick={() => setAddAsset(true)}>
                     <Plus size={17} />
@@ -2393,9 +2412,14 @@ export default function App() {
               </footer>
             </>
           )}
+          {page === 'assets/knowledge' && project && <KnowledgePanel key={project.id} projectId={project.id} chapters={project.chapters} onDirtyChange={setKnowledgeDirty} />}
           {page === 'assets' && (
             <>
-              {project && <KnowledgePanel key={project.id} projectId={project.id} chapters={project.chapters} />}
+              <section className="knowledge-entry-card">
+                <span className="icon-box"><Network size={24} /></span>
+                <div><strong>结构化知识</strong><p>管理人物、关系、时间线、伏笔和事实，让设定按关联章节进入创作上下文。</p></div>
+                <button type="button" className="button secondary" onClick={() => void navigate('assets/knowledge')}>管理结构化知识<ArrowRight size={16} /></button>
+              </section>
               <section className="asset-category-grid">
                 {categories.map((cat) => {
                   const Icon = assetIcons[cat];

@@ -175,13 +175,16 @@ try {
 
   await check('KnowledgePanel visible and facts persist through UI', async () => {
     await openPage(/^小说设定库(?:\s*\d+)?$/);
+    assert.equal(await page.getByLabel('搜索事实', { exact: true }).count(), 0, 'knowledge form is not embedded on the asset overview');
+    await page.getByRole('button', { name: '管理结构化知识', exact: true }).click();
+    assert.equal(new URL(page.url()).pathname, '/assets/knowledge');
     await page.getByLabel('搜索事实', { exact: true }).waitFor();
-    await page.getByPlaceholder('事实标题', { exact: true }).fill('星港位置事实');
-    await page.getByPlaceholder('事实内容（可关联章节）', { exact: true }).fill('星港位于赤道环带，所有章节应保持一致。');
+    await page.getByLabel('事实标题', { exact: true }).fill('星港位置事实');
+    await page.getByLabel('事实内容', { exact: true }).fill('星港位于赤道环带，所有章节应保持一致。');
     await page.getByRole('button', { name: '保存事实', exact: true }).click();
-    await page.locator('.knowledge-list').getByText('星港位置事实', { exact: true }).waitFor();
+    await page.getByRole('region', { name: '事实列表', exact: true }).getByText('星港位置事实', { exact: true }).waitFor();
     await page.reload();
-    await page.locator('.knowledge-list').getByText('星港位置事实', { exact: true }).waitFor();
+    await page.getByRole('region', { name: '事实列表', exact: true }).getByText('星港位置事实', { exact: true }).waitFor();
     const facts = await request(`/projects/${projectId}/knowledge`);
     assert.equal(facts.find(value => value.title === '星港位置事实').revision, 1);
     await page.getByRole('button', { name: '编辑事实：星港位置事实', exact: true }).click();
@@ -189,14 +192,57 @@ try {
     await page.getByLabel('事实标签', { exact: true }).fill('canon,航线,canon');
     const chapter = (await getProject()).chapters[0];
     assert.ok(chapter, 'generated chapter available for fact link');
-    await page.getByLabel('关联章节', { exact: true }).selectOption([chapter.id]);
+    await page.getByRole('group', { name: '关联章节', exact: true }).getByRole('checkbox').first().check();
     await page.getByRole('button', { name: '保存事实', exact: true }).click();
-    await page.locator('.knowledge-list').getByText('星港位置已核对', { exact: true }).waitFor();
+    await page.getByRole('region', { name: '事实列表', exact: true }).getByText('星港位置已核对', { exact: true }).waitFor();
     await page.reload();
     const edited = (await request(`/projects/${projectId}/knowledge`)).find(value => value.title === '星港位置已核对');
     assert.equal(edited.revision, 2);
     assert.deepEqual(edited.tags, ['canon', '航线']);
     assert.deepEqual(edited.chapterIds, [chapter.id]);
+    assert.equal(new URL(page.url()).pathname, '/assets/knowledge', 'nested route survives reload');
+    await page.setViewportSize({ width: 390, height: 844 });
+    const width = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth }));
+    assert.ok(width.content <= width.viewport + 1, 'knowledge page fits a mobile viewport');
+    await page.setViewportSize({ width: 1440, height: 1050 });
+    await page.getByRole('button', { name: '返回设定库', exact: true }).click();
+    assert.equal(new URL(page.url()).pathname, '/assets');
+    await page.goBack();
+    await page.getByLabel('搜索事实', { exact: true }).waitFor();
+
+    const draftTitle = '未保存知识草稿：导航不能静默丢弃';
+    const draftContent = '取消离开后标题与内容都应完整保留，服务端不得新增此草稿。';
+    const assertDraftRetained = async () => {
+      assert.equal(new URL(page.url()).pathname, '/assets/knowledge', 'cancelled navigation retains the nested route');
+      assert.equal(await page.getByLabel('事实标题', { exact: true }).inputValue(), draftTitle);
+      assert.equal(await page.getByLabel('事实内容', { exact: true }).inputValue(), draftContent);
+    };
+    const leaveConfirmation = page.getByRole('alertdialog');
+    await page.getByLabel('事实标题', { exact: true }).fill(draftTitle);
+    await page.getByLabel('事实内容', { exact: true }).fill(draftContent);
+    await page.getByRole('button', { name: '返回设定库', exact: true }).click();
+    await leaveConfirmation.getByText('有未保存的修改，确定离开吗？', { exact: true }).waitFor();
+    await leaveConfirmation.getByRole('button', { name: '取消', exact: true }).click();
+    await assertDraftRetained();
+    await page.getByRole('button', { name: '返回设定库', exact: true }).click();
+    await leaveConfirmation.getByRole('button', { name: '确定', exact: true }).click();
+    await page.waitForURL('**/assets');
+    assert.equal(await page.getByLabel('事实标题', { exact: true }).count(), 0, 'approved navigation unmounts the editor');
+    assert.equal((await request(`/projects/${projectId}/knowledge`)).some(value => value.title === draftTitle), false, 'discarded draft never reaches the server');
+
+    // Create a known assets -> knowledge history pair, then exercise popstate separately.
+    await page.getByRole('button', { name: '管理结构化知识', exact: true }).click();
+    await page.getByLabel('事实标题', { exact: true }).fill(draftTitle);
+    await page.getByLabel('事实内容', { exact: true }).fill(draftContent);
+    await page.goBack();
+    await leaveConfirmation.getByText('有未保存的修改，确定离开吗？', { exact: true }).waitFor();
+    await leaveConfirmation.getByRole('button', { name: '取消', exact: true }).click();
+    await page.waitForURL('**/assets/knowledge');
+    await assertDraftRetained();
+    await page.goBack();
+    await leaveConfirmation.getByRole('button', { name: '确定', exact: true }).click();
+    await page.waitForURL('**/assets');
+    assert.equal(await page.getByLabel('事实标题', { exact: true }).count(), 0, 'approved browser back leaves the knowledge editor');
   });
 
   await check('workflow condition and parallel cap truly save and survive reload', async () => {
@@ -224,6 +270,125 @@ try {
     await page.waitForFunction(() => [...document.querySelectorAll('input')].some(input =>
       input.placeholder === '留空为普通依赖，例如 approved' && input.value === 'approved'));
     assert.equal(await restoredCondition.inputValue(), 'approved');
+  });
+
+  await check('node picker supports three views, search, hierarchical selection and a 390px viewport', async () => {
+    await page.goto(`${base}/workflow`);
+    await page.getByRole('button', { name: '新增节点', exact: true }).first().click();
+    const modal = page.getByRole('dialog', { name: '新增工作流节点', exact: true });
+    const picker = modal.getByRole('group', { name: '节点类型', exact: true });
+    const modes = ['列表展示', '网格展示', '分级菜单展示'];
+    const radios = picker.locator('input[name="kind"]');
+    const search = picker.getByLabel('搜索节点', { exact: true });
+    const title = modal.locator('#new-node-title');
+    const customTitle = 'Smoke 保留已编辑的反转节点名称';
+    const customPrompt = 'Smoke picker: preserve this edited instruction across views and kinds.';
+    const assertMode = async (selected) => {
+      for (const name of modes) {
+        assert.equal(await picker.getByRole('button', { name, exact: true }).getAttribute('aria-pressed'), String(name === selected), `${name} pressed state`);
+      }
+    };
+    const switchMode = async (name) => {
+      await picker.getByRole('button', { name, exact: true }).click();
+      await assertMode(name);
+      assert.equal(await title.inputValue(), customTitle, 'view switching retains edited name');
+      assert.equal(await modal.locator('#new-node-prompt').inputValue(), customPrompt, 'view switching retains edited instruction');
+    };
+    const assertNoOverflow = async (label) => {
+      const sizes = await modal.evaluate(element => ({
+        viewport: document.documentElement.clientWidth,
+        document: document.documentElement.scrollWidth,
+        body: document.body.scrollWidth,
+        modal: element.clientWidth,
+        content: element.scrollWidth,
+        left: element.getBoundingClientRect().left,
+        right: element.getBoundingClientRect().right,
+      }));
+      assert.ok(sizes.document <= sizes.viewport + 1 && sizes.body <= sizes.viewport + 1, `${label}: page has no horizontal overflow: ${JSON.stringify(sizes)}`);
+      assert.ok(sizes.content <= sizes.modal + 1 && sizes.left >= -1 && sizes.right <= sizes.viewport + 1, `${label}: dialog fits horizontally: ${JSON.stringify(sizes)}`);
+    };
+    try {
+      await assertMode('网格展示');
+      // A view preference survives both modal unmount and a full browser reload.
+      for (const mode of ['列表展示', '分级菜单展示']) {
+        await picker.getByRole('button', { name: mode, exact: true }).click();
+        await modal.getByRole('button', { name: '取消', exact: true }).click();
+        await page.getByRole('button', { name: '新增节点', exact: true }).first().click();
+        await assertMode(mode);
+        await page.reload();
+        await page.getByRole('button', { name: '新增节点', exact: true }).first().click();
+        await assertMode(mode);
+      }
+      await picker.getByRole('button', { name: '网格展示', exact: true }).click();
+      const allKinds = await radios.evaluateAll(inputs => inputs.map(input => input.value).sort());
+      assert.ok(allKinds.includes('world') && allKinds.includes('twist'), 'default grid exposes node types');
+      assert.equal(await picker.locator('input[name="kind"][value="world"]').isChecked(), true, 'default node type is world');
+      await title.fill(customTitle);
+      await modal.locator('#new-node-prompt').fill(customPrompt);
+      await modal.getByRole('button', { name: '应用此预设', exact: true }).click();
+      const presetConfirmation = page.getByRole('alertdialog');
+      await presetConfirmation.getByText('应用此预设将替换名称、说明和创作指令，是否继续？', { exact: true }).waitFor();
+      assert.equal(await modal.getAttribute('aria-busy'), 'true', 'preset confirmation marks the parent modal busy');
+      for (const control of [title, modal.locator('#new-node-prompt'), search,
+        modal.getByRole('button', { name: '关闭弹窗', exact: true }),
+        modal.getByRole('button', { name: '添加节点', exact: true }),
+        modal.getByRole('button', { name: '应用此预设', exact: true }),
+        picker.getByRole('button', { name: '列表展示', exact: true })]) {
+        assert.equal(await control.isDisabled(), true, 'editing, submitting and closing remain disabled throughout confirmation');
+      }
+      await presetConfirmation.getByRole('button', { name: '取消', exact: true }).click();
+      await poll(() => title.isDisabled(), disabled => !disabled, 'cancelled preset confirmation unlocks editor');
+      assert.equal(await title.inputValue(), customTitle, 'cancelled preset confirmation preserves edited title');
+      assert.equal(await modal.locator('#new-node-prompt').inputValue(), customPrompt, 'cancelled preset confirmation preserves edited prompt');
+      await modal.getByRole('button', { name: '关闭弹窗', exact: true }).click();
+      await page.getByRole('alertdialog').getByText('有未保存的修改，确定关闭并丢弃吗？', { exact: true }).waitFor();
+      assert.equal(await title.isDisabled(), true, 'close confirmation shares the same editor lock');
+      await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
+      await poll(() => title.isDisabled(), disabled => !disabled, 'cancelled close confirmation unlocks editor');
+      assert.equal(await title.inputValue(), customTitle, 'cancelled close retains the node draft');
+      for (const mode of ['列表展示', '网格展示']) {
+        await switchMode(mode);
+        assert.deepEqual(await radios.evaluateAll(inputs => inputs.map(input => input.value).sort()), allKinds, `${mode} exposes the complete catalog`);
+        await search.fill('smoke-no-such-node-不存在的节点-9f37');
+        await poll(() => radios.count(), count => count === 0, `${mode} empty search results`);
+        assert.equal(await title.inputValue(), customTitle, 'empty search retains edited name');
+        await search.fill('');
+        await poll(() => radios.count(), count => count === allKinds.length, `${mode} cleared search restores catalog`);
+        await search.fill('反转');
+        await picker.locator('input[name="kind"][value="twist"]').waitFor({ state: 'visible' });
+        assert.ok(await radios.count() < allKinds.length, `${mode} search narrows results`);
+        await search.fill('');
+        await poll(() => radios.count(), count => count === allKinds.length, `${mode} search reset`);
+      }
+      await switchMode('分级菜单展示');
+      const category = picker.getByRole('button', { name: '剧情设计', exact: true });
+      await category.click();
+      assert.equal(await category.getAttribute('aria-pressed'), 'true', 'plot category is selected');
+      const subgroup = picker.getByRole('button', { name: '悬念与回收', exact: true });
+      await subgroup.click();
+      assert.equal(await subgroup.getAttribute('aria-pressed'), 'true', 'suspense subgroup is selected');
+      const twist = picker.locator('input[name="kind"][value="twist"]');
+      await twist.check();
+      assert.equal(await twist.isChecked(), true, 'hierarchical menu selects the twist kind');
+      assert.equal(await title.inputValue(), customTitle, 'kind switching retains edited name');
+      assert.equal(await modal.locator('#new-node-prompt').inputValue(), customPrompt, 'kind switching retains edited instruction');
+      await page.setViewportSize({ width: 390, height: 844 });
+      for (const mode of ['分级菜单展示', '列表展示', '网格展示']) {
+        await switchMode(mode);
+        await assertNoOverflow(`390px ${mode}`);
+        assert.equal(await picker.locator('input[name="kind"][value="twist"]').isChecked(), true, 'selected kind survives view changes');
+      }
+      const savedResponse = page.waitForResponse(response => response.url() === `${base}/api/projects/${projectId}/nodes` && response.request().method() === 'POST');
+      await modal.getByRole('button', { name: '添加节点', exact: true }).click();
+      const response = await savedResponse;
+      assert.equal(response.status(), 201, await response.text());
+      const saved = (await getProject()).steps.find(step => step.title === customTitle);
+      assert.ok(saved, 'edited node name is persisted');
+      assert.equal(saved.kind, 'twist');
+      assert.equal(saved.prompt, customPrompt);
+    } finally {
+      await page.setViewportSize({ width: 1440, height: 1050 });
+    }
   });
 
   await check('optional plot presets create real nodes and retain custom prompts across reload', async () => {

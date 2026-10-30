@@ -25,6 +25,8 @@ npm start
 
 The production UI is served at `http://127.0.0.1:3001` by default. The service listens on local and LAN interfaces; restrict access to a trusted LAN and do not expose it directly to the Internet. Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
 
+Build separately with root `npm run build:web` and `npm run build:server` (including backend Workers/SQL assets). `SERVE_WEB` defaults to `true`; `false` runs APIs/uploads without a web build, HTML, themes or SPA fallback. When hosting, `WEB_DIST_DIR` chooses a trusted static output directory, default application-root `dist`; relative paths also resolve from the application root. A separate static server must proxy `/api` and `/uploads` on the same browser origin to one backend, without enabling cross-origin business CORS or removing Cookie/Origin/CSRF checks. HTTPS additionally requires an explicit trusted origin. See [separate deployment](../docs/en/user-guide.md#separate-builds-and-same-origin-deployment).
+
 For optional local aliases, enable the loopback gateway explicitly. This keeps one backend process, one tenant Worker owner, and one data-directory lock:
 
 ```powershell
@@ -58,7 +60,8 @@ Use the [English documentation index](../docs/en/README.md) for all guides, pack
 ### Projects, workflows, and writing
 
 - `/workflow`: create and switch independent chapter, worldbuilding, character, or blank workflows. Arrange nodes in layered, horizontal, vertical, or grid layouts without changing execution semantics.
-- `/assets`: manage worldbuilding, characters, plot, and chapter reference material. Worldbuilding workflows save setting text, not novel chapters.
+- `/assets`: manage worldbuilding, characters, plot, and chapter reference material. Worldbuilding workflows save setting text, not novel chapters. `/assets/knowledge` is a separate knowledge-fact page for character/relationship/timeline/foreshadow/fact records, tags and chapter links. Unsaved knowledge changes require confirmation before replacing the editor, creating a new entry, leaving in-app or switching projects; refresh/close uses the browser warning, not autosave.
+- The node picker offers grid, list and detailed-menu views, remembered in same-origin browser localStorage as `novel-agent.node-picker.view`. Invalid/unavailable storage defaults to grid; presentation does not change the graph or concurrency.
 - `/chapters`: edit, generate, compare, and export chapters. Manually add one chapter or import TXT as UTF-8 or GB18030/GBK; limits are 2,000,000 bytes per file and 200,000 characters per chapter. Existing chapter numbers are not overwritten. Saving locally does not upload or submit anything remotely.
 - New chapter workflows use **planning → prose generation → consistency review**, normally three model calls per chapter (excluding failures/repairs/custom nodes), without rewriting saved graphs/prompts. Production node concurrency is 1–8, default 1: independent safe branches may overlap, but linear dependencies, writer/review barriers and chapter commits remain sequential. Optional conflict, twist, climax and foreshadow nodes are author-selected additions, not mandatory default stages.
 - Workflow nodes can use the global model or an explicit model. Missing, disabled, or deleted explicit models require configuration repair rather than a silent fallback. Character nodes support templates and a count of 1–100.

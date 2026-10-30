@@ -1,10 +1,11 @@
 import express from 'express';
+import type { WebHostingOptions } from './web-hosting.js';
 import { createExtensionBridgeRouter } from '../features/platforms/extension-bridge.js';
 import type { FeatureService, ServiceContext } from './context.js';
 import { installHttpFallbacks, installHttpPolicy } from './http.js';
 import { coreServices, registerServices } from './registry.js';
 
-export interface ApplicationOptions {
+export interface ApplicationOptions extends WebHostingOptions {
   port: number;
   trustedAliasPorts?: readonly number[];
   assertStorageHealthy?: () => void;
@@ -30,6 +31,6 @@ export function createApplication(context: ServiceContext, options: ApplicationO
       }
     });
   registerServices(app, context, [...coreServices, ...(options.services || [])]);
-  installHttpFallbacks(app, options.appRoot);
+  installHttpFallbacks(app, options.appRoot, options);
   return app;
 }

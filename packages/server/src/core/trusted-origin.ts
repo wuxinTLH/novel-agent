@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import { isIP } from 'node:net';
 
 /** Explicit deployment opt-in; never infer trust from forwarded headers or account settings. */
 export function trustedPublicOrigin(value = process.env.NOVEL_TRUSTED_PUBLIC_ORIGIN): string | undefined {
@@ -33,14 +34,17 @@ export function createOriginPolicy(
   const allowedPorts = new Set(['5173', String(port), ...aliasPorts.map(String)]);
   const privateHost = (hostname: string) =>
     ['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname) ||
-    /^10\./.test(hostname) ||
-    /^192\.168\./.test(hostname) ||
-    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname);
+    (isIP(hostname) === 4 &&
+      (hostname.startsWith('10.') ||
+        hostname.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)));
   const local = (value: string) => {
     try {
       const url = new URL(value);
       return (
-        url.protocol === 'http:' && allowedPorts.has(url.port) && privateHost(url.hostname) &&
+        url.protocol === 'http:' &&
+        allowedPorts.has(url.port) &&
+        privateHost(url.hostname) &&
         (!aliasPorts.includes(Number(url.port)) || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
       );
     } catch {

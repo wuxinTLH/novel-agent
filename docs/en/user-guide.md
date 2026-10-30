@@ -16,6 +16,17 @@ npm run dev
 
 Development uses UI `http://127.0.0.1:5173` and API `http://127.0.0.1:3001`. For a production build run `npm run build`, then `npm start`, and open `http://127.0.0.1:3001`. Fanqie login requires a visible Chromium window on the backend machine; a LAN browser does not provide remote desktop control.
 
+## Separate builds and same-origin deployment
+
+Integrated hosting remains the default (`SERVE_WEB=true`): the backend serves root `dist/` and SPA routes. Root `npm run build:web` builds only the frontend; `npm run build:server` builds the backend, Workers and SQL resources. `npm run build` still type-checks and builds both. Retain the root workspace manifest, complete backend output and runtime dependencies when deploying.
+
+- Set `SERVE_WEB=false` in the backend environment for API-only operation without a frontend build. It serves no HTML, themes or SPA fallback; unknown paths return JSON 404. `/api` and `/uploads` retain existing authentication, tenant and file reconstruction policies. Only literal `true`/`false` values are accepted; other values fail startup.
+- With hosting enabled, `WEB_DIST_DIR` selects a trusted frontend output directory (default `dist`). Relative paths resolve from the application root, not the current directory; absolute paths are supported. Hosting requires `index.html`. Never point it at data, backups or source code. API-only mode does not expose that directory.
+- A separate static server must serve the complete web output, including themes, and proxy browser `/api` and `/uploads` paths unchanged to the same backend instance. Apply SPA fallback only to frontend routes, never rewrite API/upload errors into HTML. The frontend keeps relative same-origin requests: no new cross-origin business CORS, and no removal of Origin, Cookie or CSRF checks.
+- Preserve browser Host (including port), Origin, Cookie and CSRF headers, response cookies and statuses; clear untrusted forwarding headers and block external direct backend access. `X-Forwarded-*` is not trusted. Existing local/private-host and configured-port restrictions remain; extra loopback entries require explicit gateway configuration. For HTTPS, configure the exact `NOVEL_TRUSTED_PUBLIC_ORIGIN` and follow the Secure-cookie/account-callback requirements below. This does not enable authentication or relax local administration.
+
+A separate static process is not a second backend or a public-Internet safety guarantee. The operator owns that server's cache/security headers and must retain equivalent CSP, `nosniff` and anti-framing protection rather than relax active-content/framing policy; built-in hosting still long-caches hashed resources and revalidates HTML. Independently accept HTML, API-only mode, API 404s, uploaded-image reads, login cookies and CSRF through the actual proxy entry.
+
 ## Workspace and authoring
 
 - `/workflow`: create, switch, edit, arrange and execute independent workflows. Character and worldbuilding shortcuts create separate workflows. A project must retain at least one workflow; deleting one does not delete chapters or assets.
@@ -25,6 +36,12 @@ Development uses UI `http://127.0.0.1:5173` and API `http://127.0.0.1:3001`. For
 - `/settings`: model profiles, protocols, credentials, execution mode and optional SQLconnect.
 
 Refresh preserves the route. Unknown routes show a 404 and return after five seconds. Workflow arrangement (layered, horizontal, vertical or grid) changes positions only, not dependencies or execution semantics. Project settings edit title, type, synopsis and a PNG/JPEG/WebP cover up to 4 MiB. Avatars are cropped and stored only in the current browser after server-side file checking.
+
+### Knowledge facts and node-picker views
+
+`/assets/knowledge` is a dedicated page under reference assets. Search/filter characters, relationships, timelines, foreshadowing and facts; edit tags and chapter links using existing project authorization and revision-conflict checks. Authors remain responsible for factual accuracy. Unsaved knowledge changes prompt before replacing the editor, creating another record, leaving in-app or switching projects. Refresh/close uses the browser's native warning, subject to browser restrictions. Cancel preserves input; these prompts are not persistent drafts or autosave—save important edits explicitly.
+
+The node picker offers grid, list and detailed-menu presentations with the same search/add behavior. It remembers `novel-agent.node-picker.view` in same-origin browser localStorage across reload/panel reopening, not account sync or cross-host/port persistence. Invalid or unavailable storage defaults to grid without preventing in-session switching. This presentation preference does not change graph contents, dependencies, default templates or execution concurrency.
 
 ### Worldbuilding and characters
 

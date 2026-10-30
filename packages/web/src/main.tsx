@@ -5,6 +5,8 @@ import AuthGate from './components/auth/AuthGate';
 import { DialogProvider } from './components/common/AppDialog';
 import '@xyflow/react/dist/style.css';
 import './styles/styles.scss';
+import './components/workflow/add-node-dialog.scss';
+import './components/knowledge/KnowledgePanel.scss';
 class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() {

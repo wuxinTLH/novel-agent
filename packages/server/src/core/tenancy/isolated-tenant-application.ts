@@ -6,6 +6,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type { AuthService } from '../../features/auth/auth.js';
 import { installHttpFallbacks } from '../http.js';
+import type { WebHostingOptions } from '../web-hosting.js';
 import { readAuthMode } from '../../infrastructure/storage/storage-config.js';
 import { mainPlatformAccountLockCoordinator } from './platform-account-lock.js';
 import { createOriginPolicy } from '../trusted-origin.js';
@@ -15,7 +16,7 @@ export interface IsolatedTenantService {
   register(app: express.Express): void;
   close?(): Promise<void>;
 }
-export interface IsolatedTenantApplicationOptions {
+export interface IsolatedTenantApplicationOptions extends WebHostingOptions {
   dir: string;
   port: number;
   appRoot: string;
@@ -327,7 +328,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     }
     next(error);
   });
-  installHttpFallbacks(app, options.appRoot);
+  installHttpFallbacks(app, options.appRoot, options);
   return {
     app,
     contexts,

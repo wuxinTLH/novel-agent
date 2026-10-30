@@ -6,6 +6,8 @@
 
 This is a maintained English summary of unreleased changes, not a translation of every historical release entry. Chinese entries and their original historical evidence remain below. Historical test counts are not refreshed by documentation work; no new real-service acceptance is claimed here.
 
+- **Separate delivery and HTTP hardening:** root `build:web` / `build:server` build independently; default integrated hosting remains. `SERVE_WEB=false` keeps APIs/uploads without HTML/SPA or frontend artifacts; `WEB_DIST_DIR` selects trusted web output relative to the application root or an absolute path. Separate hosting requires same-origin `/api` and `/uploads` proxying with original Host and existing Cookie/Origin/CSRF protections, not cross-origin authorization. Private-prefix DNS names now fail literal-IPv4 checks; uppercase API paths no longer skip business CSRF/no-store. Focused local security regression passed 20/20, not a final full-tree total or external-service guarantee.
+- **Authoring navigation:** the node picker's grid/list/detailed-menu preference persists in same-origin browser storage. `/assets/knowledge` independently hosts structured facts; unsaved replacements/new records/navigation/project changes require discard confirmation, with browser refresh/close warnings rather than autosave.
 - **Chapter throughput and optional composition:** new chapter graphs use planning → prose → consistency review (three ordinary model calls, excluding retries, repairs and custom nodes), preserving saved graphs/prompts. Production branch concurrency is configurable 1–8, default 1; linear dependencies, writer/review barriers and chapter commits remain sequential. Recent-chapter context prioritizes the latest ending, mode mismatches reject before paid calls, and previews expose indirect upstream context. Conflict, twist, climax and foreshadow nodes are optional author-selected presets, never mandatory stages for every chapter.
 - **Themes and menus:** the optional blue/pink/white palette uses a soft full-page gradient, white manuscript cards and high-contrast dark controls/focus states. Theme and language have separate keyboard-accessible menus with browser-local persistence. Registry/CSS reload failures preserve the active appearance, and other themes/custom images remain unaffected.
 - **Authoring protections:** hard min/max word-count checks, bounded automatic review/repair, earlier-prose retrieval, local draft recovery, bounded chapter/asset history with CAS, unfinished-target resume, structured knowledge, model parameters/usage-budget preflight, incremental progress and safe graph branches/joins. Text retrieval is not vector semantics; model judgments and estimated costs are not factual/billing guarantees.
@@ -18,6 +20,13 @@ This is a maintained English summary of unreleased changes, not a translation of
 **Validation boundaries:** local tests and browser stubs do not establish real paid-provider, platform review, SMTP/OIDC/Turnstile, proxy or vendor-database acceptance. MySQL/SQL Server are simulated-only; historical PostgreSQL v2 success is not v3 proof. The [benchmark report](scripts/benchmark-storage-report.md) retains historical simulated four-permit results (eight owners about 254–261 vs 64–66 ops/s; no SQL/network/disk evidence). Single-instance/trusted-LAN restrictions, partial localization, absent OS-level file isolation and non-atomic cross-database recovery remain explicit. See the [English acceptance record](docs/en/acceptance-checklist.md).
 
 ## 未发布
+
+### 独立 Web 交付、知识页与 HTTP 边界
+
+- 增加根 `build:web` / `build:server`，保留默认一体构建与启动；可选 Web 托管拆出独立模块。`SERVE_WEB=false` 运行纯 API / uploads，无前端产物也不提供 HTML / SPA fallback；默认 `true`。`WEB_DIST_DIR` 可指定可信前端构建目录（相对路径以应用根目录解析）。独立静态入口同源反代 `/api` 与 `/uploads`，不新增跨源业务 CORS 或放宽 Cookie / 来源 / CSRF。
+- 添加节点提供网格、列表、详细菜单三视图并以浏览器同源 localStorage 记忆；`/assets/knowledge` 为独立知识事实页，知识编辑替换、新建、应用内离开和切换作品时确认丢弃未保存修改，刷新 / 关闭交由浏览器提示，不等于自动保存。
+- 修复私网来源判断将 `10.attacker.example` 等前缀 DNS 名误作私网字面 IPv4 的问题，以及 `/API/...` 与 Express 不区分大小写路由不一致造成业务 CSRF / no-store 防护遗漏。DNS 利用需受控解析与 rebinding 可达性，不直接绕过认证会话，仍受浏览器私网限制。
+- 安全专项本机 HTTP / 临时数据回归 20 / 20 通过；不将历史全测或构建数字更新为本轮最终结果。实际反向代理、真实外部平台 / 模型 / 数据库及 OS 级文件隔离仍有验收或实现缺口，见[验收记录](docs/功能完善验收清单.md)。
 
 ### 蓝粉白主题视觉优化
 

@@ -31,6 +31,12 @@ npm workspace package: `space.syjx.agent.novel.web`. This package owns the React
 - Build output remains root `dist/`, compatible with the server's static hosting, not a package-local `dist/`.
 - Development proxies `/api` and `/uploads` to `http://127.0.0.1:3001`. Directory organization does not change browser routes or API URLs.
 
+## Routes and browser preferences
+
+- `/assets/knowledge` independently hosts knowledge editing with existing type/search, tags/chapter links, revision conflicts and API boundaries. Unsaved edits prompt before replacing an editor, creating a new record, leaving in-app or switching projects; refresh/close uses a browser warning, not autosave.
+- The node picker has grid/list/detailed-menu views, persisted in same-origin localStorage as `novel-agent.node-picker.view`. Invalid/unavailable reads default to grid; write failure does not prevent in-session switching. This is unrelated to canvas layout or runtime concurrency.
+- Root `npm run build:web` independently builds this frontend. A separate static server may host complete `dist/` (including themes and frontend SPA fallback) with backend `SERVE_WEB=false`; proxy browser `/api` and `/uploads` on the same origin, never rewrite API errors to HTML or add cross-origin business CORS/CSRF bypasses. Integrated backend hosting remains default; `WEB_DIST_DIR` changes its trusted build directory. See [deployment instructions](../../docs/en/user-guide.md#separate-builds-and-same-origin-deployment).
+
 ## Commands
 
 Run from the repository root after installing dependencies with root npm:

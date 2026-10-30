@@ -1,6 +1,9 @@
 import { useConfirm } from '../common/AppDialog';
 import { useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Search, List, LayoutGrid, PanelsTopLeft, ChevronRight } from 'lucide-react';
+import { nodeCatalog } from './nodeCatalog';
+import { readNodeView, saveNodeView, type NodeView } from './nodeViewPreference';
+
 import Modal from '../common/Modal';
 import { useLocale } from '../../locals/useLocale';
 import { translate } from '../../locals/core';
@@ -17,6 +20,23 @@ export function applyNodePreset(
     prompt: edited.prompt ? current.prompt : preset.prompt,
   };
 }
+export async function runNodeConfirmation(
+  gate: { current: boolean },
+  approve: () => Promise<boolean>,
+  apply: () => void,
+  setConfirming: (value: boolean) => void,
+): Promise<void> {
+  if (gate.current) return;
+  gate.current = true;
+  setConfirming(true);
+  try {
+    if (await approve()) apply();
+  } finally {
+    gate.current = false;
+    setConfirming(false);
+  }
+}
+
 export default function AddNodeDialog({
   presets,
   busy,
@@ -30,6 +50,26 @@ export default function AddNodeDialog({
 }) {
   const confirmDialog = useConfirm();
   const { locale, t } = useLocale();
+  const [view, setView] = useState<NodeView>(() => readNodeView());
+  const changeView = (next: NodeView) => {
+    if (gate.current) return;
+    setView(next);
+    saveNodeView(next);
+  };
+  const [query, setQuery] = useState('');
+  const [categoryTitle, setCategoryTitle] = useState('设定与人物');
+  const [groupTitle, setGroupTitle] = useState('世界设定');
+  const catalog = nodeCatalog(presets, query, (text) => translate(locale, text));
+  const category = catalog.find((item) => item.title === categoryTitle) || catalog[0];
+  const group = category?.groups.find((item) => item.title === groupTitle) || category?.groups[0];
+  const visibleKinds =
+    view === 'menu'
+      ? group?.kinds || []
+      : catalog.flatMap((item) => item.groups.flatMap((group) => group.kinds));
+  const count = catalog.reduce(
+    (total, item) => total + item.groups.reduce((size, group) => size + group.kinds.length, 0),
+    0,
+  );
   const [kind, setKind] = useState('world');
   const [fields, setFields] = useState(() => ({ ...presets.world }));
   const [edited, setEdited] = useState<Partial<Record<keyof NodeFields, boolean>>>({});
@@ -37,7 +77,18 @@ export default function AddNodeDialog({
   const [error, setError] = useState<unknown>();
   const [attempted, setAttempted] = useState(false);
   const gate = useRef(false);
-  const locked = busy || pending;
+  const [confirming, setConfirming] = useState(false);
+  const locked = busy || pending || confirming;
+  const requestConfirmation = (message: string, apply: () => void) => {
+    if (locked || gate.current) return;
+    void runNodeConfirmation(
+      gate,
+      async () => !Object.values(edited).some(Boolean) || (await confirmDialog(message)),
+      apply,
+      setConfirming,
+    ).catch(setError);
+  };
+  const requestClose = () => requestConfirmation('有未保存的修改，确定关闭并丢弃吗？', onClose);
   const limits = { title: 100, subtitle: 300, prompt: 12000 };
   const labels = { title: '节点名称', subtitle: '节点说明', prompt: '创作指令' };
   const errors = Object.fromEntries(
@@ -54,10 +105,9 @@ export default function AddNodeDialog({
     <Modal
       title="新增工作流节点"
       description="选择节点职责，再补充它在故事中的任务。添加后可在画布连接上下游。"
-      close={onClose}
+      close={requestClose}
       wide
       busy={locked}
-      dirty={Object.values(edited).some(Boolean)}
       error={error}
       className="add-node-modal"
     >
@@ -80,29 +130,126 @@ export default function AddNodeDialog({
           }
         }}
       >
-        <p className="muted">{t('默认章节顺序：章节规划 → 正文生成 → 一致性审校。')}</p>
-        <p className="muted">{t('可选剧情设计参考：剧情编排 → 冲突设计 → 伏笔安排 → 反转设计 → 高潮编排 → 章节规划。按故事需要选用，不必全部添加或每章运行；连接后才会参与执行，每个运行节点会增加模型调用。')}</p>
+        <div className="node-workflow-guide">
+          <strong>{t('默认章节顺序：章节规划 → 正文生成 → 一致性审校。')}</strong>
+          <details>
+            <summary>{t('剧情节点选用建议')}</summary>
+            <p>
+              {t(
+                '可选剧情设计参考：剧情编排 → 冲突设计 → 伏笔安排 → 反转设计 → 高潮编排 → 章节规划。按故事需要选用，不必全部添加或每章运行；连接后才会参与执行，每个运行节点会增加模型调用。',
+              )}
+            </p>
+          </details>
+        </div>
         <fieldset className="node-presets" disabled={locked}>
           <legend>节点类型</legend>
-          <div className="node-preset-grid">
-            {Object.entries(presets).map(([value, preset]) => (
-              <label key={value} className={`node-preset-card ${kind === value ? 'active' : ''}`}>
-                <input
-                  type="radio"
-                  name="kind"
-                  value={value}
-                  checked={kind === value}
-                  onChange={() => {
-                    setKind(value);
-                    setFields((current) => applyNodePreset(current, preset, edited));
-                  }}
-                />
-                <span>
-                  <strong>{translate(locale, preset.title || '自定义 Agent')}</strong>
-                  <small>{translate(locale, preset.subtitle)}</small>
-                </span>
-              </label>
-            ))}
+          <div className="node-catalog-toolbar">
+            <div className="node-catalog-search">
+              <Search size={15} aria-hidden="true" />
+              <input
+                aria-label={t('搜索节点')}
+                placeholder={t('搜索名称、用途或分类')}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              {query && (
+                <button type="button" aria-label={t('清空搜索')} onClick={() => setQuery('')}>
+                  ×
+                </button>
+              )}
+            </div>
+            <div className="node-view-switch" role="group" aria-label={t('节点展示方式')}>
+              {(
+                [
+                  { value: 'list', label: '列表展示', text: '列表', Icon: List },
+                  { value: 'grid', label: '网格展示', text: '网格', Icon: LayoutGrid },
+                  { value: 'menu', label: '分级菜单展示', text: '分级菜单', Icon: PanelsTopLeft },
+                ] as const
+              ).map((item) => (
+                <button
+                  type="button"
+                  key={item.value}
+                  aria-label={t(item.label)}
+                  aria-pressed={view === item.value}
+                  onClick={() => changeView(item.value)}
+                >
+                  <item.Icon size={15} aria-hidden="true" />
+                  <span>{t(item.text)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="node-catalog-status" role="status">
+            {t('找到 {count} 个节点', { count })} · {t('已选节点')}：
+            {translate(locale, presets[kind]?.title || kind)}
+          </div>
+          <div className={`node-catalog node-catalog--${view}`}>
+            {view === 'menu' && category && (
+              <>
+                <nav className="node-category-nav" aria-label={t('创作阶段')}>
+                  {catalog.map((item) => (
+                    <button
+                      type="button"
+                      key={item.title}
+                      aria-pressed={category.title === item.title}
+                      onClick={() => {
+                        setCategoryTitle(item.title);
+                        setGroupTitle(item.groups[0].title);
+                      }}
+                    >
+                      {translate(locale, item.title)}
+                      <ChevronRight size={14} aria-hidden="true" />
+                    </button>
+                  ))}
+                </nav>
+                <nav className="node-group-nav" aria-label={t('任务分组')}>
+                  {category.groups.map((item) => (
+                    <button
+                      type="button"
+                      key={item.title}
+                      aria-pressed={group?.title === item.title}
+                      onClick={() => setGroupTitle(item.title)}
+                    >
+                      {translate(locale, item.title)}
+                      <ChevronRight size={14} aria-hidden="true" />
+                    </button>
+                  ))}
+                </nav>
+              </>
+            )}
+            <div className={`node-preset-grid node-preset-grid--${view}`}>
+              {visibleKinds.map((value) => {
+                const preset = presets[value];
+                return (
+                  <label key={value} className={`node-preset-card ${kind === value ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="kind"
+                      value={value}
+                      checked={kind === value}
+                      onChange={() => {
+                        if (locked || gate.current) return;
+                        setKind(value);
+                        const owner = catalog.find((item) =>
+                          item.groups.some((group) => group.kinds.includes(value)),
+                        );
+                        const ownerGroup = owner?.groups.find((group) => group.kinds.includes(value));
+                        if (owner && ownerGroup) {
+                          setCategoryTitle(owner.title);
+                          setGroupTitle(ownerGroup.title);
+                        }
+                        setFields((current) => applyNodePreset(current, preset, edited));
+                      }}
+                    />
+                    <span>
+                      <strong>{translate(locale, preset.title || '自定义 Agent')}</strong>
+                      <small>{translate(locale, preset.subtitle)}</small>
+                    </span>
+                  </label>
+                );
+              })}
+              {!count && <div className="node-catalog-empty">{t('没有匹配的节点，请尝试其他关键词。')}</div>}
+            </div>
           </div>
         </fieldset>
         <div className="preset-hint">
@@ -111,16 +258,13 @@ export default function AddNodeDialog({
             type="button"
             className="text-button"
             disabled={locked}
-            onClick={async () => {
-              if (
-                Object.values(edited).some(Boolean) &&
-                !(await confirmDialog('应用此预设将替换名称、说明和创作指令，是否继续？'))
-              )
-                return;
-              setFields({ ...presets[kind] });
-              setEdited({});
-              setAttempted(false);
-            }}
+            onClick={() =>
+              requestConfirmation('应用此预设将替换名称、说明和创作指令，是否继续？', () => {
+                setFields({ ...presets[kind] });
+                setEdited({});
+                setAttempted(false);
+              })
+            }
           >
             应用此预设
           </button>
@@ -140,6 +284,7 @@ export default function AddNodeDialog({
                 aria-invalid={attempted && !!errors[field]}
                 aria-describedby={attempted && errors[field] ? `new-node-${field}-error` : undefined}
                 onChange={(event) => {
+                  if (locked || gate.current) return;
                   setFields({ ...fields, [field]: event.target.value });
                   setEdited({ ...edited, [field]: true });
                 }}
@@ -152,6 +297,7 @@ export default function AddNodeDialog({
                 aria-invalid={attempted && !!errors[field]}
                 aria-describedby={attempted && errors[field] ? `new-node-${field}-error` : undefined}
                 onChange={(event) => {
+                  if (locked || gate.current) return;
                   setFields({ ...fields, [field]: event.target.value });
                   setEdited({ ...edited, [field]: true });
                 }}
@@ -165,18 +311,7 @@ export default function AddNodeDialog({
           </label>
         ))}
         <div className="modal-actions">
-          <button
-            type="button"
-            className="button secondary"
-            disabled={locked}
-            onClick={async () => {
-              if (
-                !Object.values(edited).some(Boolean) ||
-                (await confirmDialog('有未保存的修改，确定取消吗？'))
-              )
-                onClose();
-            }}
-          >
+          <button type="button" className="button secondary" disabled={locked} onClick={requestClose}>
             取消
           </button>
           <button className="button primary" disabled={locked}>

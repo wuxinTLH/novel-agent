@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 type ConfirmOptions = { title?: string; confirmText?: string; danger?: boolean };
 type Request = { message: string; options: ConfirmOptions; resolve: (value: boolean) => void };
@@ -11,12 +11,26 @@ export function useConfirm() {
 }
 export function DialogProvider({ children }: { children: React.ReactNode }) {
   const [request, setRequest] = useState<Request | null>(null);
-  const confirm = (message: string, options: ConfirmOptions = {}) =>
-    new Promise<boolean>((resolve) => setRequest({ message, options, resolve }));
+  const pending = useRef<Request | null>(null);
+  const confirm = useCallback((message: string, options: ConfirmOptions = {}) => {
+    // Fail closed on concurrent requests instead of orphaning the first promise.
+    if (pending.current) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      const next = { message, options, resolve };
+      pending.current = next;
+      setRequest(next);
+    });
+  }, []);
   const close = (value: boolean) => {
-    request?.resolve(value);
+    const current = pending.current;
+    pending.current = null;
     setRequest(null);
+    current?.resolve(value);
   };
+  useEffect(() => () => {
+    pending.current?.resolve(false);
+    pending.current = null;
+  }, []);
   return (
     <DialogContext.Provider value={confirm}>
       {children}

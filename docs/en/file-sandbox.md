@@ -21,6 +21,10 @@
 
 Server limits are authoritative. Outer routes still enforce identity, tenant and CSRF boundaries. Pasted prose is ordinary text, not executable HTML. Implementation: [admission](../../packages/server/src/features/file-sandbox/sandbox.ts), [multipart](../../packages/server/src/features/file-sandbox/upload.ts), [leases](../../packages/server/src/features/file-sandbox/upload-lease.ts), [safe read](../../packages/server/src/features/file-sandbox/safe-read.ts), [document parser](../../packages/server/src/features/documents/parser.ts).
 
+## Separate web delivery retains upload protections
+
+Backend `SERVE_WEB=false` disables only static web/SPA hosting, not protected `/uploads` reads or file APIs. A separate static entry must proxy `/api` and `/uploads` on the same origin to one backend, never directly mount data/upload originals or turn file errors into SPA HTML. Cookie/origin/tenant/CSRF checks remain intact. `WEB_DIST_DIR` is for trusted frontend output, never business data. See [deployment instructions](user-guide.md#separate-builds-and-same-origin-deployment). This adds no OS isolation.
+
 ## Limits and rejection
 
 MiB means 1,048,576 bytes. A particular business endpoint may impose a smaller limit (manual chapter creation also documents a 2,000,000-byte UI/business cap).

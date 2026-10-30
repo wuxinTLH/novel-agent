@@ -5,6 +5,7 @@ import { createAdministrationRouter } from './features/administration/administra
 import { createIsolatedTenantApplication } from './core/tenancy/isolated-tenant-application.js';
 import { acquireDataLock, appRoot } from './core/local-runtime.js';
 import { trustedPublicOrigin } from './core/trusted-origin.js';
+import { readWebHostingOptions } from './core/web-hosting.js';
 import type { IsolatedTenantService } from './core/tenancy/isolated-tenant-application.js';
 import { readLocalGatewayConfig, startLocalGateway, type LocalGateway } from './core/local-gateway.js';
 import { SQLConnectService, createSQLconnectRouter } from './infrastructure/database/sqlconnect.js';
@@ -26,6 +27,7 @@ try {
 const port = Number(process.env.PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT_INVALID');
 const gatewayConfig = readLocalGatewayConfig(process.env, port);
+const webHosting = readWebHostingOptions(process.env, appRoot);
 const dir = path.resolve(appRoot, process.env.DATA_DIR || 'data');
 if (fs.existsSync(path.join(dir, '.maintenance-journal.json')))
   throw new Error('MAINTENANCE_RECOVERY_REQUIRED');
@@ -129,6 +131,7 @@ const tenants = createIsolatedTenantApplication({
   services,
   enabled: mode.enabled,
   trustedAliasPorts: gatewayConfig.ports,
+  ...webHosting,
   waitForControlPlaneIdle: async () => {
     await auth.waitForIdle();
     await sqlconnect.waitForIdle();

@@ -1,0 +1,43 @@
+.add-node-modal {
+  .node-workflow-guide { padding: 12px 14px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--soft); font-size: 12px; line-height: 1.7; }
+  .node-workflow-guide strong { font-weight: 600; }
+  .node-workflow-guide details { margin-top: 5px; color: var(--muted-text); }
+  .node-workflow-guide summary { cursor: pointer; width: fit-content; }
+  .node-workflow-guide p { margin: 8px 0 0; }
+  .node-catalog-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .node-catalog-search { display: flex; align-items: center; gap: 8px; flex: 1 1 180px; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; background: var(--soft); }
+  .node-catalog-search input { border: 0; background: transparent; min-width: 0; width: 100%; margin: 0; padding: 9px 0; box-shadow: none; }
+  .node-catalog-search button { border: 0; background: transparent; color: inherit; padding: 6px; cursor: pointer; }
+  .node-view-switch { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; }
+  .node-view-switch button { display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted-text); padding: 7px 9px; font-size: 12px; cursor: pointer; }
+  .node-view-switch button[aria-pressed='true'] { background: var(--soft); border-color: var(--accent-2); color: var(--text); }
+  .node-catalog-status { font-size: 11px; color: var(--muted-text); margin: 10px 0; }
+  .node-catalog { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .node-preset-grid { padding: 10px; max-height: 260px; overflow-y: auto; overscroll-behavior: contain; gap: 8px; align-content: start; }
+  .node-preset-card { margin: 0; min-width: 0; border-radius: 8px; padding: 10px; transition: border-color .15s, background .15s; }
+  .node-preset-card span { min-width: 0; overflow-wrap: anywhere; }
+  .node-preset-card strong { line-height: 1.5; }
+  .node-preset-card small { line-height: 1.5; margin-top: 3px; }
+  .node-preset-card:hover { border-color: var(--accent-2); }
+  .node-preset-grid--list, .node-preset-grid--menu { grid-template-columns: minmax(0, 1fr); }
+  .node-preset-grid--list .node-preset-card span { display: grid; grid-template-columns: minmax(90px, .7fr) minmax(0, 1.7fr); gap: 12px; width: 100%; align-items: center; }
+  .node-preset-grid--list small { margin: 0; }
+  .node-catalog--menu { display: grid; grid-template-columns: 125px 125px minmax(0, 1fr); min-height: 210px; }
+  .node-category-nav, .node-group-nav { display: flex; flex-direction: column; padding: 8px; gap: 5px; background: var(--soft); border-right: 1px solid var(--border); }
+  .node-catalog nav button { display: flex; align-items: center; justify-content: space-between; gap: 4px; text-align: left; border: 1px solid transparent; border-radius: 6px; padding: 10px 7px; font-size: 12px; background: transparent; color: var(--muted-text); cursor: pointer; }
+  .node-catalog nav button[aria-pressed='true'] { border-color: var(--accent-2); background: var(--soft); color: var(--text); font-weight: 600; }
+  .node-catalog-empty { padding: 24px 12px; font-size: 12px; color: var(--muted-text); text-align: center; grid-column: 1 / -1; }
+  button:focus-visible, .node-catalog-search:focus-within { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  @media (max-width: 600px) {
+    .node-view-switch { width: 100%; }
+    .node-view-switch button { flex: 1; }
+    .node-preset-grid--grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .node-catalog--menu { grid-template-columns: minmax(0, 1fr); }
+    .node-category-nav, .node-group-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+    .node-catalog nav button { white-space: nowrap; flex-shrink: 0; }
+    .node-catalog nav svg { display: none; }
+    .node-preset-grid--list .node-preset-card span { display: block; }
+    .node-preset-grid--list small { margin-top: 3px; }
+  }
+}

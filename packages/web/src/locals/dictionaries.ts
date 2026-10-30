@@ -1,5 +1,14 @@
 /** Chinese source phrases are stable keys; keep both dictionaries in exact parity. */
 export const zhCN = {
+  搜索节点: '搜索节点', '搜索名称、用途或分类': '搜索名称、用途或分类', 清空搜索: '清空搜索',
+  节点展示方式: '节点展示方式', 列表展示: '列表展示', 网格展示: '网格展示', 分级菜单展示: '分级菜单展示',
+  列表: '列表', 网格: '网格', 分级菜单: '分级菜单',
+  '找到 {count} 个节点': '找到 {count} 个节点', 已选节点: '已选节点',
+  创作阶段: '创作阶段', 任务分组: '任务分组', 设定与人物: '设定与人物', 世界设定: '世界设定', 人物塑造: '人物塑造',
+  剧情设计: '剧情设计', 情节推进: '情节推进', 悬念与回收: '悬念与回收', 高潮节拍: '高潮节拍',
+  章节创作: '章节创作', 规划与成稿: '规划与成稿', 文本润色: '文本润色', 审校与扩展: '审校与扩展',
+  质量检查: '质量检查', 自由扩展: '自由扩展', 其他节点: '其他节点', 扩展节点: '扩展节点',
+  '没有匹配的节点，请尝试其他关键词。': '没有匹配的节点，请尝试其他关键词。', 剧情节点选用建议: '剧情节点选用建议',
   冲突设计: '冲突设计',
   '用目标、阻碍与代价推进剧情': '用目标、阻碍与代价推进剧情',
   伏笔安排: '伏笔安排',
@@ -193,6 +202,15 @@ export type TranslationKey = keyof typeof zhCN;
 export type Dictionary = Record<TranslationKey, string>;
 
 export const en = {
+  搜索节点: 'Search nodes', '搜索名称、用途或分类': 'Search names, purposes or categories', 清空搜索: 'Clear search',
+  节点展示方式: 'Node display', 列表展示: 'List view', 网格展示: 'Grid view', 分级菜单展示: 'Hierarchical view',
+  列表: 'List', 网格: 'Grid', 分级菜单: 'Hierarchy',
+  '找到 {count} 个节点': '{count} nodes found', 已选节点: 'Selected node',
+  创作阶段: 'Writing stage', 任务分组: 'Task group', 设定与人物: 'World & characters', 世界设定: 'Worldbuilding', 人物塑造: 'Characters',
+  剧情设计: 'Plot design', 情节推进: 'Plot progression', 悬念与回收: 'Suspense & payoff', 高潮节拍: 'Climax beats',
+  章节创作: 'Chapter writing', 规划与成稿: 'Planning & drafting', 文本润色: 'Text refinement', 审校与扩展: 'Review & extensions',
+  质量检查: 'Quality checks', 自由扩展: 'Custom tasks', 其他节点: 'Other nodes', 扩展节点: 'Extension nodes',
+  '没有匹配的节点，请尝试其他关键词。': 'No matching nodes. Try another keyword.', 剧情节点选用建议: 'Optional plot node guidance',
   冲突设计: 'Conflict design',
   '用目标、阻碍与代价推进剧情': 'Advance the plot through goals, obstacles, and costs',
   伏笔安排: 'Foreshadowing',

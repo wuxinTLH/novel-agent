@@ -8,7 +8,8 @@
 
 - `context.ts`：Store、Runner、PlatformRuntime、模型提供方共享上下文，以及 FeatureService 接口。
 - `application.ts` / `registry.ts`：显式注册、服务顺序、重复标识校验。
-- `http.ts`：统一来源、CSRF、频率、请求体、安全头、静态资源及错误处理。扩展服务不得绕过该层。
+- `http.ts`：统一来源、CSRF、频率、请求体、安全头、API 404 及错误处理。扩展服务不得绕过该层。
+- [web-hosting.ts](../packages/server/src/core/web-hosting.ts)：独立、可选的 Web 静态资源与 SPA 托管。`SERVE_WEB` 默认 `true`，`false` 时仅保留 API / uploads 及 JSON fallback；`WEB_DIST_DIR` 默认应用根目录的 `dist`，可指定可信构建目录。
 - `model-provider.ts` / `model-settings.ts`：模型连接、密钥持久化及配置 API。
 - `projects.ts`：小说管理、项目查找和运行中变更约束。
 - `workflow.ts` / `workflow-support.ts` / `project-operations.ts`：工作流、节点、图校验、持久化失败回滚。
@@ -28,6 +29,12 @@
 - [server/maintenance-cli.ts](../packages/server/src/features/administration/maintenance-cli.ts) / [server/maintenance.ts](../packages/server/src/features/administration/maintenance.ts)：离线全量应用备份、恢复、全部租户迁移。
 
 保留现有业务 API 路径及应用文档结构，不自动重写旧数据。扩展使用 FeatureService，并在统一防护后装配；自定义服务须加入入口关闭列表并等待 close 钩子。
+
+## Web 交付与 API 安全边界
+
+`npm run build:web` 与 `npm run build:server` 可分别构建两端；默认仍一体启动。独立静态入口必须将 `/api`、`/uploads` 同源代理到唯一后端，不将数据目录作为静态目录，不用 HTML 改写 API 错误。Host / Origin / Cookie / CSRF 和可信 HTTPS origin 配置仍有效，没有新增跨源业务 CORS。完整配置与反向代理注意事项见[使用手册](使用手册.md#前后端独立构建与同源部署)。这只是交付职责拆分，不是分布式服务或放宽公网边界。
+
+来源策略现在先确认字面 IPv4 再匹配私网范围，拒绝 `10.attacker.example` 等伪装前缀 DNS 名；这类名称在具备 DNS rebinding 可达性时可能绕过旧来源判断，但不直接绕过认证会话，且仍受浏览器私网访问限制。API 防护与 Express 路由的大小写行为保持一致，`/API/...` 也必须执行业务 CSRF 与 `no-store`，不能靠改变路径大小写跳过。回归使用真实本机 HTTP 与临时数据，不代表所有漏洞或部署环境均已验收。
 
 ## 认证、管理与不可变租户上下文
 

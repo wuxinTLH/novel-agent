@@ -28,7 +28,9 @@
 ## 跨目录边界
 
 - 前后端共享协议继续位于仓库根目录 `shared/`，不复制为两套定义。
-- 根目录 `public/` 是前端静态资源源文件；根目录 `dist/` 是前端生产构建产物，由后端提供静态访问。
+- 根目录 `public/` 是前端静态资源源文件；根目录 `dist/` 是默认前端生产构建产物。可选 [Web 托管模块](src/core/web-hosting.ts)默认提供静态访问与 SPA fallback；API 错误与未知 API fallback 仍由 HTTP 层处理，不回退 HTML。
+- 根命令 `npm run build:server` 独立构建后端、Worker 与 SQL 资源，`npm run build:web` 独立构建前端。`SERVE_WEB=false` 关闭 HTML / 主题 / SPA 托管，无需前端产物；默认 `true`，其它字符串拒绝启动。`WEB_DIST_DIR` 默认为应用根目录 `dist`，相对路径以应用根目录解析，可设可信绝对目录；有 `index.html` 才托管，勿指向数据 / 备份 / 源码目录。
+- 独立静态服务器须将 `/api`、`/uploads` 同源代理到单一后端，保留 Host / Origin / Cookie / CSRF 与状态，不为业务接口开放跨源 CORS。HTTPS 需显式可信 origin；不信任转发头或放宽本机管理。见[部署指南](../../docs/使用手册.md#前后端独立构建与同源部署)。
 - `.env`、默认 `data/` 及相对 `DATA_DIR` 均以工作区/部署根目录为基准，而不是进程当前目录或后端包目录；现有用户数据无需搬迁。
 - 后端编译产物位于根目录 `build/packages/server/src/`；租户 Worker、数据库 Worker 与其调用模块保持相对位置。SQL 资源随构建输出复制到 `infrastructure/storage/sql/`。
 - 应用根目录通过向上查找包含 `workspaces` 且名称为 `novel-agent` 的根清单定位；生产部署需保留根清单。不要仅凭当前目录推断数据位置。

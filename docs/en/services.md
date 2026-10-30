@@ -9,7 +9,8 @@ The [entry point](../../packages/server/src/index.ts) loads environment, takes t
 | Area | Responsibility |
 | --- | --- |
 | `context.ts`, `application.ts`, `registry.ts` | Shared Store/Runner/platform/model context, FeatureService contracts, explicit registration/order/duplicate-ID checks. |
-| `http.ts` | Common origin, CSRF, rate/body limits, headers, static resources and sanitized errors; features must not bypass it. |
+| `http.ts` | Common origin, CSRF, rate/body limits, headers, API 404 and sanitized errors; features must not bypass it. |
+| `web-hosting.ts` | Optional static assets and SPA delivery, separate from API fallback. `SERVE_WEB` defaults to `true`; `false` leaves APIs/uploads and JSON fallback without HTML. `WEB_DIST_DIR` selects a trusted build directory, default application-root `dist`. |
 | Models/projects/workflow/assets/generation/chapters | Profiles and credentials, project mutation locks, graph validation and rollback, assets, generation/candidates/idempotency/cancellation/revisions. |
 | Platforms | Connections/binding, isolated browser, queue and verified account locks. |
 | Authentication/administration | Identity, sessions, explicit roles, strict local management when authentication is off. |
@@ -19,6 +20,12 @@ The [entry point](../../packages/server/src/index.ts) loads environment, takes t
 | Documents/account/maintenance | Reconstructed temporary DOCX and exports; optional mail/OIDC/MFA; bounded online backup queue and offline CLIs. |
 
 Extensions implement FeatureService behind common protections and must participate in awaited shutdown hooks. See [server package](../../packages/server/README.md).
+
+## Web delivery and HTTP boundaries
+
+Root `build:web` and `build:server` commands build independently; integrated startup remains the default. A separate static entry must proxy `/api` and `/uploads` on the same browser origin to one backend, never expose the data directory or rewrite API errors as HTML. Host/Origin/Cookie/CSRF and trusted HTTPS-origin configuration still apply; no new cross-origin business CORS is added. See [deployment instructions](user-guide.md#separate-builds-and-same-origin-deployment). This separates delivery responsibilities, not distributed services or public-Internet safety guarantees.
+
+Origin policy now requires a literal IPv4 address before accepting private ranges, rejecting prefix-disguised DNS names such as `10.attacker.example`. Exploiting the old check requires controlled DNS and rebinding reachability; it does not directly bypass authenticated sessions and browser private-network restrictions may apply. API guards now match Express's case-insensitive routing: `/API/...` must enforce business CSRF and `no-store` too. Local HTTP regressions are not proof of all-vulnerability or real-deployment acceptance.
 
 ## Authentication and immutable ownership
 

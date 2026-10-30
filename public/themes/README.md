@@ -34,7 +34,7 @@
 4. 向 `themes.json` 的 `themes` 追加 `{ "id": "theme-ocean", "name": "海洋蓝", "css": "theme-ocean.css" }`。需要时将 `defaultTheme` 改为该 ID。
 5. 在主题菜单点击“重新加载主题”，新条目按注册顺序显示；验证显式浅色/深色、系统明暗切换及切换后无残留。切换失败保留当前主题，首次加载失败使用主样式浅色兜底。
 
-开发环境直接读取本目录；生产构建会复制到 `dist/themes`。生产部署可更新已部署的该目录后点击“重新加载主题”；只修改源码目录时仍需构建并部署，不能自动改变已有部署。
+开发环境直接读取本目录；`npm run build:web`（或整仓构建）会复制到 `dist/themes`。默认内置 Web 托管提供这些资源；若配置 `WEB_DIST_DIR`，应把完整前端产物连同 `themes/` 部署到该目录。`SERVE_WEB=false` 时后端不提供主题，独立静态服务器须在浏览器同源 `/themes/` 提供资源并保留适当 CSP / 安全头，仅 `/api` 与 `/uploads` 反代给后端。生产部署可更新已部署的该目录后点击“重新加载主题”；只修改源码目录时仍需构建并部署，不能自动改变已有部署。
 
 `packages/web/src/lib/themes/themes-load.ts` 提供 `themesLoad`、注册表校验与并发安全的样式切换。旧保存值 `system/light/dark/mtf` 自动迁移为对应 `theme-xxx`；已移除或未知的主题选择回退到 `defaultTheme`。非法注册表不会覆盖当前列表和外观。CSS 属于可信本地资源，不应注册未经审查的第三方样式。
 

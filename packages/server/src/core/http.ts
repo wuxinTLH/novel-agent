@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
+import { installWebHosting, type WebHostingOptions } from './web-hosting.js';
 import path from 'node:path';
 import { z } from 'zod';
 import { GenerationError } from '../features/generation/generation.js';
@@ -10,11 +10,13 @@ import { createOriginPolicy } from './trusted-origin.js';
 import { safeUploadReader } from '../features/file-sandbox/safe-read.js';
 import { createRequestLimiter } from './request-limiter.js';
 export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number, aliasPorts: readonly number[] = []) {
+  app.disable('x-powered-by');
   const originAllowed = createOriginPolicy(port, undefined, aliasPorts);
   app.use((req, res, next) => {
     if (!originAllowed(req))
       return res.status(403).json({ error: '只允许本机或局域网来源访问。', code: 'LOCAL_ORIGIN_REJECTED' });
-    if (req.path.startsWith('/api/')) {
+    const requestPath = req.path.toLowerCase();
+    if (requestPath === '/api' || requestPath.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
       if (
         context &&
@@ -53,27 +55,9 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext 
       (_req, res) => res.status(404).json({ code: 'UPLOAD_NOT_FOUND', error: '文件不存在。' }),
     );
 }
-export function installHttpFallbacks(app: express.Express, root: string) {
-  const staticDir = path.join(root, 'dist');
+export function installHttpFallbacks(app: express.Express, root: string, options: WebHostingOptions = {}) {
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在。', code: 'NOT_FOUND' }));
-  if (fs.existsSync(path.join(staticDir, 'index.html'))) {
-    app.use(
-      express.static(staticDir, {
-        setHeaders(res, filePath) {
-          const fileName = path.basename(filePath);
-          if (/-[a-z0-9_-]{8,}\.(?:css|js|woff2?|png|jpe?g|svg|webp)$/i.test(fileName)) {
-            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-          } else {
-            res.setHeader('Cache-Control', 'no-cache');
-          }
-        },
-      }),
-    );
-    app.get('/{*path}', (_req, res) => {
-      res.setHeader('Cache-Control', 'no-cache');
-      res.sendFile(path.join(staticDir, 'index.html'));
-    });
-  }
+  installWebHosting(app, root, options);
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const requestId = randomUUID();
     res.setHeader('X-Request-Id', requestId);
