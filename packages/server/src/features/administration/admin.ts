@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { acquireDataLock, appRoot } from '../../core/local-runtime.js';
+import { readCoreModel, type CoreModel } from '../../core/core-model.js';
 import { AuthService, type AuthDocument } from '../auth/auth.js';
 import { migrateProjects } from '../projects/store.js';
 import { PlatformStore } from '../platforms/platform-store.js';
@@ -289,10 +290,10 @@ function backup(dir: string, command: Command): string {
   );
   return destination;
 }
-function authState(dir: string): { service: AuthService; document: AuthDocument | null } {
+function authState(dir: string, securityProfile: CoreModel = 'local'): { service: AuthService; document: AuthDocument | null } {
   const persistence = createAuthPersistence(dir);
   // AuthService validates the complete state and key before we inspect identities.
-  const service = new AuthService({ dataDir: dir, enabled: true, persistence });
+  const service = new AuthService({ dataDir: dir, enabled: true, persistence, securityProfile });
   const raw = persistence
     ? persistence.read()
     : (JSON.parse(readOptional(path.join(dir, 'auth.json')) ?? 'null') as unknown);
@@ -323,6 +324,7 @@ export async function runAdmin(
   if (options.noLegacy) args.push('--no-legacy');
   if (options.allowPublicAccess) args.push('--allow-public-access');
   options = parseAdminArguments(args);
+  const coreModel = readCoreModel(environment);
   safeDirectory(options.dataDir);
   const release = acquireDataLock(options.dataDir);
   try {
@@ -363,7 +365,7 @@ export async function runAdmin(
         typeof password === 'string' && password.length >= 12 && Buffer.byteLength(password) <= 1024,
         'ADMIN_BOOTSTRAP_PASSWORD_REQUIRED',
       );
-      const { service } = authState(options.dataDir);
+      const { service } = authState(options.dataDir, coreModel);
       const user = service.bootstrapSuperadmin(options.username!, password);
       result.ownerId = user.id;
       return result;

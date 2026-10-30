@@ -1,6 +1,9 @@
 services:
   novel-agent:
-    build: .
+    build:
+      context: .
+      args:
+        CoreModel: ${CoreModel:-server}
     image: novel-agent:local
     init: true
     user: "1000:1000"
@@ -9,7 +12,7 @@ services:
     environment:
       NODE_ENV: production
       DATA_DIR: /app/data
-      SECURITY_PROFILE: ${SECURITY_PROFILE:-standard}
+      CoreModel: ${CoreModel:-server}
       SECURITY_AUDIT: "true"
       NOVEL_TRUSTED_PUBLIC_ORIGIN: ${NOVEL_TRUSTED_PUBLIC_ORIGIN:-}
       MODEL_SECRETS_KEY: ${MODEL_SECRETS_KEY:-}

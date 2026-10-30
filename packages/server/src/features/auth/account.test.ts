@@ -9,13 +9,18 @@ import { AuthService } from './auth.js';
 import { totp } from './account.js';
 import type { AccountMail } from './account-state.js';
 const password = 'a very long password 123';
-async function setup(fetcher?: typeof fetch, deliver?: () => Promise<void>) {
+async function setup(
+  fetcher?: typeof fetch,
+  deliver?: () => Promise<void>,
+  securityProfile?: 'local' | 'server',
+) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'account-'));
   let now = Date.now();
   const mail: AccountMail[] = [];
   const service = new AuthService({
     dataDir: dir,
     enabled: true,
+    securityProfile,
     now: () => now,
     emailTransport: async (m) => {
       mail.push(m);
@@ -102,6 +107,142 @@ async function setup(fetcher?: typeof fetch, deliver?: () => Promise<void>) {
     },
   };
 }
+test('public registration and recovery accept generically on mail failure and revoke uncertain tokens', async () => {
+  let failDelivery = false;
+  const s = await setup(undefined, async () => {
+    if (failDelivery) throw new Error('SMTP unavailable');
+  });
+  try {
+    await s.configure();
+    const email = await s.request(
+      '/account/email',
+      'POST',
+      { email: 'admin@example.com' },
+      s.admin.cookie,
+      s.admin.csrf,
+    );
+    assert.equal(email.status, 202);
+    await s.request(
+      '/account/email/complete',
+      'POST',
+      { token: s.mail.at(-1)!.token },
+      s.admin.cookie,
+      s.admin.csrf,
+    );
+    failDelivery = true;
+    const p = await s.pre();
+    for (const address of ['admin@example.com', 'missing@example.com']) {
+      const response = await s.request('/account/recovery', 'POST', { email: address }, p.cookie, p.csrf);
+      assert.equal(response.status, 202);
+      assert.deepEqual(await response.json(), { ok: true });
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+    }
+    const failed = s.mail.at(-1)!;
+    assert.equal(
+      (
+        await s.request(
+          '/account/recovery/complete',
+          'POST',
+          {
+            token: failed.token,
+            password: password + 'new',
+          },
+          p.cookie,
+          p.csrf,
+        )
+      ).status,
+      400,
+    );
+    for (const username of ['admin', 'newperson']) {
+      const response = await s.request(
+        '/account/register',
+        'POST',
+        {
+          username,
+          email: `${username}@example.com`,
+          password,
+        },
+        p.cookie,
+        p.csrf,
+      );
+      assert.equal(response.status, 202);
+      assert.deepEqual(await response.json(), { ok: true });
+    }
+    const saved = JSON.parse(fs.readFileSync(path.join(s.dir, 'auth.json'), 'utf8'));
+    assert.equal(
+      saved.account.tokens.filter((t: { kind: string }) => ['reset', 'register'].includes(t.kind)).length,
+      0,
+    );
+    // Authenticated email updates still surface delivery failures to their owner.
+    assert.equal(
+      (await s.request('/account/email', 'POST', { email: 'new@example.com' }, s.admin.cookie, s.admin.csrf))
+        .status,
+      503,
+    );
+  } finally {
+    await s.close();
+  }
+});
+test('server policy covers registration and recovery without consuming reset token on rejected password', async () => {
+  const s = await setup(undefined, undefined, 'server');
+  try {
+    await s.configure();
+    const p = await s.pre();
+    assert.equal(
+      (
+        await s.request(
+          '/account/register',
+          'POST',
+          {
+            username: 'newperson',
+            email: 'person@example.com',
+            password: 'a'.repeat(20),
+          },
+          p.cookie,
+          p.csrf,
+        )
+      ).status,
+      400,
+    );
+    assert.equal(s.mail.length, 0);
+    await s.request('/account/email', 'POST', { email: 'admin@example.com' }, s.admin.cookie, s.admin.csrf);
+    await s.request(
+      '/account/email/complete',
+      'POST',
+      { token: s.mail.at(-1)!.token },
+      s.admin.cookie,
+      s.admin.csrf,
+    );
+    await s.request('/account/recovery', 'POST', { email: 'admin@example.com' }, p.cookie, p.csrf);
+    const token = s.mail.at(-1)!.token;
+    const reused = await s.request(
+      '/account/recovery/complete',
+      'POST',
+      { token, password },
+      p.cookie,
+      p.csrf,
+    );
+    assert.deepEqual(await reused.json(), { error: 'AUTH_PASSWORD_REUSED' });
+    assert.equal(
+      (
+        await s.request(
+          '/account/recovery/complete',
+          'POST',
+          {
+            token,
+            password: 'a new and distinct secret phrase',
+          },
+          p.cookie,
+          p.csrf,
+        )
+      ).status,
+      200,
+    );
+    assert.equal((await s.request('/account', 'GET', undefined, s.admin.cookie)).status, 401);
+  } finally {
+    await s.close();
+  }
+});
 test('maintenance idle waits for actual async mail handler completion', async () => {
   let release!: () => void, started!: () => void;
   const gate = new Promise<void>((resolve) => {

@@ -13,6 +13,7 @@ const password = 'a long test password 123!';
 async function setup(
   options: {
     ttl?: number;
+    securityProfile?: 'local' | 'server';
     fetch?: typeof fetch;
     persistence?: AuthPersistence;
     authorize?: (req: Request) => boolean;
@@ -24,6 +25,7 @@ async function setup(
     dataDir: dir,
     enabled: true,
     sessionTtlMs: options.ttl,
+    securityProfile: options.securityProfile,
     now: () => now,
     fetch: options.fetch,
     persistence: options.persistence,
@@ -82,6 +84,152 @@ async function setup(
     },
   };
 }
+test('server new-password policy covers creation, self change, admin reset; local remains compatible', async () => {
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const admin = await s.login();
+    for (const weak of ['123456789012', 'a'.repeat(30), 'Password123456789!', 'admin2 long secret phrase']) {
+      const r = await s.request(
+        '/users',
+        'POST',
+        { username: 'admin2', password: weak },
+        admin.cookie,
+        admin.csrf,
+      );
+      assert.equal(r.status, 400);
+    }
+    const r = await s.request(
+      '/users',
+      'POST',
+      { username: 'writer', password: 'a different strong passphrase' },
+      admin.cookie,
+      admin.csrf,
+    );
+    assert.equal(r.status, 201);
+    const { user } = await r.json();
+    assert.equal(
+      (
+        await s.request(
+          `/users/${user.id}/password`,
+          'POST',
+          {
+            currentPassword: password,
+            newPassword: 'a different strong passphrase',
+          },
+          admin.cookie,
+          admin.csrf,
+        )
+      ).status,
+      400,
+    );
+    const reused = await s.request(
+      '/password',
+      'POST',
+      {
+        currentPassword: password,
+        newPassword: password,
+      },
+      admin.cookie,
+      admin.csrf,
+    );
+    assert.deepEqual(await reused.json(), { error: 'AUTH_PASSWORD_REUSED' });
+    assert.equal(
+      (
+        await s.request(
+          '/password',
+          'POST',
+          {
+            currentPassword: password,
+            newPassword: 'a new and unique passphrase',
+          },
+          admin.cookie,
+          admin.csrf,
+        )
+      ).status,
+      200,
+    );
+  } finally {
+    await s.close();
+  }
+  const local = await setup();
+  try {
+    const admin = await local.login();
+    assert.equal(
+      (
+        await local.request(
+          '/users',
+          'POST',
+          {
+            username: 'legacy',
+            password: 'a'.repeat(12),
+          },
+          admin.cookie,
+          admin.csrf,
+        )
+      ).status,
+      201,
+    );
+  } finally {
+    await local.close();
+  }
+});
+test('server limits each user to five sessions; failed persistence does not evict', async () => {
+  let document: AuthDocument | null = null,
+    broken = false;
+  const s = await setup({
+    securityProfile: 'server',
+    persistence: {
+      read: () => document,
+      write: (next) => {
+        if (broken) throw new Error('disk failed');
+        document = structuredClone(next);
+      },
+    },
+  });
+  try {
+    const sessions = [];
+    for (let i = 0; i < 5; i++) {
+      sessions.push(await s.login());
+      s.advance(1);
+    }
+    broken = true;
+    assert.equal((await s.login()).response.status, 503);
+    assert.equal(
+      (await s.request('/session', 'GET', undefined, sessions[0].cookie).then((r) => r.json())).authenticated,
+      true,
+    );
+    broken = false;
+    const newest = await s.login();
+    assert.equal(newest.response.status, 200);
+    assert.equal(
+      (await s.request('/session', 'GET', undefined, sessions[0].cookie).then((r) => r.json())).authenticated,
+      false,
+    );
+    const listed = await s.request('/sessions', 'GET', undefined, newest.cookie);
+    assert.equal((await listed.json()).sessions.length, 5);
+    assert.equal(listed.headers.get('cache-control'), 'no-store');
+    assert.equal(listed.headers.get('pragma'), 'no-cache');
+  } finally {
+    await s.close();
+  }
+});
+test('server profile does not retroactively reject stored local credentials', async () => {
+  const local = await setup();
+  try {
+    const admin = await local.login();
+    await local.request(
+      '/users',
+      'POST',
+      { username: 'legacy', password: 'a'.repeat(12) },
+      admin.cookie,
+      admin.csrf,
+    );
+    const hardened = new AuthService({ dataDir: local.dir, enabled: true, securityProfile: 'server' });
+    assert.equal(hardened.hasSuperadmin(), true);
+  } finally {
+    await local.close();
+  }
+});
 test('auth defaults off, ignores client identity, and does not create files', async () => {
   const dir = path.join(os.tmpdir(), `absent-auth-${Date.now()}`);
   const service = new AuthService({ dataDir: dir });

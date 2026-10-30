@@ -2,7 +2,7 @@
 
 Language / 语言: [简体中文 (default)](README_zhCN.md) · [English](README_en.md) · [Root README](../README.md)
 
-A novel-writing workbench for a local computer or trusted LAN, version `v0.0.2a`. It supports multiple projects and workflows, worldbuilding, character generation, chapter editing and generation, reference assets, model profiles, themes, and persistent data. The default remains single-user access without login. Authentication and tenant isolation require explicit local administration. **This is not a production deployment solution for the public Internet.**
+A local-first novel-writing workbench, deployment-mode prerelease `v0.0.2-a.2`. It supports multiple projects and workflows, worldbuilding, character generation, chapter editing and generation, reference assets, model profiles, themes, and persistent data. The default remains single-user access without login. Authentication and tenant isolation require explicit local administration. **This is not a production deployment solution for the public Internet.**
 
 ## Quick start
 
@@ -23,11 +23,11 @@ npm run build
 npm start
 ```
 
-The production UI is served at `http://127.0.0.1:3001` by default. The service listens on local and LAN interfaces; restrict access to a trusted LAN and do not expose it directly to the Internet. Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
+The production UI is served at `http://127.0.0.1:3001` by default. `CoreModel` accepts only local/server (unset: local; invalid: fail). Local binds only `127.0.0.1`, without LAN access. Server binds `0.0.0.0`, requires offline-enabled auth, forces hardened/audit and must be reached only through a same-origin real HTTPS proxy. See [deployment modes](../docs/en/deployment-modes.md). Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
 
 Build separately with root `npm run build:web` and `npm run build:server` (including backend Workers/SQL assets). `SERVE_WEB` defaults to `true`; `false` runs APIs/uploads without a web build, HTML, themes or SPA fallback. When hosting, `WEB_DIST_DIR` chooses a trusted static output directory, default application-root `dist`; relative paths also resolve from the application root. A separate static server must proxy `/api` and `/uploads` on the same browser origin to one backend, without enabling cross-origin business CORS or removing Cookie/Origin/CSRF checks. HTTPS additionally requires an explicit trusted origin. See [separate deployment](../docs/en/user-guide.md#separate-builds-and-same-origin-deployment).
 
-For optional local aliases, enable the loopback gateway explicitly. This keeps one backend process, one tenant Worker owner, and one data-directory lock:
+Only in `CoreModel=local`, for optional local aliases, enable the loopback gateway explicitly. This keeps one backend process, one tenant Worker owner, and one data-directory lock:
 
 ```powershell
 $env:GATEWAY_ENABLED='true'
@@ -42,9 +42,9 @@ Aliases are entrances to the same application, not separate users or data instan
 
 ## Hardening and container delivery
 
-The [hardening and Level 4 MLPS gap guide](../docs/en/security-hardening.md) ([中文](../docs/security-hardening.md)) distinguishes application controls from OS/network, Chinese cryptography/HSM, centralized tamper-resistant audit, dual control and assessment prerequisites. **There is no Level 4 compliance or certification claim.** Shared HTTP defenses, bounded audit chaining and limited `SECURITY_PROFILE=hardened` startup checks do not change single-instance/non-HA restrictions; authentication remains off by default.
+The [hardening and Level 4 MLPS gap guide](../docs/en/security-hardening.md) ([中文](../docs/security-hardening.md)) distinguishes application controls from OS/network, Chinese cryptography/HSM, centralized tamper-resistant audit, dual control and assessment prerequisites. **There is no Level 4 compliance or certification claim.** Shared HTTP defenses, bounded audit chaining and limited `SECURITY_PROFILE=hardened` startup checks do not change single-instance/non-HA restrictions; native local authentication defaults off; server requires it enabled.
 
-The [Dockerfile](../Dockerfile) and [Compose example](../compose.yaml) provide non-root/read-only/minimal-capability settings with separate data/backup volumes. Defaults publish only on host loopback, use standard mode with audit enabled, and do not activate authentication. Follow the guide's offline compiled-CLI bootstrap, then configure HTTPS origin/independent keys before hardened mode. No Chromium is included, so first interactive Fanqie login is unsupported in the default remote container. Compose static validation passed, but Docker Engine was unavailable: image build/run were not verified. GitHub prerelease publication is not production or compliance acceptance.
+The [Dockerfile](../Dockerfile) and [Compose example](../compose.yaml) provide non-root/read-only/minimal-capability settings with separate data/backup volumes. Build/runtime both use `${CoreModel:-server}`: default server forces hardened/audit and requires offline compiled-CLI auth bootstrap and actual HTTPS origin/independent keys before first startup behind a real TLS proxy. Explicit standard or disabled audit fails. Host ports default to loopback; container local binds only internal loopback and is unreachable through published ports. Prefer native local for desktop use. No Chromium is included, so first interactive Fanqie login is unsupported in the default remote container. Compose static validation passed, but Docker Engine was unavailable: image build/run were not verified. GitHub prerelease publication is not production or compliance acceptance.
 
 ## Documentation
 
@@ -107,7 +107,7 @@ Themes include light, dark, system-following, and blue/pink/white. The separate 
 
 ## Optional authentication and account capabilities
 
-Authentication, registration, email verification, password recovery, OIDC, MFA, and Turnstile are off by default. Stop the service and back up data before local administrative CLI changes. Supply `NOVEL_BOOTSTRAP_PASSWORD` securely through the environment (at least 12 characters, at most 1024 bytes); never put a real password in command arguments, documentation, logs, or Git:
+Native local authentication and optional registration, email verification, recovery, OIDC, MFA and Turnstile default off. Server requires offline-enabled authentication before startup. Stop the service and back up data before local administrative CLI changes. Supply `NOVEL_BOOTSTRAP_PASSWORD` securely through the environment (local: at least 12 characters; server: at least 15 Unicode characters; at most 1024 bytes); never put a real password in command arguments, documentation, logs, or Git:
 
 ```powershell
 npm run admin -- bootstrap-admin --username admin --confirm
@@ -116,7 +116,9 @@ npm run admin -- enable-auth --owner <UUID> --confirm
 
 The first command creates the initial super administrator locally, with no HTTP bootstrap endpoint; it does not enable authentication. Use its returned `ownerId` UUID explicitly when assigning existing data and enabling authentication. First login never automatically takes ownership of old data. `enable-auth --no-legacy --confirm` is only for a new directory without legacy business data/assets or SQL activation. Restart after changes. For custom data directories, pass `--data-dir <PATH>` explicitly; do not assume the admin CLI uses `DATA_DIR` or loads `.env`.
 
-When authentication is off, administrative access requires a real loopback socket and local Host/Origin checks, plus administrative CSRF for writes. LAN access without login does not grant administrator privileges. When enabled, access follows role/module permissions: super administrator, administrator, operations administrator, and writer are distinct roles, not a simple inherited privilege hierarchy. See [exact permissions and legacy-role compatibility](../docs/roles-permissions.md).
+When authentication is off, administrative access requires a real loopback socket and local Host/Origin checks, plus administrative CSRF for writes. Local has no LAN direct access; server requires authentication. When enabled, access follows role/module permissions: super administrator, administrator, operations administrator, and writer are distinct roles, not a simple inherited privilege hierarchy. See [exact permissions and legacy-role compatibility](../docs/roles-permissions.md).
+
+New server credentials require at least 15 Unicode characters (at most 1024 bytes), reject limited-common-blocklist/low-character-diversity/account-name-derived passwords and current-password reuse; existing credentials are not retroactively invalidated. Sessions are issued after authentication, including enrolled MFA when configured; server retains at most 5 active sessions per user, revoking the session with the earliest expiresAt on overflow. Local retains its existing policy.
 
 Optional account extensions require explicit configuration:
 

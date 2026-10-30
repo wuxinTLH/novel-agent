@@ -4,6 +4,8 @@
 
 This English counterpart separates implemented local behavior, historical test records, design limits and outstanding external acceptance. Historical numbers below are retained from the Chinese record, **not tests rerun by translating this page**, and not evidence for every later working-tree change.
 
+Current deployment rules are in [CoreModel local/server modes](deployment-modes.md): native local is loopback-only; server requires auth/hardened/audit and a same-origin real HTTPS proxy. Gateway records below apply only to local. Historical test counts are unchanged.
+
 ## P1 authoring protections
 
 | Feature | Implementation and limit |

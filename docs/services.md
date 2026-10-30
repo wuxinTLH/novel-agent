@@ -38,17 +38,19 @@
 
 ## 认证、管理与不可变租户上下文
 
-认证、Turnstile 仍默认关闭。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。首次超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建，没有 HTTP 管理员引导；可选邮箱确认注册仅创建普通用户，默认关闭。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
+local 认证与 Turnstile 默认关闭；server 必须先离线启用认证。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。首次超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建，没有 HTTP 管理员引导；可选邮箱确认注册仅创建普通用户，默认关闭。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
 
-管理界面分“用户、数据库、备份与维护、系统与安全”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，局域网访问免登录业务不等于拥有管理员权限。认证开启后按[显式角色权限矩阵](roles-permissions.md)逐接口授权，写入另需认证 CSRF；具备管理权限也不能据此浏览其他租户业务或秘密。
+管理界面分“用户、数据库、备份与维护、系统与安全”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，local 无 LAN 直连，server 必须认证。认证开启后按[显式角色权限矩阵](roles-permissions.md)逐接口授权，写入另需认证 CSRF；具备管理权限也不能据此浏览其他租户业务或秘密。
 
 身份只来自服务端验证会话，不接受 `X-User-Id`、查询参数或客户端自报 owner。legacy owner 沿用原目录，其余用户使用 `DATA_DIR/users/<SHA-256(user UUID)>`；SQL 按 owner 隔离。每个租户 Worker 有固定 owner 的 Store、Runner、密钥、平台浏览器、队列及上传。未认证请求失败关闭，不回落共享目录。最多保留 32 个租户运行时，达到容量返回 `TENANT_RUNTIME_CAPACITY`，不是自动无界扩容。
+
+server 新设密码至少 15 个 Unicode 字符、最多 1024 字节，拒绝有限常见密码清单、低字符多样性和账号名衍生密码，以及重用当前密码；既有凭据不追溯失效。完成身份验证（已配置 MFA 时须通过该验证）后才签发会话，每用户最多 5 个有效会话，超限撤销最早到期的会话（按 expiresAt）。local 保留原策略。
 
 密码采用 scrypt；会话 Cookie 为 HttpOnly / SameSite=Strict。普通用户可修改自己的密码、查看 / 撤销自己的会话；改密撤销该用户全部旧会话。管理员可创建、启停用户、改角色、重置密码、查看 / 撤销用户会话，不能停用或降级最后一个有效超级管理员。停用、角色变更、重置密码都会撤销目标会话；认证模式管理员重置密码需重新验证管理员当前密码，本机免认证管理则使用本机管理授权。退出不等于取消后台任务。
 
 API 摘要：`POST /api/auth/password`、`GET/DELETE /api/auth/sessions`、`DELETE /api/auth/sessions/:sessionId`；管理面 `GET/POST /api/admin/users`、`PATCH /api/admin/users/:id`、`POST /api/admin/users/:id/password`、`GET/DELETE /api/admin/users/:id/sessions`、`DELETE /api/admin/users/:id/sessions/:sessionId`。会话列表仅显示不可逆标识、到期时间等元数据，不返回 token。业务写入继续校验 `X-Platform-CSRF`，认证开启时还需 `X-CSRF-Token`。
 
-Turnstile 管理默认关闭；secret 加密保存，仅返回 hasSecret。启用须真实 site key / secret、匹配 action / hostname 及联网 siteverify 验证；网络失败或不匹配拒绝登录，离线桩不证明真实 Cloudflare 验收。认证状态本地使用 `auth.json`，SQL 激活后在全局 owner 文档保存；`auth.key` 保留本地，POSIX `0600` 不代替 Windows ACL。本应用仍仅供本机及可信局域网 HTTP，不是公网部署保证。
+Turnstile 管理默认关闭；secret 加密保存，仅返回 hasSecret。启用须真实 site key / secret、匹配 action / hostname 及联网 siteverify 验证；网络失败或不匹配拒绝登录，离线桩不证明真实 Cloudflare 验收。认证状态本地使用 `auth.json`，SQL 激活后在全局 owner 文档保存；`auth.key` 保留本地，POSIX `0600` 不代替 Windows ACL。默认 local 仅监听 `127.0.0.1`；server 监听 `0.0.0.0`，强制认证 / hardened / 审计并仅通过同源真实 HTTPS 代理访问。见[部署模式](deployment-modes.md)。
 
 ## v3 关系存储与运行边界
 
@@ -66,11 +68,11 @@ v3 使用 `novel_agent_v3_*` 表，项目、章节、设定、工作流实体正
 
 ## 可选完整账号扩展
 
-[认证模块配置](../packages/server/src/features/auth/README.md) 包含注册、邮箱验证、密码恢复、OIDC、TOTP MFA 与恢复码；认证总开关和每项能力仍全部默认关闭。首次超级管理员仍由 CLI 引导，公开注册必须邮箱确认且仅能普通用户，不自动登录。SMTP 由显式 `NOVEL_SMTP_ENABLED=true` 与 `NOVEL_SMTP_HOST` / `NOVEL_SMTP_USER` / `NOVEL_SMTP_PASSWORD` / `NOVEL_SMTP_FROM` 注入，端口默认 587，`NOVEL_SMTP_SECURE=true` 默认 465，使用可选 nodemailer 传输与证书验证。邮件令牌单次、15 分钟到期，回链使用 HTTPS publicOrigin 和 fragment，避免进入请求查询与日志。
+[认证模块配置](../packages/server/src/features/auth/README.md) 包含注册、邮箱验证、密码恢复、OIDC、TOTP MFA 与恢复码；local 认证与各可选能力默认关闭；server 则必须先离线开启认证。首次超级管理员仍由 CLI 引导，公开注册必须邮箱确认且仅能普通用户，不自动登录。SMTP 由显式 `NOVEL_SMTP_ENABLED=true` 与 `NOVEL_SMTP_HOST` / `NOVEL_SMTP_USER` / `NOVEL_SMTP_PASSWORD` / `NOVEL_SMTP_FROM` 注入，端口默认 587，`NOVEL_SMTP_SECURE=true` 默认 465，使用可选 nodemailer 传输与证书验证。邮件令牌单次、15 分钟到期，回链使用 HTTPS publicOrigin 和 fragment，避免进入请求查询与日志。
 
 OIDC 显式配置端点，使用 code + PKCE S256、state / 浏览器绑定 cookie、nonce 与 JWKS 签名验证（精确 issuer / audience）；管理员通过 `PUT /api/admin/account/oidc/users/:id` 明确 issuer + subject 关联已有用户，不按邮箱自动注册 / 合并。MFA 在密码 / OIDC 后验证新鲜 TOTP counter 或单次恢复码才签发会话；启用 / 移除因素、恢复密码撤销旧会话，恢复密码不移除 MFA，已绑定因素时不能全局关闭绕过。真实邮件、提供商与 HTTPS / Cookie 反向代理部署仍须独立验收，不是公网生产安全声明。
 
-账号邮件 / OIDC 部署须另配 TLS 终止代理及显式 `NOVEL_TRUSTED_PUBLIC_ORIGIN=https://novel.example.com` 单一 HTTPS origin；代理保留浏览器 Host、拒绝直接绕过后端、清除不可信转发头，服务从不信任 `X-Forwarded-*`。这会自动给认证 Cookie 加 Secure，但不会提供 TLS，也不改变认证默认关闭或免登录本机管理边界。HTTPS origin / Host 需精确一致，管理员账号 `publicOrigin` 与 OIDC 回调同源；具体操作见 [使用手册](使用手册.md#可选注册邮箱恢复oidc-与双重验证)。
+账号邮件 / OIDC 部署须另配 TLS 终止代理及显式 `NOVEL_TRUSTED_PUBLIC_ORIGIN=https://novel.example.com` 单一 HTTPS origin；代理保留浏览器 Host、拒绝直接绕过后端、清除不可信转发头，服务从不信任 `X-Forwarded-*`。这会自动给认证 Cookie 加 Secure，但不会提供 TLS，也不自动开启认证或放宽本机管理边界；server 仍要求先离线启用认证。HTTPS origin / Host 需精确一致，管理员账号 `publicOrigin` 与 OIDC 回调同源；具体操作见 [使用手册](使用手册.md#可选注册邮箱恢复oidc-与双重验证)。
 
 ## 文稿导出与临时文档
 

@@ -7,6 +7,7 @@ import { Worker } from 'node:worker_threads';
 import type { AuthService } from '../../features/auth/auth.js';
 import { installHttpFallbacks } from '../http.js';
 import type { WebHostingOptions } from '../web-hosting.js';
+import type { CoreModel } from '../core-model.js';
 import { readAuthMode } from '../../infrastructure/storage/storage-config.js';
 import { mainPlatformAccountLockCoordinator } from './platform-account-lock.js';
 import { createOriginPolicy } from '../trusted-origin.js';
@@ -24,6 +25,7 @@ export interface IsolatedTenantApplicationOptions extends WebHostingOptions {
   auth: AuthService;
   services?: readonly IsolatedTenantService[];
   enabled: boolean;
+  coreModel?: CoreModel;
   waitForControlPlaneIdle?: () => Promise<void>;
   /** Explicit local alias ports allowed by the loopback gateway. */
   trustedAliasPorts?: readonly number[];
@@ -102,6 +104,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
       enabled: options.enabled,
       authenticationReady: true,
       mode: options.enabled ? 'verified-user' : 'local',
+      coreModel: options.coreModel ?? 'local',
     }),
   );
 

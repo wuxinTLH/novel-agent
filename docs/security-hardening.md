@@ -6,9 +6,9 @@
 
 ## 1. 当前边界
 
-- 默认产品仍面向本机 / 可信局域网，认证默认关闭；不得将默认配置直接暴露到公网。Node 入口监听所有接口，必须配合主机防火墙和受控网络。
+- `CoreModel` 只接受 local/server，未设置默认 local，非法值启动失败。local 仅监听 `127.0.0.1`，无 LAN 直连，认证默认关闭；server 监听 `0.0.0.0`，必须先启用认证，强制 hardened / 审计并仅通过同源真实 HTTPS 代理访问，防火墙阻断直连。完整契约见[部署模式](deployment-modes.md)。
 - 同一数据目录只允许运行一个实例；租户 Worker、SQL CAS、平台账号锁不等于跨主机分布式租约。**本方案不是高可用、双活、异地容灾或故障自动切换架构。** 不要通过增加 Compose 副本共享数据目录 / owner。
-- 本轮新增共享 HTTP 内核、显式严格启动策略、有界审计链及容器最小权限配置。已核对实现与主实施者参数；最终测试及 Docker 实机验证结果须另行记录，不以本文代替验收证据。
+- 本轮新增共享 HTTP 应用边界、显式严格启动策略、有界审计链及容器最小权限配置。已核对实现与主实施者参数；最终测试及 Docker 实机验证结果须另行记录，不以本文代替验收证据。
 - 应用测试只能证明对应临时目录 / 模拟环境中的行为，不能代替真实代理、身份提供商、数据库、容器宿主机或测评验收。
 
 ## 2. 应用控制与部署责任映射
@@ -17,7 +17,7 @@
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 身份鉴别       | 本地 CLI 引导首个超级管理员；认证显式启用，旧数据 owner 显式分配；密码变更 / 停用 / 角色变更撤销会话；可选 TOTP 与预映射 OIDC      | 默认免登录不适合高保障部署。制定实名唯一账号、管理员 MFA、身份生命周期、登录策略、会话期限和紧急访问制度；现有可选 MFA 不等于全体强制 MFA 或硬件因素                            |
 | 访问控制       | 服务端逐端点角色 / 模块权限；独立租户运行时；来源和 CSRF 校验；运维角色不能任意写安全配置                                          | 四角色不是操作系统 / 数据库 / 网络设备权限体系，也不提供全面三权分立、强制访问控制或数据密级隔离。须验证所有接口、导出与维护路径的授权矩阵                                      |
-| HTTP 边界      | 同源策略、请求限流、业务 no-store、CSP / 防嵌入 / nosniff 等响应头；可信 HTTPS origin 显式配置，不信任转发头                       | 本轮共享 HTTP 内核统一入口 / 租户头部、方法与路径检查、服务端 UUID；原始 HTTP 解析失败仍可能先被 Node 拒绝。反向代理必须保留 Host、清除外来转发头、限制请求和连接并屏蔽后端直连 |
+| HTTP 边界      | 同源策略、请求限流、业务 no-store、CSP / 防嵌入 / nosniff 等响应头；可信 HTTPS origin 显式配置，不信任转发头                       | 本轮共享 HTTP 应用边界统一入口 / 租户头部、方法与路径检查、服务端 UUID；原始 HTTP 解析失败仍可能先被 Node 拒绝。反向代理必须保留 Host、清除外来转发头、限制请求和连接并屏蔽后端直连 |
 | 数据及密钥     | 模型 / 平台凭据采用应用加密；模型出站阻止本机、私网及元数据目标；认证密钥本地保存                                                  | 当前应用加密不是国密合规证明；无已验证的国密协议栈、密码产品、HSM / KMS 接入或密钥双人管理。SQLconnect 密码仍为明文；需单独保护配置、数据库 TLS、备份和端点                     |
 | 文件与隔离     | 文件准入、重构、限额、超时；缺少可靠重构时拒绝 PDF；上传路径与历史读取检查                                                         | 子进程 / Worker 不是 OS 沙箱或恶意代码检测。容器也共享宿主内核；须配置最小权限、补丁、强制访问控制、出站策略及所需检测                                                          |
 | 审计追踪       | 账号 / 管理 / 发布已有业务记录；本轮提供可选的有界 SHA-256 前向链接审计（hardened 强制启用），仅记录请求元数据而非完整用户操作审计 | 本地哈希链不是签名、可信时间戳、远程见证或不可篡改存储；掌握主机和日志写权限者可重写整链。需独立集中采集、访问隔离、告警和满足实际要求的留存，不能以轮转代替归档                |
@@ -41,6 +41,7 @@
 2. 安全注入 `NOVEL_BOOTSTRAP_PASSWORD`，执行本地 CLI；自定义数据目录必须显式传 `--data-dir`，不要假设 CLI 使用 `DATA_DIR`。
 
 ```powershell
+$env:CoreModel='server' # CLI 不自动加载 .env；使引导采用服务端密码策略
 npm run admin -- bootstrap-admin --username admin --data-dir <DATA_DIRECTORY> --confirm
 npm run admin -- enable-auth --owner <RETURNED_OWNER_UUID> --data-dir <DATA_DIRECTORY> --confirm
 ```
@@ -49,15 +50,15 @@ npm run admin -- enable-auth --owner <RETURNED_OWNER_UUID> --data-dir <DATA_DIRE
 
 3. 配置精确 HTTPS origin 与代理、防火墙，保护目录 / 密钥，启用认证后启动；测试匿名拒绝、跨角色 / 租户拒绝、CSRF、会话撤销及 HTTPS Cookie。
 4. 核对管理员 MFA、恢复码与紧急流程；可选功能开关不等于组织策略已强制执行。
-5. 设置 `SECURITY_PROFILE=hardened` 后才启用严格启动检查，默认 `standard`；其他值启动失败。严格模式要求：认证已经启用、有效 `NOVEL_TRUSTED_PUBLIC_ORIGIN` HTTPS origin、网关关闭、`MODEL_SECRETS_KEY` 与 `PLATFORM_SECRETS_KEY` 各至少 32 字符且不同，并强制启用安全审计。32 字符检查不是熵评估；请分别生成高熵秘密。它只检查有限配置，不能证明真实代理 TLS、强制 MFA、网络隔离或合规，也不强制非 root / 只读根。
+5. 原生 local 默认 `SECURITY_PROFILE=standard`，可显式选择 hardened；server 强制 hardened，显式 `SECURITY_PROFILE=standard` 拒绝启动。其他值启动失败。严格模式要求：认证已经启用、有效 `NOVEL_TRUSTED_PUBLIC_ORIGIN` HTTPS origin、网关关闭、`MODEL_SECRETS_KEY` 与 `PLATFORM_SECRETS_KEY` 各至少 32 字符且不同，并强制启用安全审计。32 字符检查不是熵评估；请分别生成高熵秘密。它只检查有限配置，不能证明真实代理 TLS、强制 MFA、网络隔离或合规，也不强制非 root / 只读根。
 
 ### 请求边界、超时与审计参数
 
-共享内核允许 `GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS`，拒绝含糊编码、路径穿越、编码斜杠 / 反斜杠及含糊请求 framing，使用服务端 UUID 而非信任客户端 request-id。默认 URL 上限 16 KiB、应用层头部预检 32 KiB / 100 个、声明 Content-Length 预检 64 MiB；后者不是实际流量计量，JSON / 上传等解析器仍有各自更紧限额，Node 原始解析器也可能更早拒绝。合法 query 值不按路径语法处理。共享响应头不代表独立静态服务器已配同等策略。
+共享 HTTP 边界允许 `GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS`，拒绝含糊编码、路径穿越、编码斜杠 / 反斜杠及含糊请求 framing，使用服务端 UUID 而非信任客户端 request-id。默认 URL 上限 16 KiB、应用层头部预检 32 KiB / 100 个、声明 Content-Length 预检 64 MiB；后者不是实际流量计量，JSON / 上传等解析器仍有各自更紧限额，Node 原始解析器也可能更早拒绝。合法 query 值不按路径语法处理。共享响应头不代表独立静态服务器已配同等策略。
 
 Node 服务头部接收时限 15 秒、请求接收时限 120 秒、keep-alive 5 秒、最多 100 个头、每 socket 最多 1000 个请求。请求接收超时不是长生成 / SSE 响应绝对期限；代理应独立制定连接、读写、容量和异常流量策略，不盲目缩短长任务响应时限。
 
-`SECURITY_AUDIT` 只接受 `true` / `false`（其他显式值启动失败），standard 未设置时关闭；`true` 显式开启，hardened 中即使设置为 `false` 也启用。日志位于数据目录下 `security-audit/security-audit.jsonl`，每段 8 MiB，保留当前段及 8 个轮转段（最多 9 个文件）。目录创建模式 `0700`、文件 `0600`，仍须核对已有权限 / Windows ACL。记录 SHA-256 前链、递增序号、时间及请求 UUID / 方法 / 状态 / 耗时 / 固定原因；不记录原始 URL、query、请求体、头部或用户身份，故不是完整的可归责业务审计。
+`SECURITY_AUDIT` 只接受 `true` / `false`（其他显式值启动失败），local standard 未设置时关闭；`true` 显式开启，local hardened 强制启用。server 强制开启，显式 `SECURITY_AUDIT=false` 拒绝启动。日志位于数据目录下 `security-audit/security-audit.jsonl`，每段 8 MiB，保留当前段及 8 个轮转段（最多 9 个文件）。目录创建模式 `0700`、文件 `0600`，仍须核对已有权限 / Windows ACL。记录 SHA-256 前链、递增序号、时间及请求 UUID / 方法 / 状态 / 耗时 / 固定原因；不记录原始 URL、query、请求体、头部或用户身份，故不是完整的可归责业务审计。
 
 路由准入前等待写入及 fsync；失败返回 503，不继续业务处理。完成事件写入失败不能撤销已经发生的操作或响应，但使审计对象失效，之后的业务准入失败关闭。启动只验证当前段内部链，不验证旧轮转段；清空当前段、删除日志或重写整条有效链无法靠该本地检查发现，需要独立远端锚定 / 采集对照。日志仍可被主机管理员重写或删除。轮转将淘汰最旧段，必须在淘汰前独立采集 / 归档；未提供远程见证、不可抵赖、可信时间戳或内置集中采集器。
 
@@ -76,19 +77,20 @@ Node 服务头部接收时限 15 秒、请求接收时限 120 秒、keep-alive 5
 ```powershell
 docker compose config --quiet
 docker compose build
-docker compose up -d
-# 变更认证前必须停掉服务，单次容器共用同一数据卷
+# 首次启动之前完成离线引导；已有运行实例先停止，共用同一命名数据卷
 docker compose stop
 # 先通过受控方式把 NOVEL_BOOTSTRAP_PASSWORD 注入当前进程环境
 docker compose run --rm --no-deps -e NOVEL_BOOTSTRAP_PASSWORD novel-agent node build/packages/server/src/features/administration/admin.js bootstrap-admin --username admin --data-dir /app/data --confirm
 docker compose run --rm --no-deps novel-agent node build/packages/server/src/features/administration/admin.js enable-auth --owner <RETURNED_OWNER_UUID> --data-dir /app/data --confirm
+# 完成下述真实 HTTPS / 独立密钥配置后，才首次启动
+docker compose up -d
 ```
 
-不要在密码参数中填写真实秘密。该镜像仅含生产依赖，不使用依赖开发工具的 `npm run admin` / `npm run maintenance`；维护入口为 `node build/packages/server/src/features/administration/maintenance-cli.js`。默认 Compose 是 **standard + 审计开启 + 认证尚未启用**，仅发布到主机回环端口，不能称为 hardened。完成离线引导后，安全设置 `SECURITY_PROFILE=hardened`、实际 HTTPS origin、两个独立密钥，再启动，并接入保留 Host 的真实 TLS 代理。Compose 环境插值可能由根 `.env` 提供，保护该文件；`docker compose config`（不带 `--quiet`）可能打印展开的秘密。
+不要在密码参数中填写真实秘密。该镜像仅含生产依赖，不使用依赖开发工具的 `npm run admin` / `npm run maintenance`；维护入口为 `node build/packages/server/src/features/administration/maintenance-cli.js`。Docker 构建参数默认 `ARG CoreModel=server`，构建校验 local/server，镜像 `ENV CoreModel` 保存所选模式，运行时覆盖仍校验启动。Compose build arg 与运行时均使用 `${CoreModel:-server}`，默认 server 强制 hardened / 审计，拒绝显式 standard / 关闭审计；认证尚未启用或缺少前置条件会启动失败。先离线启用认证，安全配置实际 HTTPS origin、两个独立且各至少 32 字符密钥、网关关闭，再启动到保留 Host 的真实 TLS 代理之后。宿主机发布端口默认回环。**容器 local 仅绑定容器内部回环，不能通过发布端口访问；本机推荐原生 local。** 详见[部署模式](deployment-modes.md)。Compose 环境插值可能由根 `.env` 提供，保护该文件；`docker compose config`（不带 `--quiet`）可能打印展开的秘密。
 
 默认数据卷 `/app/data`、独立备份卷 `/app/.data-managed-backups` 和 `/tmp` 可写；镜像为两个持久目录预设 UID 1000 所有权。自定义 bind mount 必须自行配置 UID / ACL 并测试，否则维护会失败，不能改成根文件系统可写来掩盖。离线维护备份目的地也须显式提供独立可写挂载，且位于数据目录外；备份含秘密、不可使用 `docker compose down -v` 删除唯一数据卷。镜像无 Chromium，默认不支持远程容器中番茄首次交互登录。
 
-本轮检查环境仅有 Docker CLI 29.3.1，Docker Engine pipe 不存在，**未实际构建镜像或运行容器**。主实施者确认 `docker compose config --quiet` 通过；静态检查 / 应用测试不是 Node 22 容器、宿主隔离或真实 TLS 的验证。GitHub 安全预发布拟采用 `v0.0.2-a.1`；最终标签与发布由主实施者决定，不将预发布视为合规证明。发布产物为 `.tar.gz` 压缩包，包含受 Git 跟踪的源码、编译后的服务 / 前端产物和锁文件，不含 node_modules、`.env` 或数据目录，并提供 commit manifest 与 SHA256SUMS。下载后核对校验信息，从解压根目录执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再 `node build/packages/server/src/index.js`；保留锁文件并按发布校验信息核对来源。发布包包含已编译产物，不代表已安装依赖或完成容器验收。
+本轮检查环境仅有 Docker CLI 29.3.1，Docker Engine pipe 不存在，**未实际构建镜像或运行容器**。主实施者确认 `docker compose config --quiet` 通过；静态检查 / 应用测试不是 Node 22 容器、宿主隔离或真实 TLS 的验证。GitHub 安全预发布拟采用 `v0.0.2-a.2`；最终标签与发布由主实施者决定，不将预发布视为合规证明。发布产物为 `.tar.gz` 压缩包，包含受 Git 跟踪的源码、编译后的服务 / 前端产物和锁文件，不含 node_modules、`.env` 或数据目录，并提供 commit manifest 与 SHA256SUMS。下载后核对校验信息，从解压根目录执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再 `node build/packages/server/src/index.js`；保留锁文件并按发布校验信息核对来源。发布包包含已编译产物，不代表已安装依赖或完成容器验收。
 
 ## 6. 交付验收清单
 

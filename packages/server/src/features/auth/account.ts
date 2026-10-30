@@ -11,7 +11,6 @@ const fail = (status: number, code: string): never => {
 const hash = (v: string) => createHash('sha256').update(v).digest('hex');
 const secret = () => randomBytes(32).toString('hex');
 const passwordHash = (value: string) => {
-  if (value.length < 12 || Buffer.byteLength(value) > 1024) return fail(400, 'AUTH_PASSWORD_INVALID');
   const salt = randomBytes(16).toString('hex');
   return `scrypt$${salt}$${scryptSync(value, salt, 64).toString('hex')}`;
 };
@@ -37,6 +36,7 @@ export interface AccountHost {
   setCookie(res: Response, name: string, value: string, age: number, lax?: boolean): void;
   mail?: AccountEmailTransport;
   fetcher: typeof fetch;
+  password(value: unknown, username: string, previousHash?: string): string;
 }
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 export function base32(bytes: Buffer): string {
@@ -121,6 +121,17 @@ export class AccountExtension {
       await this.h.mail({ to, purpose, token, url: url.href });
     } catch {
       fail(503, 'ACCOUNT_MAIL_UNAVAILABLE');
+    }
+  }
+  /** Public acceptance is not delivery confirmation; never expose an address-existence oracle. */
+  private async sendAccepted(to: string, purpose: 'register' | 'reset', token: string) {
+    try {
+      await this.send(to, purpose, token);
+    } catch (error) {
+      if (!(error instanceof AuthError) || error.code !== 'ACCOUNT_MAIL_UNAVAILABLE') throw error;
+      // A failed/uncertain delivery must not leave a usable action token behind.
+      const a = this.state();
+      this.save({ ...a, tokens: a.tokens.filter((t) => t.hash !== hash(token)) });
     }
   }
   private profile(id: string) {
@@ -210,7 +221,7 @@ export class AccountExtension {
         this.gate('registration');
         if (!h.read().users.some((u) => u.role === 'superadmin' && !u.disabled))
           fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
-        const hashed = passwordHash(input.password);
+        const hashed = passwordHash(h.password(input.password, input.username));
         if (
           !h.read().users.some((u) => u.username === input.username) &&
           !this.state().profiles.some((p) => p.email === input.email)
@@ -220,7 +231,7 @@ export class AccountExtension {
             email: input.email,
             passwordHash: hashed,
           });
-          await this.send(input.email, 'register', raw);
+          await this.sendAccepted(input.email, 'register', raw);
         }
         res.status(202).json({ ok: true });
       });
@@ -305,7 +316,7 @@ export class AccountExtension {
         const user = p && h.read().users.find((u) => u.id === p.userId && !u.disabled);
         if (user) {
           const raw = this.mint('reset', user.id, { passwordHash: user.passwordHash, email: input.email });
-          await this.send(input.email, 'reset', raw);
+          await this.sendAccepted(input.email, 'reset', raw);
         }
         res.status(202).json({ ok: true });
       });
@@ -314,14 +325,17 @@ export class AccountExtension {
         this.csrf(req);
         h.rate(req, 'recovery-complete');
         const input = z.object({ token: tokenInput, password: z.string() }).strict().parse(req.body);
-        const hashed = passwordHash(input.password),
-          t = this.take(input.token, 'reset');
+        const t = this.state().tokens.find(
+          (t) => t.hash === hash(input.token) && t.kind === 'reset' && t.expires > h.now(),
+        );
+        if (!t) return fail(400, 'ACCOUNT_TOKEN_INVALID');
         const user = h
           .read()
           .users.find((u) => u.id === t.userId && !u.disabled && u.passwordHash === t.payload.passwordHash);
         const profile = t.userId ? this.profile(t.userId) : undefined;
         if (!user || !profile?.verified || profile.email !== t.payload.email)
-          fail(400, 'ACCOUNT_TOKEN_INVALID');
+          return fail(400, 'ACCOUNT_TOKEN_INVALID');
+        const hashed = passwordHash(h.password(input.password, user.username, user.passwordHash));
         const a = this.state();
         this.save(
           { ...a, tokens: a.tokens.filter((v) => v.userId !== t.userId) },

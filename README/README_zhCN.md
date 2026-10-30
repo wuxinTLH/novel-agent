@@ -2,7 +2,7 @@
 
 语言 / Language：[简体中文（默认）](README_zhCN.md) · [English](README_en.md)
 
-面向本机和可信局域网的小说创作工作台，版本 `v0.0.2a`。支持多作品、多工作流、世界观编写、章节创作、资料管理、模型库、主题和数据保存；默认仍为免登录单用户，可通过本地管理 CLI 显式启用认证与租户隔离。不是面向公网的生产部署方案。
+默认面向本机的小说创作工作台，部署模式预发布 `v0.0.2-a.2`。支持多作品、多工作流、世界观编写、章节创作、资料管理、模型库、主题和数据保存；默认仍为免登录单用户，可通过本地管理 CLI 显式启用认证与租户隔离。不是面向公网的生产部署方案。
 
 ## 快速开始
 
@@ -23,11 +23,11 @@ npm run build
 npm start
 ```
 
-生产界面默认是 `http://127.0.0.1:3001`。服务监听本机及局域网接口，仅供可信局域网使用，不要暴露到公网。
+生产界面默认是 `http://127.0.0.1:3001`。`CoreModel` 仅接受 local/server，未设置默认 local，非法值启动失败；local 仅监听 `127.0.0.1`，不能 LAN 直连。server 监听 `0.0.0.0`，必须先离线启用认证，强制 hardened / 审计，并仅通过同源真实 HTTPS 代理访问。见[部署模式](../docs/deployment-modes.md)。
 
 两端可独立构建：`npm run build:web` 输出前端，`npm run build:server` 输出后端及 Worker / SQL 资源。`SERVE_WEB` 默认 `true`；设为 `false` 后后端不需要前端产物，也不提供 HTML / 主题 / SPA fallback。保持托管时，`WEB_DIST_DIR` 可指定可信静态构建目录（默认应用根目录的 `dist`，相对路径也以应用根目录解析）。独立静态服务器须将 `/api` 与 `/uploads` 同源反代到同一个后端，不开放跨源业务 CORS，不取消 Cookie / 来源 / CSRF 校验；HTTPS 须显式配置可信 origin。详见[独立部署指南](../docs/使用手册.md#前后端独立构建与同源部署)。
 
-如需让本机前端入口使用额外端口，可显式启用安全的回环网关；后端仍只运行一个实例，不会复制租户 Worker 或数据锁：
+仅在 `CoreModel=local` 下，如需让本机前端入口使用额外端口，可显式启用安全的回环网关；后端仍只运行一个实例，不会复制租户 Worker 或数据锁：
 
 ```powershell
 $env:GATEWAY_ENABLED='true'
@@ -42,9 +42,9 @@ npm start
 
 ## 安全加固与容器交付
 
-新增[安全加固与等保四级目标差距](../docs/security-hardening.md)（[English](../docs/en/security-hardening.md)）：区分应用可实施控制与 OS / 网络 / 国密和 HSM / 集中防篡改审计 / 双人控制 / 测评前置条件，**不声明已达等保四级或通过认证**。共享 HTTP 边界、有界审计链、`SECURITY_PROFILE=hardened` 有限启动检查不改变单实例、非 HA 的边界；默认认证仍关闭。
+新增[安全加固与等保四级目标差距](../docs/security-hardening.md)（[English](../docs/en/security-hardening.md)）：区分应用可实施控制与 OS / 网络 / 国密和 HSM / 集中防篡改审计 / 双人控制 / 测评前置条件，**不声明已达等保四级或通过认证**。共享 HTTP 边界、有界审计链、`SECURITY_PROFILE=hardened` 有限启动检查不改变单实例、非 HA 的边界；原生 local 默认认证关闭，server 必须先启用认证。
 
-[Dockerfile](../Dockerfile) 与 [Compose](../compose.yaml) 提供非 root、只读根、最小能力及独立数据 / 备份卷示例；默认只发布主机回环端口，standard 模式开启审计，不自动启用认证。须先按指南用编译后 CLI 离线引导认证，再配置 HTTPS origin / 独立密钥并开启 hardened。镜像不含 Chromium，不支持默认远程容器首次番茄交互登录。本轮 Compose 静态校验通过，但 Docker Engine 不可用，未实际构建 / 运行镜像；GitHub 预发布不等于生产或合规验收。
+[Dockerfile](../Dockerfile) 与 [Compose](../compose.yaml) 提供非 root、只读根、最小能力及独立数据 / 备份卷示例；build arg 与运行时均使用 `${CoreModel:-server}`，默认 server 强制 hardened / 审计；必须先离线 CLI 启用认证并配置实际 HTTPS origin / 独立密钥，再首次启动到真实 TLS 代理之后，显式 standard 或关闭审计会失败。默认仅发布主机回环端口；容器 local 只监听容器内部回环，无法通过发布端口访问，本机推荐原生 local。镜像不含 Chromium，不支持默认远程容器首次番茄交互登录。本轮 Compose 静态校验通过，但 Docker Engine 不可用，未实际构建 / 运行镜像；GitHub 预发布不等于生产或合规验收。
 
 ## 使用手册
 
@@ -122,13 +122,15 @@ npm run maintenance -- migrate-all --owner <UUID> --destination <EXTERNAL_BACKUP
 
 ### 可选认证
 
-认证及注册、邮箱验证、找回密码、OIDC、MFA 功能默认全部关闭；首次超级管理员仅能停服后本地创建，不提供 HTTP 管理员引导接口。可选公开注册只能创建经邮箱确认的普通用户，不替代管理员引导。预先通过安全方式注入环境变量 `NOVEL_BOOTSTRAP_PASSWORD`（至少 12 个字符、最多 1024 字节），然后执行：
+local 认证及可选注册、邮箱验证、找回密码、OIDC、MFA 默认关闭；server 必须先离线启用认证；首次超级管理员仅能停服后本地创建，不提供 HTTP 管理员引导接口。可选公开注册只能创建经邮箱确认的普通用户，不替代管理员引导。预先通过安全方式注入环境变量 `NOVEL_BOOTSTRAP_PASSWORD`（local 至少 12 个字符；server 至少 15 个 Unicode 字符；最多 1024 字节），然后执行：
 
 ```powershell
 npm run admin -- bootstrap-admin --username admin --confirm
 ```
 
-不要把密码放进命令参数、文档或 Git。创建身份不会开启认证。管理界面提供用户、数据库、备份与维护、系统与安全；认证关闭时仅真实 socket 回环 + 本机 Host / Origin 可管理，写操作还需管理 CSRF，局域网免登录用户不是管理员。首次超级管理员仍仅 CLI 引导；之后可创建 / 启停用户、变更角色、重置密码和撤销会话，保护最后一个有效超级管理员。认证开启后普通用户可在账号安全中改密、查看 / 撤销自己的会话；改密、重置、停用及角色变更撤销相关会话。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
+不要把密码放进命令参数、文档或 Git。创建身份不会开启认证。管理界面提供用户、数据库、备份与维护、系统与安全；认证关闭时仅真实 socket 回环 + 本机 Host / Origin 可管理，写操作还需管理 CSRF，local 无 LAN 直连，server 必须认证。首次超级管理员仍仅 CLI 引导；之后可创建 / 启停用户、变更角色、重置密码和撤销会话，保护最后一个有效超级管理员。认证开启后普通用户可在账号安全中改密、查看 / 撤销自己的会话；改密、重置、停用及角色变更撤销相关会话。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
+
+server 新设密码至少 15 个 Unicode 字符、最多 1024 字节，拒绝有限常见密码清单、低字符多样性和账号名衍生密码，以及重用当前密码；既有凭据不追溯失效。完成身份验证（已配置 MFA 时须通过该验证）后才签发会话，每用户最多 5 个有效会话，超限撤销最早到期的会话（按 expiresAt）。local 保留原策略。
 
 ### 可选完整账号功能
 

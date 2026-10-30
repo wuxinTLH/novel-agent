@@ -15,6 +15,19 @@ function options(command: string, dir: string, ...args: string[]) {
   return parseAdminArguments([command, '--data-dir', dir, '--confirm', ...args]);
 }
 
+test('server CLI bootstrap applies the server credential policy and validates CoreModel', async () => {
+  const dir = temporary();
+  try {
+    const command = options('bootstrap-admin', dir, '--username', 'rootadmin');
+    await assert.rejects(runAdmin(command, { CoreModel: 'SERVER' }), /CORE_MODEL_INVALID/);
+    assert.equal(fs.existsSync(path.join(dir, 'auth.json')), false);
+    await assert.rejects(runAdmin(command, { CoreModel: 'server', NOVEL_BOOTSTRAP_PASSWORD: 'abcdefghijklmn' }));
+    assert.equal(fs.existsSync(path.join(dir, 'auth.json')), false);
+    const result = await runAdmin(command, { CoreModel: 'server', NOVEL_BOOTSTRAP_PASSWORD: 'Amber!Orbit-Quartz-9716' });
+    assert.ok(result.ownerId);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('admin arguments require explicit confirmation and ownership; reject argv passwords', () => {
   assert.throws(() => parseAdminArguments(['bootstrap-admin', '--username', 'admin']), /CONFIRM_REQUIRED/);
   assert.throws(

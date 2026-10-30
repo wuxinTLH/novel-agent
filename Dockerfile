@@ -14,7 +14,10 @@ COPY public ./public
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 FROM node:22-bookworm-slim AS runtime
-ENV NODE_ENV=production PORT=3001 DATA_DIR=/app/data
+# Only these deployment modes are supported. local binds container loopback only.
+ARG CoreModel=server
+RUN case "$CoreModel" in local|server) ;; *) echo "CoreModel must be local or server" >&2; exit 1 ;; esac
+ENV CoreModel=${CoreModel} NODE_ENV=production PORT=3001 DATA_DIR=/app/data
 WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/packages/server/package.json ./packages/server/package.json

@@ -15,6 +15,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { z } from 'zod';
 import { accountStateSchema, type AccountEmailTransport } from './account-state.js';
 import { AccountExtension } from './account.js';
+import { validPassword, type AuthSecurityProfile } from './password-policy.js';
 import type {
   AuthUser,
   AuthPrincipal,
@@ -74,6 +75,8 @@ export interface AuthServiceOptions {
   dataDir: string;
   enabled?: boolean;
   secureCookies?: boolean;
+  /** Explicit server credential/session policy; local preserves existing desktop behavior. */
+  securityProfile?: AuthSecurityProfile;
   persistence?: AuthPersistence;
   /** Stable 32-byte encryption key from an owner-controlled secret store. Never send to clients. */
   secretKey?: Buffer;
@@ -175,10 +178,9 @@ function loadKey(dir: string): Buffer {
     return key;
   }
 }
-function password(value: unknown): string {
-  if (typeof value !== 'string' || value.length < 12 || Buffer.byteLength(value) > 1024)
-    fail(400, 'AUTH_PASSWORD_INVALID');
-  return value as string;
+function password(value: unknown, profile: AuthSecurityProfile = 'local', name = ''): string {
+  if (!validPassword(value, profile, name)) return fail(400, 'AUTH_PASSWORD_INVALID');
+  return value;
 }
 function username(value: unknown): string {
   if (typeof value !== 'string') return fail(400, 'AUTH_USERNAME_INVALID');
@@ -384,6 +386,15 @@ export class AuthService {
       maxAge,
     });
   }
+  private newPassword(value: unknown, name: string, previousHash?: string): string {
+    const result = password(value, this.options.securityProfile, name);
+    if (this.options.securityProfile === 'server' && previousHash) {
+      const [, salt, stored] = previousHash.split('$');
+      if (equal(scryptSync(result, salt, 64).toString('hex'), stored))
+        return fail(400, 'AUTH_PASSWORD_REUSED');
+    }
+    return result;
+  }
   private issueSession(req: Request, res: Response, id: string) {
     const user = this.state.users.find((u) => u.id === id && !u.disabled);
     if (!user) return fail(401, 'AUTH_LOGIN_FAILED');
@@ -391,7 +402,13 @@ export class AuthService {
       csrfToken = randomBytes(32).toString('hex'),
       expiresAt = this.clock() + this.ttl;
     const oldHash = hash(cookie(req, SESSION_COOKIE));
-    const active = this.state.sessions.filter((s) => s.expiresAt > this.clock() && s.tokenHash !== oldHash);
+    let active = this.state.sessions.filter((s) => s.expiresAt > this.clock() && s.tokenHash !== oldHash);
+    if (this.options.securityProfile === 'server') {
+      // Evict only after complete authentication (including any enrolled MFA).
+      const oldest = active.filter((s) => s.userId === id).sort((a, b) => a.expiresAt - b.expiresAt);
+      const evicted = new Set(oldest.slice(0, Math.max(0, oldest.length - 4)));
+      active = active.filter((s) => !evicted.has(s));
+    }
     if (active.length >= 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
     this.save({
       ...this.state,
@@ -466,7 +483,7 @@ export class AuthService {
     if (!this.enabled) return fail(409, 'AUTH_DISABLED');
     if (this.state.users.some((u) => u.role === 'superadmin')) return fail(409, 'AUTH_ALREADY_BOOTSTRAPPED');
     const normalized = username(name),
-      value = password(rawPassword),
+      value = this.newPassword(rawPassword, normalized),
       salt = randomBytes(16).toString('hex');
     if (this.state.users.some((u) => u.username === normalized)) return fail(409, 'AUTH_USERNAME_EXISTS');
     const user = {
@@ -561,6 +578,7 @@ export class AuthService {
       setCookie: (res, name, value, age, lax) => this.setCookie(res, name, value, age, lax),
       mail: this.options.emailTransport,
       fetcher: this.fetcher,
+      password: (value, name, previousHash) => this.newPassword(value, name, previousHash),
     });
     router.use((req, res, next) => {
       res.set('Cache-Control', 'no-store');
@@ -633,7 +651,6 @@ export class AuthService {
           .object({ currentPassword: z.string().max(1024), newPassword: z.string() })
           .strict()
           .parse(req.body);
-        const value = password(input.newPassword);
         this.rateLimit(req.socket.remoteAddress ?? 'unknown', session.user.username);
         const user = this.state.users.find((u) => u.id === session.user.id)!;
         const [, oldSalt, stored] = user.passwordHash.split('$');
@@ -644,6 +661,7 @@ export class AuthService {
           !equal(actual.toString('hex'), stored)
         )
           return fail(401, 'AUTH_PASSWORD_INCORRECT');
+        const value = this.newPassword(input.newPassword, user.username, user.passwordHash);
         const salt = randomBytes(16).toString('hex');
         const derived = await derive(value, salt);
         requireSelf(req);
@@ -683,7 +701,7 @@ export class AuthService {
         .parse(req.body);
       requireCreation(req, input.role);
       const name = username(input.username),
-        value = password(input.password);
+        value = this.newPassword(input.password, name);
       if (this.state.users.some((u) => u.username === name)) return fail(409, 'AUTH_USERNAME_EXISTS');
       if (this.state.users.length >= 10000) return fail(409, 'AUTH_USER_CAPACITY');
       const salt = randomBytes(16).toString('hex'),
@@ -740,7 +758,6 @@ export class AuthService {
         .object({ currentPassword: z.string().max(1024).optional(), newPassword: z.string() })
         .strict()
         .parse(req.body);
-      const value = password(input.newPassword);
       const target = this.state.users.find((u) => u.id === req.params.id);
       if (!target) return fail(404, 'AUTH_USER_NOT_FOUND');
       requireTarget(req, target);
@@ -759,6 +776,7 @@ export class AuthService {
         )
           return fail(401, 'AUTH_PASSWORD_INCORRECT');
       }
+      const value = this.newPassword(input.newPassword, target.username, target.passwordHash);
       const salt = randomBytes(16).toString('hex');
       const derived = await derive(value, salt);
       requirePermission(req, 'users.manage');
@@ -855,7 +873,7 @@ export class AuthService {
   }
 }
 export function bootstrapSuperadmin(
-  options: Pick<AuthServiceOptions, 'dataDir' | 'persistence' | 'secretKey'> & {
+  options: Pick<AuthServiceOptions, 'dataDir' | 'persistence' | 'secretKey' | 'securityProfile'> & {
     username: string;
     password: string;
   },

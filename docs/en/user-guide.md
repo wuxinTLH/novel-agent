@@ -2,7 +2,7 @@
 
 [中文原文](../使用手册.md) · [English documentation index](README.md) · [English overview](../../README/README_en.md)
 
-This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Novel Agent v0.0.2a targets a local computer or trusted LAN; authentication is optional and off by default. Do not expose the default service to the public Internet.
+This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Deployment-mode prerelease v0.0.2-a.2 defaults to local-only use, authentication off; server requires offline-enabled authentication and hardened/audit checks. Do not expose the default service to the public Internet.
 
 ## Install and start
 
@@ -14,7 +14,7 @@ npm run browser:install
 npm run dev
 ```
 
-Development uses UI `http://127.0.0.1:5173` and API `http://127.0.0.1:3001`. For a production build run `npm run build`, then `npm start`, and open `http://127.0.0.1:3001`. Fanqie login requires a visible Chromium window on the backend machine; a LAN browser does not provide remote desktop control.
+Development uses UI `http://127.0.0.1:5173` and API `http://127.0.0.1:3001`. For a production build run `npm run build`, then `npm start`, and open `http://127.0.0.1:3001`. `CoreModel` accepts only local/server (unset: local; invalid: fail). Local binds only `127.0.0.1`, not LAN; server binds `0.0.0.0` only behind a same-origin real HTTPS proxy. See [deployment modes](deployment-modes.md) for prerequisites and container-local published-port limitations. Fanqie login requires a visible Chromium window on the backend machine; a LAN browser does not provide remote desktop control.
 
 ## Separate builds and same-origin deployment
 
@@ -23,7 +23,7 @@ Integrated hosting remains the default (`SERVE_WEB=true`): the backend serves ro
 - Set `SERVE_WEB=false` in the backend environment for API-only operation without a frontend build. It serves no HTML, themes or SPA fallback; unknown paths return JSON 404. `/api` and `/uploads` retain existing authentication, tenant and file reconstruction policies. Only literal `true`/`false` values are accepted; other values fail startup.
 - With hosting enabled, `WEB_DIST_DIR` selects a trusted frontend output directory (default `dist`). Relative paths resolve from the application root, not the current directory; absolute paths are supported. Hosting requires `index.html`. Never point it at data, backups or source code. API-only mode does not expose that directory.
 - A separate static server must serve the complete web output, including themes, and proxy browser `/api` and `/uploads` paths unchanged to the same backend instance. Apply SPA fallback only to frontend routes, never rewrite API/upload errors into HTML. The frontend keeps relative same-origin requests: no new cross-origin business CORS, and no removal of Origin, Cookie or CSRF checks.
-- Preserve browser Host (including port), Origin, Cookie and CSRF headers, response cookies and statuses; clear untrusted forwarding headers and block external direct backend access. `X-Forwarded-*` is not trusted. Existing local/private-host and configured-port restrictions remain; extra loopback entries require explicit gateway configuration. For HTTPS, configure the exact `NOVEL_TRUSTED_PUBLIC_ORIGIN` and follow the Secure-cookie/account-callback requirements below. This does not enable authentication or relax local administration.
+- Preserve browser Host (including port), Origin, Cookie and CSRF headers, response cookies and statuses; clear untrusted forwarding headers and block external direct backend access. `X-Forwarded-*` is not trusted. Local is loopback-only; extra aliases need explicit gateway configuration. Server forbids that gateway and requires its configured exact HTTPS origin. For HTTPS, configure the exact `NOVEL_TRUSTED_PUBLIC_ORIGIN` and follow the Secure-cookie/account-callback requirements below. This does not enable authentication or relax local administration.
 
 A separate static process is not a second backend or a public-Internet safety guarantee. The operator owns that server's cache/security headers and must retain equivalent CSP, `nosniff` and anti-framing protection rather than relax active-content/framing policy; built-in hosting still long-caches hashed resources and revalidates HTML. Independently accept HTML, API-only mode, API 404s, uploaded-image reads, login cookies and CSRF through the actual proxy entry.
 
@@ -113,22 +113,24 @@ Protect the whole data directory, uploads, browser state and backups. SQLconnect
 
 Stop the service, create a complete backup and use the local CLI. It takes the data lock; pass `--data-dir <PATH>` explicitly for a custom directory. Do not assume the admin CLI inherits service `DATA_DIR` or loads `.env`. Mutations require `--confirm`.
 
-Securely inject `NOVEL_BOOTSTRAP_PASSWORD` (12 or more characters, at most 1024 bytes), never through arguments, screenshots or Git:
+Securely inject `NOVEL_BOOTSTRAP_PASSWORD` (local: 12 or more characters; server: at least 15 Unicode characters; at most 1024 bytes), never through arguments, screenshots or Git:
 
 ```powershell
 npm run admin -- bootstrap-admin --username admin --confirm
 npm run admin -- enable-auth --owner <UUID> --confirm
 ```
 
-Record the existing active user's returned owner UUID, not username. Bootstrap creates the first super administrator but does not enable authentication. First login never acquires legacy data automatically. `enable-auth --no-legacy --confirm` is only for a new directory with no legacy business/assets or SQL activation. `assign-legacy --owner <UUID> --confirm` separately assigns legacy ownership without changing authentication; it is not a cross-tenant copy command. Restart after changes. To deliberately disable authentication, stop service and use `disable-auth --allow-public-access --confirm`; this acknowledges unauthenticated exposure, not Internet safety.
+Record the existing active user's returned owner UUID, not username. Bootstrap creates the first super administrator but does not enable authentication. First login never acquires legacy data automatically. `enable-auth --no-legacy --confirm` is only for a new directory with no legacy business/assets or SQL activation. `assign-legacy --owner <UUID> --confirm` separately assigns legacy ownership without changing authentication; it is not a cross-tenant copy command. Restart after changes. Only local can start with authentication disabled; server fails startup. To deliberately disable authentication, stop service and use `disable-auth --allow-public-access --confirm`; this acknowledges unauthenticated exposure, not Internet safety.
 
-When authentication is off, management requires the real socket loopback address, local Host/Origin, cross-site rejection and `X-Admin-CSRF` for writes. LAN business access is not administrative access. Authenticated management follows the [explicit four-role matrix](roles-permissions.md), not weight inheritance. Super administrators cannot browse other tenants' private business content. Password changes/resets, disabling and role changes revoke affected sessions; the last active super administrator is protected. Logout does not cancel already-started work.
+When authentication is off, management requires the real socket loopback address, local Host/Origin, cross-site rejection and `X-Admin-CSRF` for writes. Local has no direct LAN access; server requires authentication. Authenticated management follows the [explicit four-role matrix](roles-permissions.md), not weight inheritance. Super administrators cannot browse other tenants' private business content. Password changes/resets, disabling and role changes revoke affected sessions; the last active super administrator is protected. Logout does not cancel already-started work.
+
+New server credentials require at least 15 Unicode characters (at most 1024 bytes), reject limited-common-blocklist/low-character-diversity/account-name-derived passwords and current-password reuse; existing credentials are not retroactively invalidated. Sessions are issued after authentication, including enrolled MFA when configured; server retains at most 5 active sessions per user, revoking the session with the earliest expiresAt on overflow. Local retains its existing policy.
 
 Stable verified user IDs select immutable owner runtimes. Legacy data keeps the original directory; others use `DATA_DIR/users/<SHA-256(user UUID)>`. Client-supplied user/owner IDs are not trusted; unauthenticated requests do not fall back to shared data. At most 32 tenant runtimes are supported.
 
 ### Optional mail, OIDC, MFA and Turnstile
 
-Every account feature and authentication itself is off by default. Configure SMTP only with `NOVEL_SMTP_ENABLED=true` and securely injected `NOVEL_SMTP_HOST`, `NOVEL_SMTP_USER`, `NOVEL_SMTP_PASSWORD`, `NOVEL_SMTP_FROM`. Port defaults to 587, or 465 with `NOVEL_SMTP_SECURE=true`. Certificate validation stays enabled; explicitly enabled incomplete configuration fails startup.
+Optional account features remain off by default. Native local authentication defaults off; server requires it enabled before startup. Configure SMTP only with `NOVEL_SMTP_ENABLED=true` and securely injected `NOVEL_SMTP_HOST`, `NOVEL_SMTP_USER`, `NOVEL_SMTP_PASSWORD`, `NOVEL_SMTP_FROM`. Port defaults to 587, or 465 with `NOVEL_SMTP_SECURE=true`. Certificate validation stays enabled; explicitly enabled incomplete configuration fails startup.
 
 Administration → System and security → Account feature configuration groups registration, email verification, recovery and MFA switches and expandable OIDC connection/secret fields. Click Save configuration; editing does not save or enable authentication. Blank secret input preserves the saved secret. Registration creates only a writer after mandatory email confirmation, not an auto-login. Single-use mail tokens expire in 15 minutes; links use `/account/complete#purpose=...&token=...`. Password recovery revokes sessions but retains MFA and does not reveal whether an email exists.
 

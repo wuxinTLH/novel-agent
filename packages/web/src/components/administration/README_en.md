@@ -13,7 +13,7 @@
 
 ## Safety boundaries
 
-Authentication remains disabled by default; initial administrator bootstrap still requires the offline CLI. Online backups require acknowledgement of the brief pause across all tenants and the sensitive material included. Arbitrary paths and backup downloads are not exposed. Verification establishes integrity only; generating a plan never restores data. Restoration and migration require shutdown. Server permissions, CSRF, the global quiescence barrier and job management remain unchanged.
+Native local authentication defaults off; server requires authentication enabled offline before startup; initial administrator bootstrap still requires the offline CLI. Online backups require acknowledgement of the brief pause across all tenants and the sensitive material included. Arbitrary paths and backup downloads are not exposed. Verification establishes integrity only; generating a plan never restores data. Restoration and migration require shutdown. Server permissions, CSRF, the global quiescence barrier and job management remain unchanged.
 
 ## Verification instructions
 

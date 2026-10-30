@@ -41,3 +41,5 @@ Workspace package: `space.syjx.agent.novel.server`. Source lives in `src/`; inst
 New chapter templates keep three creative nodes: planning (`plan`) → writing (`draft`, kind `writer`) → consistency review (`review`, kind `audit`), between system start/end nodes. Worldbuilding and outlining remain available separately. Optional author-added nodes do not change this default.
 
 `maxParallelNodes` accepts integers from 1 to 8; an omitted setting runs serially (1). The generation engine bounds execution to 8 and schedules only dependency-ready nodes; a higher cap does not make a linear graph run in parallel. These are source-level contracts, not a claim of live deployment acceptance.
+
+`CoreModel` accepts only `local` / `server` (unset: local; invalid: fail). Local binds only `127.0.0.1`; server binds `0.0.0.0`, requires offline-enabled auth, hardened/audit, exact HTTPS origin, independent >=32-character keys and gateway off behind a same-origin real TLS proxy. See [deployment modes](../../docs/en/deployment-modes.md).

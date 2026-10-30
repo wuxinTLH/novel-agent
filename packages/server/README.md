@@ -41,3 +41,5 @@
 新建章节模板仍为三个创作节点：章节规划（`plan`）→ 正文生成（`draft`，类型 `writer`）→ 一致性审校（`review`，类型 `audit`），外加系统开始/结束节点。世界观、剧情编排可独立使用；作者按需添加的可选节点不改变默认模板。
 
 `maxParallelNodes` 接受 1–8 的整数，省略时按串行（1）运行。生成引擎将并发上限限制为 8，且仅调度依赖已就绪的节点；提高上限不会让线性图自动并行。这是源码契约说明，不代表已完成线上验收。
+
+`CoreModel` accepts only `local` / `server` (unset: local; invalid: fail). Local binds only `127.0.0.1`; server binds `0.0.0.0`, requires offline-enabled auth, hardened/audit, exact HTTPS origin, independent >=32-character keys and gateway off behind a same-origin real TLS proxy. See [deployment modes](../../docs/deployment-modes.md).

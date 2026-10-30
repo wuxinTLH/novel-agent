@@ -7,6 +7,7 @@ import { acquireDataLock, appRoot } from './core/local-runtime.js';
 import { trustedPublicOrigin } from './core/trusted-origin.js';
 import { readWebHostingOptions } from './core/web-hosting.js';
 import { SecurityAuditLog } from './core/security-audit.js';
+import { readCoreModel, coreModelBindHost, assertCoreModelGateway, assertCoreModelOrigin } from './core/core-model.js';
 import { readSecurityProfile, assertHardenedStartup, configureHttpServer } from './core/security-profile.js';
 import type { IsolatedTenantService } from './core/tenancy/isolated-tenant-application.js';
 import { readLocalGatewayConfig, startLocalGateway, type LocalGateway } from './core/local-gateway.js';
@@ -28,16 +29,22 @@ try {
 }
 const port = Number(process.env.PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT_INVALID');
+const coreModel = readCoreModel(process.env);
+const bindHost = coreModelBindHost(coreModel);
+const securityProfile = readSecurityProfile(process.env);
 const gatewayConfig = readLocalGatewayConfig(process.env, port);
+assertCoreModelGateway(coreModel, gatewayConfig, process.env);
+const publicOrigin = trustedPublicOrigin();
+assertCoreModelOrigin(coreModel, publicOrigin);
 const webHosting = readWebHostingOptions(process.env, appRoot);
 const dir = path.resolve(appRoot, process.env.DATA_DIR || 'data');
 if (fs.existsSync(path.join(dir, '.maintenance-journal.json')))
   throw new Error('MAINTENANCE_RECOVERY_REQUIRED');
+// Read-only preflight must fail before acquiring the lock or creating audit/data files.
+const mode = readAuthMode(dir);
+assertHardenedStartup({ ...securityProfile, authEnabled: mode.enabled, trustedOrigin: publicOrigin, gatewayEnabled: gatewayConfig.enabled, modelKey: process.env.MODEL_SECRETS_KEY, platformKey: process.env.PLATFORM_SECRETS_KEY });
 const releaseDataLock = acquireDataLock(dir);
 process.once('exit', releaseDataLock);
-const mode = readAuthMode(dir);
-const securityProfile = readSecurityProfile(process.env);
-assertHardenedStartup({ ...securityProfile, authEnabled: mode.enabled, trustedOrigin: trustedPublicOrigin(), gatewayEnabled: gatewayConfig.enabled, modelKey: process.env.MODEL_SECRETS_KEY, platformKey: process.env.PLATFORM_SECRETS_KEY });
 const securityAudit = securityProfile.audit ? new SecurityAuditLog(path.join(dir, 'security-audit')) : undefined;
 securityAudit?.write({ event: 'service.starting' });
 const manifest = readStorageManifest(dir);
@@ -47,7 +54,8 @@ const authPersistence = createAuthPersistence(dir);
 const auth = new AuthService({
   dataDir: dir,
   enabled: mode.enabled,
-  secureCookies: !!trustedPublicOrigin(),
+  secureCookies: !!publicOrigin,
+  securityProfile: coreModel,
   persistence: authPersistence,
   emailTransport: createAccountEmailTransport(),
 });
@@ -119,14 +127,6 @@ services.unshift({
         onlineMaintenance,
       }),
     );
-    application.get('/api/services/user', (_req, res) =>
-      res.json({
-        id: 'User',
-        enabled: mode.enabled,
-        authenticationReady: mode.enabled,
-        mode: mode.enabled ? 'verified-user' : 'single-user',
-      }),
-    );
   },
 });
 const tenants = createIsolatedTenantApplication({
@@ -135,6 +135,7 @@ const tenants = createIsolatedTenantApplication({
   appRoot,
   auth,
   services,
+  coreModel,
   enabled: mode.enabled,
   trustedAliasPorts: gatewayConfig.ports,
   ...webHosting,
@@ -150,8 +151,8 @@ let gateway: LocalGateway | undefined;
 let closing = false;
 let exitCode = 0;
 let gatewayStartup: Promise<void> = Promise.resolve();
-const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`Novel Agent API: http://0.0.0.0:${port}`);
+const server = app.listen(port, bindHost, () => {
+  console.log(`Novel Agent API (${coreModel}): http://${bindHost}:${port}`);
   if (closing) return;
   gatewayStartup = (async () => {
     try {

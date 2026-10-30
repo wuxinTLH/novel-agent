@@ -2,12 +2,13 @@
 
 [中文项目入口](../../README.md) · [English project overview](../../README/README_en.md) · [中文 README](../../README/README_zhCN.md)
 
-Use this index for English operational instructions and technical references. English documentation does **not** mean that the whole UI is translated or that external services have passed acceptance. The default product remains a local/trusted-LAN workbench with optional authentication disabled. Commands run from the repository root unless a guide says otherwise.
+Use this index for English operational instructions and technical references. English documentation does **not** mean that the whole UI is translated or that external services have passed acceptance. Native execution defaults to `CoreModel=local`, listening only on `127.0.0.1` with optional authentication off. Server requires auth, hardened/audit and a same-origin real HTTPS proxy, not direct LAN access. Commands run from the repository root unless a guide says otherwise.
 
 ## User and operator guides
 
 | English guide                                                     | Chinese source / coverage                                                                                                                                                                                     |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Deployment modes](deployment-modes.md) | [本机与服务端部署](../deployment-modes.md): exact CoreModel values, listeners, mandatory controls, Docker defaults and container-local limitations. |
 | [User guide](user-guide.md)                                       | [使用手册](../使用手册.md): installation, all authoring routes, workflow/model/node setup, manual TXT chapters, exports/DOCX reading, publication, identity/account features, migration, backup and recovery. |
 | [Fanqie integration](fanqie-integration.md)                       | [番茄平台接入](../番茄平台接入.md): capability matrix, manual login/binding, approved writes, sessions, automation, uncertainty/reconciliation and APIs.                                                      |
 | [Services and tenant boundaries](services.md)                     | [服务说明](../services.md): backend layers, immutable owners, auth, v3 canonical storage, worker/lock limits, documents and maintenance.                                                                      |
