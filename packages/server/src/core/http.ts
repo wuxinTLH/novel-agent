@@ -9,8 +9,9 @@ import type { ServiceContext } from './context.js';
 import { createOriginPolicy } from './trusted-origin.js';
 import { safeUploadReader } from '../features/file-sandbox/safe-read.js';
 import { createRequestLimiter } from './request-limiter.js';
-export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number, aliasPorts: readonly number[] = []) {
-  app.disable('x-powered-by');
+import { installSecurityKernel, type SecurityKernelOptions } from './security-kernel.js';
+export function installHttpPolicy(app: express.Express, context: ServiceContext | undefined, port: number, aliasPorts: readonly number[] = [], securityKernel: SecurityKernelOptions = {}) {
+  installSecurityKernel(app, securityKernel);
   const originAllowed = createOriginPolicy(port, undefined, aliasPorts);
   app.use((req, res, next) => {
     if (!originAllowed(req))
@@ -27,14 +28,6 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext 
           .status(403)
           .json({ error: '操作校验已过期，请刷新页面后重试。', code: 'PLATFORM_CSRF_REQUIRED' });
     }
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'",
-    );
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     next();
   });
   const requestLimiter = createRequestLimiter();
@@ -59,7 +52,7 @@ export function installHttpFallbacks(app: express.Express, root: string, options
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在。', code: 'NOT_FOUND' }));
   installWebHosting(app, root, options);
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    const requestId = randomUUID();
+    const requestId = typeof res.locals.requestId === 'string' ? res.locals.requestId : randomUUID();
     res.setHeader('X-Request-Id', requestId);
     if (err instanceof GenerationError)
       return res.status(err.status).json({

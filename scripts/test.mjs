@@ -11,9 +11,11 @@ function collect(directory) {
   });
 }
 const testFiles = ['shared', 'packages/server/src', 'packages/web/src'].flatMap(collect);
+const concurrency = process.env.TEST_CONCURRENCY ?? '2';
+if (!/^[1-8]$/.test(concurrency)) throw new Error('TEST_CONCURRENCY must be an integer from 1 to 8');
 const result = spawnSync(
   process.execPath,
-  [path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', '--test-concurrency=2', ...testFiles],
+  [path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', `--test-concurrency=${concurrency}`, ...testFiles],
   {
     cwd: root,
     env: { ...process.env, NODE_ENV: 'test' },

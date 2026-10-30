@@ -6,6 +6,7 @@
 
 This is a maintained English summary of unreleased changes, not a translation of every historical release entry. Chinese entries and their original historical evidence remain below. Historical test counts are not refreshed by documentation work; no new real-service acceptance is claimed here.
 
+- **Security-kernel/container increment:** shared HTTP method/target/framing/header checks and server UUIDs; strict `SECURITY_PROFILE=hardened` checks explicit auth, exact HTTPS origin, gateway-off and distinct >=32-character keys, with mandatory bounded local SHA-256-linked audit. Durable admission failure rejects routing; this is not immutable centralized audit or full attributable business logging. Node header/request/keep-alive bounds preserve long SSE responses. Non-root/read-only Compose includes separate data/backup volumes and minimal capabilities; no Chromium. `docker compose config --quiet` passed, but unavailable Docker Engine prevented image build/run. [Bilingual hardening guidance](docs/en/security-hardening.md) records Level 4-target prerequisites/gaps without certification/compliance claims. Single-instance/non-HA and external acceptance limitations remain; release/tag publication is a separate action.
 - **Separate delivery and HTTP hardening:** root `build:web` / `build:server` build independently; default integrated hosting remains. `SERVE_WEB=false` keeps APIs/uploads without HTML/SPA or frontend artifacts; `WEB_DIST_DIR` selects trusted web output relative to the application root or an absolute path. Separate hosting requires same-origin `/api` and `/uploads` proxying with original Host and existing Cookie/Origin/CSRF protections, not cross-origin authorization. Private-prefix DNS names now fail literal-IPv4 checks; uppercase API paths no longer skip business CSRF/no-store. Focused local security regression passed 20/20, not a final full-tree total or external-service guarantee.
 - **Authoring navigation:** the node picker's grid/list/detailed-menu preference persists in same-origin browser storage. `/assets/knowledge` independently hosts structured facts; unsaved replacements/new records/navigation/project changes require discard confirmation, with browser refresh/close warnings rather than autosave.
 - **Chapter throughput and optional composition:** new chapter graphs use planning → prose → consistency review (three ordinary model calls, excluding retries, repairs and custom nodes), preserving saved graphs/prompts. Production branch concurrency is configurable 1–8, default 1; linear dependencies, writer/review barriers and chapter commits remain sequential. Recent-chapter context prioritizes the latest ending, mode mismatches reject before paid calls, and previews expose indirect upstream context. Conflict, twist, climax and foreshadow nodes are optional author-selected presets, never mandatory stages for every chapter.
@@ -20,6 +21,14 @@ This is a maintained English summary of unreleased changes, not a translation of
 **Validation boundaries:** local tests and browser stubs do not establish real paid-provider, platform review, SMTP/OIDC/Turnstile, proxy or vendor-database acceptance. MySQL/SQL Server are simulated-only; historical PostgreSQL v2 success is not v3 proof. The [benchmark report](scripts/benchmark-storage-report.md) retains historical simulated four-permit results (eight owners about 254–261 vs 64–66 ops/s; no SQL/network/disk evidence). Single-instance/trusted-LAN restrictions, partial localization, absent OS-level file isolation and non-atomic cross-database recovery remain explicit. See the [English acceptance record](docs/en/acceptance-checklist.md).
 
 ## 未发布
+
+### 服务内核、严格策略与容器最小权限
+
+- 共享 HTTP 内核统一入口 / 租户响应头、方法 / 路径 / framing / 声明长度预检与服务端 UUID；原始 HTTP 仍可能被 Node 更早拒绝。Node 头部 15 秒、请求接收 120 秒、keep-alive 5 秒、最多 100 头 / socket 1000 请求，不以短绝对响应时限中断长 SSE。
+- `SECURITY_PROFILE=hardened` 显式检查认证、精确 HTTPS origin、网关关闭、两个不同且各至少 32 字符的秘密，并强制审计；默认 standard 不变，检查不是代理 TLS、密钥熵、MFA 或合规证明。
+- 可选安全审计记录请求元数据，8 MiB 当前段 + 8 轮转段，SHA-256 前链及序号；准入持久化失败拒绝业务。仅启动校验当前段，主机管理员可重写 / 删除；无用户身份 / 原始 URL / 请求体，不是完整业务审计、远程不可抵赖或不可篡改集中审计。
+- Docker 多阶段生产镜像使用非 root Node 22；Compose 只读根、独立数据 / 备份卷、tmpfs、drop ALL、no-new-privileges 与资源上限，默认仅发布主机回环、standard + 审计，认证仍需离线引导。镜像不含 Chromium，不支持默认远程容器首次番茄交互登录。Compose 静态校验通过；Docker Engine 不可用，未验证镜像构建 / 运行。
+- 新增[中文安全加固与等保四级目标差距](docs/security-hardening.md)及[英文指南](docs/en/security-hardening.md)，明确 OS / 网络、国密 / HSM、集中防篡改审计、双人控制、测评等前置条件；不作等级或认证声明，不改变单实例 / 非 HA 限制。发布 / 标签状态由实际发布动作确认。
 
 ### 独立 Web 交付、知识页与 HTTP 边界
 

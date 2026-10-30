@@ -40,6 +40,12 @@ The gateway binds only to `127.0.0.1`, permits only an HTTP loopback target, and
 
 Aliases are entrances to the same application, not separate users or data instances. Cookies on the same host are shared across ports. Use real logout/login to switch authenticated users; focus/visibility revalidation checks server identity and clears/reloads stale UI only when identity changes, preserving drafts for unchanged sessions. Run `npm run build` then `npm run smoke:auth` for disposable identity tests; do not change authentication on a real data directory.
 
+## Hardening and container delivery
+
+The [hardening and Level 4 MLPS gap guide](../docs/en/security-hardening.md) ([中文](../docs/security-hardening.md)) distinguishes application controls from OS/network, Chinese cryptography/HSM, centralized tamper-resistant audit, dual control and assessment prerequisites. **There is no Level 4 compliance or certification claim.** Shared HTTP defenses, bounded audit chaining and limited `SECURITY_PROFILE=hardened` startup checks do not change single-instance/non-HA restrictions; authentication remains off by default.
+
+The [Dockerfile](../Dockerfile) and [Compose example](../compose.yaml) provide non-root/read-only/minimal-capability settings with separate data/backup volumes. Defaults publish only on host loopback, use standard mode with audit enabled, and do not activate authentication. Follow the guide's offline compiled-CLI bootstrap, then configure HTTPS origin/independent keys before hardened mode. No Chromium is included, so first interactive Fanqie login is unsupported in the default remote container. Compose static validation passed, but Docker Engine was unavailable: image build/run were not verified. GitHub prerelease publication is not production or compliance acceptance.
+
 ## Documentation
 
 Use the [English documentation index](../docs/en/README.md) for all guides, package/component references and historical reports. Chinese-first guides now have maintained English counterparts; already-English technical references are kept canonical rather than duplicated:

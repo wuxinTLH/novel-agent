@@ -11,6 +11,7 @@ import { readAuthMode } from '../../infrastructure/storage/storage-config.js';
 import { mainPlatformAccountLockCoordinator } from './platform-account-lock.js';
 import { createOriginPolicy } from '../trusted-origin.js';
 import { createRequestLimiter } from '../request-limiter.js';
+import { installSecurityKernel, type SecurityKernelOptions } from '../security-kernel.js';
 
 export interface IsolatedTenantService {
   register(app: express.Express): void;
@@ -26,6 +27,7 @@ export interface IsolatedTenantApplicationOptions extends WebHostingOptions {
   waitForControlPlaneIdle?: () => Promise<void>;
   /** Explicit local alias ports allowed by the loopback gateway. */
   trustedAliasPorts?: readonly number[];
+  securityKernel?: SecurityKernelOptions;
 }
 export interface TenantRuntime {
   readonly dir: string;
@@ -43,6 +45,7 @@ const unavailable = () =>
 /** Control plane never constructs a business Store/Runner or performs synchronous SQL. */
 export function createIsolatedTenantApplication(options: IsolatedTenantApplicationOptions) {
   const app = express();
+  installSecurityKernel(app, options.securityKernel);
   const contexts = new Map<string, TenantRuntime>();
   const capabilities = new Map<TenantRuntime, string>();
   const csrfTokens = new Map<TenantRuntime, string>();
@@ -73,14 +76,6 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     const localExtension = !options.enabled && /^\/api\/platform-extension(?:\/|$)/i.test(req.path) && req.get('host') === `127.0.0.1:${options.port}` && /^chrome-extension:\/\/[a-p]{32}$/.test(req.get('origin') || '') && !req.get('cookie');
     if (!localExtension && !originAllowed(req, oidcCallback))
       return res.status(403).json({ code: 'LOCAL_ORIGIN_REJECTED', error: '只允许本机或局域网来源访问。' });
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'",
-    );
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     if (req.path.toLowerCase().startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
       const quota = limiter.check(req.ip || 'local');
@@ -278,7 +273,9 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
         const upstream = http.request(
           { host: '127.0.0.1', port, method: req.method, path: req.originalUrl, headers, agent: false },
           (incoming) => {
-            res.writeHead(incoming.statusCode || 502, incoming.headers);
+            // The outer boundary owns the public correlation ID; workers generate
+            // their own private IDs and must not overwrite the audited outer ID.
+            res.writeHead(incoming.statusCode || 502, { ...incoming.headers, 'x-request-id': String(res.locals.requestId) });
             incoming.on('error', () => {
               if (!res.destroyed && !closing) poison.get(entry)?.();
               res.destroy();

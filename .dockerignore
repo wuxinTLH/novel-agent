@@ -1,0 +1,16 @@
+node_modules
+.git
+.github
+.env
+.env.*
+!.env.example
+data
+build
+dist
+.tmp*
+*.log
+*.zip
+*.tar
+*.tgz
+coverage
+test.jpg

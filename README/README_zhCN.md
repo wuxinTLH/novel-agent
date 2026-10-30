@@ -40,6 +40,12 @@ npm start
 
 不同端口是同一应用入口，同一 host 的 Cookie 跨端口共享，不能作为多用户隔离。启用认证后用退出/登录切换账号；页面获得焦点或恢复可见时查询服务端身份，变化时清缓存并刷新，未变时保留草稿。隔离测试：先 `npm run build`，再 `npm run smoke:auth`；不要改变真实数据目录的认证模式。
 
+## 安全加固与容器交付
+
+新增[安全加固与等保四级目标差距](../docs/security-hardening.md)（[English](../docs/en/security-hardening.md)）：区分应用可实施控制与 OS / 网络 / 国密和 HSM / 集中防篡改审计 / 双人控制 / 测评前置条件，**不声明已达等保四级或通过认证**。共享 HTTP 边界、有界审计链、`SECURITY_PROFILE=hardened` 有限启动检查不改变单实例、非 HA 的边界；默认认证仍关闭。
+
+[Dockerfile](../Dockerfile) 与 [Compose](../compose.yaml) 提供非 root、只读根、最小能力及独立数据 / 备份卷示例；默认只发布主机回环端口，standard 模式开启审计，不自动启用认证。须先按指南用编译后 CLI 离线引导认证，再配置 HTTPS origin / 独立密钥并开启 hardened。镜像不含 Chromium，不支持默认远程容器首次番茄交互登录。本轮 Compose 静态校验通过，但 Docker Engine 不可用，未实际构建 / 运行镜像；GitHub 预发布不等于生产或合规验收。
+
 ## 使用手册
 
 [English documentation index / 英文文档导航](../docs/en/README.md)：完整英文指南、模块说明、共享契约与历史报告；不代表界面或外部服务已完成全英文 / 在线验收。

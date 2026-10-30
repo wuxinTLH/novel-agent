@@ -1,0 +1,38 @@
+services:
+  novel-agent:
+    build: .
+    image: novel-agent:local
+    init: true
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /app/data
+      SECURITY_PROFILE: ${SECURITY_PROFILE:-standard}
+      SECURITY_AUDIT: "true"
+      NOVEL_TRUSTED_PUBLIC_ORIGIN: ${NOVEL_TRUSTED_PUBLIC_ORIGIN:-}
+      MODEL_SECRETS_KEY: ${MODEL_SECRETS_KEY:-}
+      PLATFORM_SECRETS_KEY: ${PLATFORM_SECRETS_KEY:-}
+    volumes:
+      - novel-data:/app/data
+      - novel-backups:/app/.data-managed-backups
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=1770
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    stop_grace_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  novel-data:
+  novel-backups:

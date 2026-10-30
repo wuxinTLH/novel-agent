@@ -6,6 +6,8 @@ import { createIsolatedTenantApplication } from './core/tenancy/isolated-tenant-
 import { acquireDataLock, appRoot } from './core/local-runtime.js';
 import { trustedPublicOrigin } from './core/trusted-origin.js';
 import { readWebHostingOptions } from './core/web-hosting.js';
+import { SecurityAuditLog } from './core/security-audit.js';
+import { readSecurityProfile, assertHardenedStartup, configureHttpServer } from './core/security-profile.js';
 import type { IsolatedTenantService } from './core/tenancy/isolated-tenant-application.js';
 import { readLocalGatewayConfig, startLocalGateway, type LocalGateway } from './core/local-gateway.js';
 import { SQLConnectService, createSQLconnectRouter } from './infrastructure/database/sqlconnect.js';
@@ -34,6 +36,10 @@ if (fs.existsSync(path.join(dir, '.maintenance-journal.json')))
 const releaseDataLock = acquireDataLock(dir);
 process.once('exit', releaseDataLock);
 const mode = readAuthMode(dir);
+const securityProfile = readSecurityProfile(process.env);
+assertHardenedStartup({ ...securityProfile, authEnabled: mode.enabled, trustedOrigin: trustedPublicOrigin(), gatewayEnabled: gatewayConfig.enabled, modelKey: process.env.MODEL_SECRETS_KEY, platformKey: process.env.PLATFORM_SECRETS_KEY });
+const securityAudit = securityProfile.audit ? new SecurityAuditLog(path.join(dir, 'security-audit')) : undefined;
+securityAudit?.write({ event: 'service.starting' });
 const manifest = readStorageManifest(dir);
 if (mode.enabled && manifest && mode.legacyOwnerId !== manifest.ownerId)
   throw new Error('SQL_AUTH_OWNER_MISMATCH');
@@ -132,6 +138,7 @@ const tenants = createIsolatedTenantApplication({
   enabled: mode.enabled,
   trustedAliasPorts: gatewayConfig.ports,
   ...webHosting,
+  securityKernel: { audit: securityAudit ? event => securityAudit.write(event) : undefined },
   waitForControlPlaneIdle: async () => {
     await auth.waitForIdle();
     await sqlconnect.waitForIdle();
@@ -158,6 +165,7 @@ const server = app.listen(port, '0.0.0.0', () => {
     }
   })();
 });
+configureHttpServer(server);
 async function shutdown() {
   if (closing) return;
   closing = true;
