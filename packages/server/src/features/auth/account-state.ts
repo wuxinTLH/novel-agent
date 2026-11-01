@@ -34,6 +34,8 @@ export const accountStateSchema = z.object({
         userId: z.string().uuid(),
         email: z.string().email().max(254).optional(),
         verified: z.boolean().default(false),
+        phone: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(),
+        phoneVerified: z.boolean().default(false),
         encryptedTotp: z.string().max(4096).optional(),
         lastCounter: z.number().int().default(-1),
         recoveryHashes: z.array(z.string().length(64)).max(20).default([]),
@@ -47,7 +49,7 @@ export const accountStateSchema = z.object({
     .array(
       z.object({
         hash: z.string().length(64),
-        kind: z.enum(['register', 'email', 'reset', 'mfa', 'setup', 'oidc']),
+        kind: z.enum(['register', 'email', 'reset', 'mfa', 'setup', 'oidc', 'sms-login', 'sms-register', 'sms-proof', 'sms-phone', 'sms-cooldown']),
         expires: z.number(),
         userId: z.string().optional(),
         payload: z.record(z.string(), z.string()).default({}),

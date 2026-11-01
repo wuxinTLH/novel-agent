@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Pin this tag to an independently verified digest in your deployment pipeline.
-FROM node:22-bookworm-slim AS build
+FROM node:22.23.4-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/server/package.json packages/server/package.json
@@ -13,7 +13,10 @@ COPY scripts ./scripts
 COPY public ./public
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.23.4-bookworm-slim AS runtime
+LABEL org.opencontainers.image.title="Novel Agent" \
+      org.opencontainers.image.version="0.0.3a" \
+      org.opencontainers.image.source="https://github.com/wuxinTLH/novel-agent"
 # Only these deployment modes are supported. local binds container loopback only.
 ARG CoreModel=server
 RUN case "$CoreModel" in local|server) ;; *) echo "CoreModel must be local or server" >&2; exit 1 ;; esac

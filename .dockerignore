@@ -14,3 +14,8 @@ dist
 *.tgz
 coverage
 test.jpg
+.cache
+test-results
+.dsh
+playwright-report
+blob-report

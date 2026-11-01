@@ -2,11 +2,13 @@
 
 语言 / Language：[简体中文（默认）](README_zhCN.md) · [English](README_en.md)
 
-默认面向本机的小说创作工作台，部署模式预发布 `v0.0.2-a.2`。支持多作品、多工作流、世界观编写、章节创作、资料管理、模型库、主题和数据保存；默认仍为免登录单用户，可通过本地管理 CLI 显式启用认证与租户隔离。不是面向公网的生产部署方案。
+默认面向本机的小说创作工作台，部署模式预发布 `v0.0.3a`。支持多作品、多工作流、世界观编写、章节创作、资料管理、模型库、主题和数据保存；默认仍为免登录单用户，可通过本地管理 CLI 显式启用认证与租户隔离。不是面向公网的生产部署方案。
+
+标签为 `v0.0.3a`，npm/package SemVer 为 `0.0.3-a`；见[双语发布说明](../RELEASE_NOTES.md)。发布资产尚未最终决定，构建成功后优先源码 + 编译产物，不预先声明构建或外部服务验收通过。项目 Skills 见[代理能力指南](../docs/agent-capabilities.md)；可选 Playwright MCP 配置 bundle **未安装、未运行，也不是应用依赖**。
 
 ## 快速开始
 
-需要 Node.js 22.16 及以上版本。
+需要已修复安全漏洞的 Node.js **22.23.4+（22.x）或 24.22.2+（24.x）**，推荐 24.22.2（见 `.node-version` / `.nvmrc`）。旧补丁版本及其他主版本不在支持范围；升级后须重启服务。详见 [Node.js 安全基线](../docs/node-security.md)。
 
 ```powershell
 npm ci
@@ -23,7 +25,7 @@ npm run build
 npm start
 ```
 
-生产界面默认是 `http://127.0.0.1:3001`。`CoreModel` 仅接受 local/server，未设置默认 local，非法值启动失败；local 仅监听 `127.0.0.1`，不能 LAN 直连。server 监听 `0.0.0.0`，必须先离线启用认证，强制 hardened / 审计，并仅通过同源真实 HTTPS 代理访问。见[部署模式](../docs/deployment-modes.md)。
+生产界面默认是 `http://127.0.0.1:3001`。`CoreModel` 仅接受 local/server，未设置默认 local，非法值启动失败；local 仅监听 `127.0.0.1`，不能 LAN 直连。server 监听 `0.0.0.0`，必须先离线启用认证，强制 hardened / 审计，并仅通过同源真实 HTTPS 代理访问。见[部署模式](../docs/deployment-modes.md)、[安全加固及等保目标差距](../docs/security-hardening.md)及[认证模块](../packages/server/src/features/auth/README.md)。server 启动前须配置短信供应商；注册须先验证手机号、每次密码登录须绑定手机短信二次校验，配置 Turnstile 时须对注册、登录及短信发放作服务端校验。access 60 分钟，轮换 refresh 7 天与持久空闲上限 30 天（离线 8 天不可刷新），未绑定账号拒绝登录；本机默认行为不变。客户端只对符合条件的读取刷新会话，不自动重放写操作；真实供应商投递与部署仍待独立验收。
 
 两端可独立构建：`npm run build:web` 输出前端，`npm run build:server` 输出后端及 Worker / SQL 资源。`SERVE_WEB` 默认 `true`；设为 `false` 后后端不需要前端产物，也不提供 HTML / 主题 / SPA fallback。保持托管时，`WEB_DIST_DIR` 可指定可信静态构建目录（默认应用根目录的 `dist`，相对路径也以应用根目录解析）。独立静态服务器须将 `/api` 与 `/uploads` 同源反代到同一个后端，不开放跨源业务 CORS，不取消 Cookie / 来源 / CSRF 校验；HTTPS 须显式配置可信 origin。详见[独立部署指南](../docs/使用手册.md#前后端独立构建与同源部署)。
 

@@ -2,11 +2,11 @@
 
 [中文原文](../使用手册.md) · [English documentation index](README.md) · [English overview](../../README/README_en.md)
 
-This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Deployment-mode prerelease v0.0.2-a.2 defaults to local-only use, authentication off; server requires offline-enabled authentication and hardened/audit checks. Do not expose the default service to the public Internet.
+This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Deployment-mode prerelease v0.0.3a defaults to local-only use, authentication off; server requires offline-enabled authentication and hardened/audit checks. Do not expose the default service to the public Internet.
 
 ## Install and start
 
-Use Node.js 22.16 or newer. Run from the repository root:
+Use Node.js `^22.23.4 || ^24.22.2` (24.22.2 recommended); older patches and other majors are unsupported. Restart actual services after upgrading. Docker uses Node 22.23.4; see the [security baseline](../node-security.md). Run from the repository root:
 
 ```powershell
 npm ci

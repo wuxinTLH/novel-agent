@@ -46,6 +46,12 @@ async function start(CoreModel, data) {
     NOVEL_TRUSTED_PUBLIC_ORIGIN: 'https://novel.example',
     MODEL_SECRETS_KEY: 'smoke-only-model-key-0123456789abcdef',
     PLATFORM_SECRETS_KEY: 'smoke-only-platform-key-0123456789abcdef',
+    // Startup validates the transport, but this anonymous smoke never sends SMS.
+    NOVEL_SMS_PROVIDER: 'aliyun',
+    NOVEL_SMS_ALIYUN_ACCESS_KEY_ID: 'smoke-only-id',
+    NOVEL_SMS_ALIYUN_ACCESS_KEY_SECRET: 'smoke-only-secret',
+    NOVEL_SMS_ALIYUN_SIGN_NAME: 'SmokeOnly',
+    NOVEL_SMS_ALIYUN_TEMPLATE_CODE: 'SMS_123456',
   });
   let output = '';
   child = spawn(process.execPath, [path.join(temporary, 'build/packages/server/src/index.js')], { cwd: temporary, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -82,7 +88,7 @@ try {
   const data = path.join(temporary, 'server-data');
   const { runAdmin, parseAdminArguments } = await import(pathToFileURL(path.join(temporary, 'build/packages/server/src/features/administration/admin.js')).href);
   const args = (command, ...rest) => parseAdminArguments([command, '--data-dir', data, '--confirm', ...rest]);
-  await runAdmin(args('bootstrap-admin', '--username', 'smokeadmin'), { CoreModel: 'server', NOVEL_BOOTSTRAP_PASSWORD: 'Orbit!Quartz-Amber-9716' });
+  await runAdmin(args('bootstrap-admin', '--username', 'smokeadmin', '--phone', '+60198890000'), { CoreModel: 'server', NOVEL_BOOTSTRAP_PASSWORD: 'Orbit!Quartz-Amber-9716' });
   await runAdmin(args('enable-auth', '--no-legacy'), { CoreModel: 'server' });
   const server = await start('server', data);
   const denied = await request(`${server.base}/api/projects`, server.headers);

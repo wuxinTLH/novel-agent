@@ -13,8 +13,9 @@ import {
 } from 'node:crypto';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
-import { accountStateSchema, type AccountEmailTransport } from './account-state.js';
+import { accountStateSchema, emptyAccountState, type AccountEmailTransport } from './account-state.js';
 import { AccountExtension } from './account.js';
+import type { SmsTransport } from './sms-provider.js';
 import { validPassword, type AuthSecurityProfile } from './password-policy.js';
 import type {
   AuthUser,
@@ -50,6 +51,15 @@ const sessionSchema = z.object({
   csrfToken: z.string().regex(/^[a-f0-9]{64}$/),
   expiresAt: z.number().finite(),
 });
+const refreshFamilySchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{32}$/),
+  userId: z.string().uuid(),
+  tokenHash: z.string().regex(/^[a-f0-9]{64}$/),
+  sessionHash: z.string().regex(/^[a-f0-9]{64}$/),
+  issuedAt: z.number().finite(),
+  lastActiveAt: z.number().finite(),
+  expiresAt: z.number().finite(),
+});
 const turnstileSchema = z.object({
   enabled: z.boolean(),
   siteKey: z.string().max(256),
@@ -61,6 +71,8 @@ const documentSchema = z.object({
   version: z.literal(1),
   users: z.array(userSchema).max(10000),
   sessions: z.array(sessionSchema).max(20000),
+  /** Absent in legacy persisted documents; all credentials remain server-side hashes. */
+  refreshFamilies: z.array(refreshFamilySchema).max(20000).optional(),
   turnstile: turnstileSchema,
   account: accountStateSchema.optional(),
 });
@@ -85,6 +97,8 @@ export interface AuthServiceOptions {
   sessionTtlMs?: number;
   /** Owner-provided delivery transport; required before enabling email features. */
   emailTransport?: AccountEmailTransport;
+  /** Owner-provided SMS transport, required for server-profile login. */
+  smsTransport?: SmsTransport;
 }
 export class AuthError extends Error {
   constructor(
@@ -201,7 +215,11 @@ function cookie(req: Request, name: string): string {
   return entries.length === 1 ? entries[0].slice(name.length + 1) : '';
 }
 const SESSION_COOKIE = 'novel_session';
+const REFRESH_COOKIE = 'novel_refresh';
 const PREFLIGHT_COOKIE = 'novel_prelogin';
+const ACCESS_TTL = 60 * 60000;
+const REFRESH_TTL = 7 * 86400000;
+const REFRESH_IDLE_CUTOFF = 30 * 86400000;
 
 /** Authentication is default-off and immutable for the lifetime of this process. */
 export class AuthService {
@@ -228,7 +246,7 @@ export class AuthService {
     this.clock = options.now ?? Date.now;
     this.fetcher = options.fetch ?? fetch;
     this.secure = options.secureCookies ?? false;
-    this.ttl = options.sessionTtlMs ?? 12 * 60 * 60 * 1000;
+    this.ttl = options.securityProfile === 'server' ? ACCESS_TTL : options.sessionTtlMs ?? 12 * 60 * 60 * 1000;
     if (!Number.isSafeInteger(this.ttl) || this.ttl < 1000 || this.ttl > 30 * 86400000)
       fail(400, 'AUTH_TTL_INVALID');
     this.persistence = options.persistence ?? localPersistence(options.dataDir);
@@ -247,7 +265,12 @@ export class AuthService {
       if (
         ids.size !== this.state.users.length ||
         new Set(this.state.users.map((u) => u.username)).size !== this.state.users.length ||
-        this.state.sessions.some((s) => !ids.has(s.userId))
+        this.state.sessions.some((s) => !ids.has(s.userId)) ||
+        (this.state.refreshFamilies ?? []).some((f) => !ids.has(f.userId)) ||
+        new Set((this.state.refreshFamilies ?? []).map((f) => f.id)).size !==
+          (this.state.refreshFamilies ?? []).length ||
+        new Set((this.state.refreshFamilies ?? []).map((f) => f.tokenHash)).size !==
+          (this.state.refreshFamilies ?? []).length
       )
         throw new Error('invalid identity');
       if (this.state.turnstile.encryptedSecret) this.decrypt(this.state.turnstile.encryptedSecret);
@@ -275,6 +298,16 @@ export class AuthService {
     this.initialized = true;
   }
   private save(next: AuthDocument) {
+    // Password, role and disable transitions invalidate both access and refresh atomically.
+    const changedUsers = new Set(this.state.users.filter((old) => {
+      const current = next.users.find((u) => u.id === old.id);
+      return !current || current.disabled !== old.disabled ||
+        current.role !== old.role || current.passwordHash !== old.passwordHash;
+    }).map((u) => u.id));
+    if (changedUsers.size) next = { ...next,
+      refreshFamilies: (next.refreshFamilies ?? this.state.refreshFamilies ?? [])
+        .filter((f) => !changedUsers.has(f.userId)),
+    };
     if (next.account) {
       const changed = new Set(
         this.state.users
@@ -338,6 +371,10 @@ export class AuthService {
     const token = cookie(req, SESSION_COOKIE);
     if (!/^[a-f0-9]{64}$/.test(token)) return null;
     const saved = this.state.sessions.find((s) => s.tokenHash === hash(token) && s.expiresAt > this.clock());
+    if (saved && this.options.securityProfile === 'server' &&
+      !(this.state.refreshFamilies ?? []).some((f) => f.userId === saved.userId &&
+        f.sessionHash === saved.tokenHash && f.expiresAt > this.clock() &&
+        f.lastActiveAt + REFRESH_IDLE_CUTOFF > this.clock())) return null;
     const user = saved && this.state.users.find((u) => u.id === saved.userId && !u.disabled);
     return saved && user
       ? {
@@ -354,13 +391,19 @@ export class AuthService {
   status(req?: Request): AuthStatus {
     const session = req ? this.session(req) : null;
     const { enabled, siteKey, action, hostname } = this.state.turnstile;
+    const refresh = req && this.options.securityProfile === 'server' ? this.refreshIdentity(req) : null;
+    const family = refresh && (this.state.refreshFamilies ?? []).find((f) => f.id === refresh.id &&
+      equal(f.tokenHash, refresh.tokenHash) && f.expiresAt > this.clock() &&
+      f.lastActiveAt + REFRESH_IDLE_CUTOFF > this.clock() &&
+      this.state.users.some((u) => u.id === f.userId && !u.disabled));
     return {
       enabled: this.enabled,
       authenticated: !!session,
+      refreshAvailable: !session && !!family,
       user: session?.user ?? null,
       ...(session ? { csrfToken: session.csrfToken } : {}),
       turnstile: { enabled, siteKey, action, hostname },
-    };
+    } as AuthStatus & { refreshAvailable: boolean };
   }
   private sameOrigin(req: Request): boolean {
     const origin = req.get('origin');
@@ -395,34 +438,72 @@ export class AuthService {
     }
     return result;
   }
+  private refreshIdentity(req: Request) {
+    const raw = cookie(req, REFRESH_COOKIE);
+    const [id, secret, extra] = raw.split('.');
+    return !extra && /^[a-f0-9]{32}$/.test(id ?? '') && /^[a-f0-9]{64}$/.test(secret ?? '')
+      ? { id, tokenHash: hash(raw) } : null;
+  }
+  /** Clear the browser credentials only after the revocation has committed to persistence. */
+  private invalidateBrowserCredentials(req: Request, res: Response, next: AuthDocument = this.state) {
+    const oldAccess = hash(cookie(req, SESSION_COOKIE));
+    const refresh = this.refreshIdentity(req);
+    this.save({ ...next,
+      sessions: next.sessions.filter((s) => s.tokenHash !== oldAccess),
+      refreshFamilies: (next.refreshFamilies ?? this.state.refreshFamilies ?? [])
+        .filter((f) => f.id !== refresh?.id && f.sessionHash !== oldAccess),
+    });
+    this.setCookie(res, SESSION_COOKIE, '', 0);
+    if (this.options.securityProfile === 'server') this.setCookie(res, REFRESH_COOKIE, '', 0);
+  }
+  /** Revokes every credential belonging to a user; owner/account security transitions only. */
+  private invalidateUserCredentials(userId: string, res?: Response, next: AuthDocument = this.state) {
+    this.save({ ...next,
+      sessions: next.sessions.filter((s) => s.userId !== userId),
+      refreshFamilies: (next.refreshFamilies ?? this.state.refreshFamilies ?? []).filter((f) => f.userId !== userId),
+    });
+    if (res) {
+      this.setCookie(res, SESSION_COOKIE, '', 0);
+      if (this.options.securityProfile === 'server') this.setCookie(res, REFRESH_COOKIE, '', 0);
+    }
+  }
   private issueSession(req: Request, res: Response, id: string) {
     const user = this.state.users.find((u) => u.id === id && !u.disabled);
     if (!user) return fail(401, 'AUTH_LOGIN_FAILED');
+    const now = this.clock();
     const token = randomBytes(32).toString('hex'),
       csrfToken = randomBytes(32).toString('hex'),
-      expiresAt = this.clock() + this.ttl;
+      expiresAt = now + this.ttl;
     const oldHash = hash(cookie(req, SESSION_COOKIE));
-    let active = this.state.sessions.filter((s) => s.expiresAt > this.clock() && s.tokenHash !== oldHash);
+    const oldRefresh = this.refreshIdentity(req);
+    let active = this.state.sessions.filter((s) => s.expiresAt > now && s.tokenHash !== oldHash);
+    let refreshFamilies = (this.state.refreshFamilies ?? []).filter((f) =>
+      f.expiresAt > now && f.lastActiveAt + REFRESH_IDLE_CUTOFF > now &&
+      f.id !== oldRefresh?.id && f.sessionHash !== oldHash);
+    let refreshCookie = '';
     if (this.options.securityProfile === 'server') {
-      // Evict only after complete authentication (including any enrolled MFA).
-      const oldest = active.filter((s) => s.userId === id).sort((a, b) => a.expiresAt - b.expiresAt);
-      const evicted = new Set(oldest.slice(0, Math.max(0, oldest.length - 4)));
-      active = active.filter((s) => !evicted.has(s));
+      // Limit complete browser login families, not short-lived access tokens.
+      const oldest = refreshFamilies.filter((f) => f.userId === id)
+        .sort((a, b) => a.issuedAt - b.issuedAt || a.id.localeCompare(b.id));
+      const evicted = new Set(oldest.slice(0, Math.max(0, oldest.length - 4)).map((f) => f.id));
+      active = active.filter((s) => !evicted.has(refreshFamilies.find((f) => f.sessionHash === s.tokenHash)?.id ?? ''));
+      refreshFamilies = refreshFamilies.filter((f) => !evicted.has(f.id));
+      const familyId = randomBytes(16).toString('hex');
+      refreshCookie = `${familyId}.${randomBytes(32).toString('hex')}`;
+      refreshFamilies.push({ id: familyId, userId: id, tokenHash: hash(refreshCookie),
+        sessionHash: hash(token), issuedAt: now, lastActiveAt: now, expiresAt: now + REFRESH_TTL });
     }
-    if (active.length >= 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
-    this.save({
-      ...this.state,
+    if (active.length >= 20000 || refreshFamilies.length > 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
+    this.save({ ...this.state, refreshFamilies,
       sessions: [...active, { tokenHash: hash(token), userId: id, csrfToken, expiresAt }],
     });
     this.setCookie(res, SESSION_COOKIE, token, this.ttl);
+    if (this.options.securityProfile === 'server') this.setCookie(res, REFRESH_COOKIE, refreshCookie, REFRESH_TTL);
     this.setCookie(res, PREFLIGHT_COOKIE, '', 0);
     if (req.path === '/account/oidc/callback' && req.get('accept')?.includes('text/html'))
       return res.redirect(303, '/account/complete?oidc=success');
-    return res.json({
-      user: publicUser(user),
-      csrfToken,
-      expiresAt: new Date(expiresAt).toISOString(),
-    } satisfies AuthSession);
+    return res.json({ user: publicUser(user), csrfToken,
+      expiresAt: new Date(expiresAt).toISOString() } satisfies AuthSession);
   }
   private prelogin(req: Request): boolean {
     const value = cookie(req, PREFLIGHT_COOKIE),
@@ -440,12 +521,23 @@ export class AuthService {
     const expected = createHmac('sha256', this.key).update(`${nonce}.${expiry}`).digest('hex');
     return this.sameOrigin(req) && equal(expected, signature) && equal(nonce, token);
   }
+  private rateBucket(key: string, limit: number) {
+    const now = this.clock();
+    for (const [key, value] of this.attempts) if (value.until <= now) this.attempts.delete(key);
+    if (this.attempts.size > 10000) fail(429, 'AUTH_RATE_LIMITED');
+    const entry = this.attempts.get(key) ?? { count: 0, until: now + 15 * 60000 };
+    if (entry.count >= limit) fail(429, 'AUTH_RATE_LIMITED');
+    this.attempts.set(key, { ...entry, count: entry.count + 1 });
+  }
   private rateLimit(ip: string, name: string) {
     const now = this.clock();
     for (const [key, value] of this.attempts) if (value.until <= now) this.attempts.delete(key);
     if (this.attempts.size > 10000) fail(429, 'AUTH_RATE_LIMITED');
+    // Server traffic arrives through one trusted proxy socket, not one socket per user.
+    // Keep the per-username brute-force bound while allowing bounded shared ingress.
     const keys = [`ip:${ip}`, `user:${name}`];
-    if (keys.some((key) => (this.attempts.get(key)?.count ?? 0) >= 10)) fail(429, 'AUTH_RATE_LIMITED');
+    if (keys.some((key, index) => (this.attempts.get(key)?.count ?? 0) >=
+      (index === 0 && this.options.securityProfile === 'server' ? 300 : 10))) fail(429, 'AUTH_RATE_LIMITED');
     for (const key of keys) {
       const entry = this.attempts.get(key) ?? { count: 0, until: now + 15 * 60000 };
       entry.count++;
@@ -479,9 +571,12 @@ export class AuthService {
     }
   }
   /** Local CLI only: intentionally not exposed through any router endpoint. */
-  bootstrapSuperadmin(name: string, rawPassword: string): AuthUser {
+  bootstrapSuperadmin(name: string, rawPassword: string, phone?: string): AuthUser {
     if (!this.enabled) return fail(409, 'AUTH_DISABLED');
     if (this.state.users.some((u) => u.role === 'superadmin')) return fail(409, 'AUTH_ALREADY_BOOTSTRAPPED');
+    if (phone !== undefined && !/^\+[1-9]\d{7,14}$/.test(phone)) return fail(400, 'AUTH_PHONE_INVALID');
+    if (phone && this.state.account?.profiles.some((p) => p.phone === phone && p.phoneVerified))
+      return fail(409, 'AUTH_PHONE_IN_USE');
     const normalized = username(name),
       value = this.newPassword(rawPassword, normalized),
       salt = randomBytes(16).toString('hex');
@@ -494,8 +589,35 @@ export class AuthService {
       createdAt: new Date(this.clock()).toISOString(),
       passwordHash: `scrypt$${salt}$${scryptSync(value, salt, 64).toString('hex')}`,
     };
-    this.save({ ...this.state, users: [...this.state.users, user] });
+    const account = phone !== undefined ? this.state.account ?? emptyAccountState() : undefined;
+    this.save({ ...this.state, users: [...this.state.users, user],
+      ...(account && phone ? { account: { ...account, profiles: [
+        ...account.profiles, { userId: user.id, verified: false, phone, phoneVerified: true,
+          lastCounter: -1, recoveryHashes: [] },
+      ] } } : {}),
+    });
     return publicUser(user);
+  }
+  /** Offline owner CLI only; never exposed through an HTTP router. */
+  provisionVerifiedPhone(name: string, phone: string): void {
+    if (!this.enabled) return fail(409, 'AUTH_DISABLED');
+    const normalized = username(name);
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) return fail(400, 'AUTH_PHONE_INVALID');
+    const user = this.state.users.find((u) => u.username === normalized);
+    if (!user) return fail(404, 'AUTH_USER_NOT_FOUND');
+    const account = this.state.account ?? emptyAccountState();
+    if (account.profiles.some((p) => p.userId !== user.id && p.phone === phone && p.phoneVerified))
+      return fail(409, 'AUTH_PHONE_IN_USE');
+    const old = account.profiles.find((p) => p.userId === user.id);
+    if (old?.phone === phone && old.phoneVerified) return;
+    const profile = { ...old, userId: user.id, verified: old?.verified ?? false,
+      lastCounter: old?.lastCounter ?? -1, recoveryHashes: old?.recoveryHashes ?? [],
+      phone, phoneVerified: true };
+    this.save({ ...this.state,
+      account: { ...account, profiles: [...account.profiles.filter((p) => p.userId !== user.id), profile] },
+      sessions: this.state.sessions.filter((s) => s.userId !== user.id),
+      refreshFamilies: (this.state.refreshFamilies ?? []).filter((f) => f.userId !== user.id),
+    });
   }
   /** Owner-only management surface. The caller must enforce local transport and CSRF, not client identity headers. */
   createManagementRouter(authorize: (req: Request) => boolean): Router {
@@ -537,25 +659,49 @@ export class AuthService {
         return fail(403, 'AUTH_CSRF_INVALID');
       return session;
     };
-    const listSessions = (req: Request, userId: string): AuthSessionInfo[] =>
-      this.state.sessions
-        .filter((s) => s.userId === userId && s.expiresAt > this.clock())
-        .map((s) => ({
-          id: this.sessionId(s.tokenHash),
-          expiresAt: new Date(s.expiresAt).toISOString(),
+    const listSessions = (req: Request, userId: string): AuthSessionInfo[] => {
+      const now = this.clock();
+      const families = (this.state.refreshFamilies ?? []).filter((f) => f.userId === userId &&
+        f.expiresAt > now && f.lastActiveAt + REFRESH_IDLE_CUTOFF > now);
+      const refresh = this.refreshIdentity(req);
+      return [
+        ...families.map((f) => ({ id: this.sessionId(f.id),
+          expiresAt: new Date(f.expiresAt).toISOString(),
+          current: !authorize && f.id === refresh?.id })),
+        ...this.state.sessions.filter((s) => s.userId === userId && s.expiresAt > now &&
+          !families.some((f) => f.sessionHash === s.tokenHash)).map((s) => ({
+          id: this.sessionId(s.tokenHash), expiresAt: new Date(s.expiresAt).toISOString(),
           current: !authorize && s.tokenHash === hash(cookie(req, SESSION_COOKIE)),
-        }));
+        })),
+      ];
+    };
     const revokeSessions = (req: Request, res: Response, userId: string) => {
       const id = req.params.sessionId;
-      const matches = (s: AuthDocument['sessions'][number]) =>
-        s.userId === userId && (!id || this.sessionId(s.tokenHash) === id);
-      if (id && !this.state.sessions.some((s) => matches(s) && s.expiresAt > this.clock()))
+      const now = this.clock();
+      const matchedFamilies = (this.state.refreshFamilies ?? []).filter((f) => f.userId === userId &&
+        (!id || this.sessionId(f.id) === id) && f.expiresAt > now &&
+        f.lastActiveAt + REFRESH_IDLE_CUTOFF > now);
+      const familyIds = new Set(matchedFamilies.map((f) => f.id));
+      const familyHashes = new Set(matchedFamilies.map((f) => f.sessionHash));
+      const matches = (s: AuthDocument['sessions'][number]) => s.userId === userId &&
+        (!id || this.sessionId(s.tokenHash) === id || familyHashes.has(s.tokenHash));
+      if (id && !matchedFamilies.length &&
+          !this.state.sessions.some((s) => matches(s) && s.expiresAt > now))
         return fail(404, 'AUTH_SESSION_NOT_FOUND');
-      const revokesCurrent =
-        !authorize &&
-        this.state.sessions.some((s) => matches(s) && s.tokenHash === hash(cookie(req, SESSION_COOKIE)));
-      this.save({ ...this.state, sessions: this.state.sessions.filter((s) => !matches(s)) });
-      if (revokesCurrent) this.setCookie(res, SESSION_COOKIE, '', 0);
+      const accessHash = hash(cookie(req, SESSION_COOKIE));
+      const refresh = this.refreshIdentity(req);
+      const revokedHashes = new Set(this.state.sessions.filter(matches).map((s) => s.tokenHash));
+      const revokesCurrent = !authorize && (revokedHashes.has(accessHash) ||
+        (refresh && familyIds.has(refresh.id)));
+      this.save({ ...this.state, sessions: this.state.sessions.filter((s) => !matches(s)),
+        refreshFamilies: (this.state.refreshFamilies ?? []).filter((f) =>
+          f.userId !== userId || !!id && !familyIds.has(f.id) &&
+            !revokedHashes.has(f.sessionHash)),
+      });
+      if (revokesCurrent) {
+        this.setCookie(res, SESSION_COOKIE, '', 0);
+        if (this.options.securityProfile === 'server') this.setCookie(res, REFRESH_COOKIE, '', 0);
+      }
       return res.json({ ok: true });
     };
     const account = new AccountExtension({
@@ -567,16 +713,30 @@ export class AuthService {
       prelogin: (req) => this.prelogin(req),
       self: requireSelf,
       admin: requirePermission,
-      rate: (req, key) =>
-        this.rateLimit(
-          req.socket.remoteAddress ?? 'unknown',
-          `account:${req.socket.remoteAddress ?? 'unknown'}:${key}`,
-        ),
+      rate: (req, key) => {
+        const ip = req.socket.remoteAddress ?? 'unknown';
+        if (this.options.securityProfile !== 'server') {
+          this.rateLimit(ip, `account:${ip}:${key}`);
+          return;
+        }
+        this.rateBucket(`account-ip:${ip}:${key}`, 300);
+        // Identity comes only from a validated session or an unexpired server-minted challenge.
+        const challengeCookies = ['novel_sms', 'novel_mfa', 'novel_phone_sms'];
+        const challenge = (this.state.account?.tokens ?? []).find((t) => t.userId &&
+          t.expires > this.clock() && ['sms-login', 'mfa', 'sms-phone'].includes(t.kind) &&
+          challengeCookies.some((name) => hash(cookie(req, name)) === t.hash));
+        const id = this.session(req)?.user.id ?? challenge?.userId;
+        if (id) this.rateBucket(`account-user:${id}:${key}`, 10);
+      },
       turnstile: (value) => this.validateTurnstile(value),
       issue: (req, res, id) => this.issueSession(req, res, id),
+      invalidateBrowserCredentials: (req, res, next) => this.invalidateBrowserCredentials(req, res, next),
+      invalidateUserCredentials: (id, res, next) => this.invalidateUserCredentials(id, res, next),
       cookie,
       setCookie: (res, name, value, age, lax) => this.setCookie(res, name, value, age, lax),
       mail: this.options.emailTransport,
+      sms: this.options.smsTransport,
+      securityProfile: this.options.securityProfile,
       fetcher: this.fetcher,
       password: (value, name, previousHash) => this.newPassword(value, name, previousHash),
     });
@@ -609,6 +769,50 @@ export class AuthService {
         return res.json({ ...this.status(req), csrfToken: nonce });
       });
       router.get('/session', (req, res) => res.json(this.status(req)));
+      router.post('/refresh', (req, res) => {
+        if (this.options.securityProfile !== 'server') return fail(404, 'AUTH_REFRESH_DISABLED');
+        if (!this.prelogin(req)) return fail(403, 'AUTH_CSRF_INVALID');
+        const identity = this.refreshIdentity(req);
+        const verifiedFamily = identity && (this.state.refreshFamilies ?? []).find((f) =>
+          f.id === identity.id && equal(f.tokenHash, identity.tokenHash));
+        if (verifiedFamily) this.rateBucket(`refresh-family:${verifiedFamily.id}`, 10);
+        else this.rateBucket(`refresh-invalid:${req.socket.remoteAddress ?? 'unknown'}`, 10);
+        if (!identity) return fail(401, 'AUTH_REFRESH_INVALID');
+        const family = (this.state.refreshFamilies ?? []).find((f) => f.id === identity.id);
+        if (!family) return fail(401, 'AUTH_REFRESH_INVALID');
+        if (!equal(identity.tokenHash, family.tokenHash)) {
+          // Any reused or forged secret for a known, unguessable family id revokes that family.
+          this.save({ ...this.state,
+            sessions: this.state.sessions.filter((s) => s.tokenHash !== family.sessionHash),
+            refreshFamilies: (this.state.refreshFamilies ?? []).filter((f) => f.id !== family.id),
+          });
+          this.setCookie(res, SESSION_COOKIE, '', 0);
+          this.setCookie(res, REFRESH_COOKIE, '', 0);
+          return fail(401, 'AUTH_REFRESH_REPLAY');
+        }
+        const now = this.clock();
+        const user = this.state.users.find((u) => u.id === family.userId && !u.disabled);
+        if (!user || family.expiresAt <= now || family.lastActiveAt + REFRESH_IDLE_CUTOFF <= now)
+          return fail(401, 'AUTH_REFRESH_EXPIRED');
+        const token = randomBytes(32).toString('hex');
+        const newRaw = `${family.id}.${randomBytes(32).toString('hex')}`;
+        const csrfToken = randomBytes(32).toString('hex');
+        const expiresAt = now + ACCESS_TTL;
+        const sessions = this.state.sessions.filter((s) => s.expiresAt > now &&
+          s.tokenHash !== family.sessionHash);
+        if (sessions.length >= 20000) return fail(503, 'AUTH_SESSION_CAPACITY');
+        this.save({ ...this.state,
+          sessions: [...sessions, { tokenHash: hash(token), userId: user.id, csrfToken, expiresAt }],
+          refreshFamilies: (this.state.refreshFamilies ?? []).map((f) => f.id === family.id
+            ? { ...f, tokenHash: hash(newRaw), sessionHash: hash(token),
+                lastActiveAt: now, expiresAt: now + REFRESH_TTL } : f),
+        });
+        this.setCookie(res, SESSION_COOKIE, token, ACCESS_TTL);
+        this.setCookie(res, REFRESH_COOKIE, newRaw, REFRESH_TTL);
+        this.setCookie(res, PREFLIGHT_COOKIE, '', 0);
+        return res.json({ user: publicUser(user), csrfToken,
+          expiresAt: new Date(expiresAt).toISOString() } satisfies AuthSession);
+      });
       router.post('/login', async (req, res) => {
         if (!this.prelogin(req)) return fail(403, 'AUTH_CSRF_INVALID');
         const body = req.body as Record<string, unknown> | undefined;
@@ -638,11 +842,7 @@ export class AuthService {
       });
       router.post('/logout', (req, res) => {
         if (!this.requireCsrf(req)) return fail(403, 'AUTH_CSRF_INVALID');
-        this.save({
-          ...this.state,
-          sessions: this.state.sessions.filter((s) => s.tokenHash !== hash(cookie(req, SESSION_COOKIE))),
-        });
-        this.setCookie(res, SESSION_COOKIE, '', 0);
+        this.invalidateBrowserCredentials(req, res);
         res.json({ ok: true });
       });
       router.post('/password', async (req, res) => {
@@ -676,6 +876,7 @@ export class AuthService {
           sessions: this.state.sessions.filter((s) => s.userId !== user.id),
         });
         this.setCookie(res, SESSION_COOKIE, '', 0);
+        if (this.options.securityProfile === 'server') this.setCookie(res, REFRESH_COOKIE, '', 0);
         res.json({ ok: true });
       });
       router.get('/sessions', (req, res) =>
@@ -794,7 +995,10 @@ export class AuthService {
         ),
         sessions: this.state.sessions.filter((s) => s.userId !== target.id),
       });
-      if (actor?.id === target.id) this.setCookie(res, SESSION_COOKIE, '', 0);
+      if (actor?.id === target.id) {
+        this.setCookie(res, SESSION_COOKIE, '', 0);
+        if (this.options.securityProfile === 'server') this.setCookie(res, REFRESH_COOKIE, '', 0);
+      }
       res.json({ ok: true });
     });
     const targetId = (req: Request): string => {
@@ -876,11 +1080,11 @@ export function bootstrapSuperadmin(
   options: Pick<AuthServiceOptions, 'dataDir' | 'persistence' | 'secretKey' | 'securityProfile'> & {
     username: string;
     password: string;
+    phone?: string;
   },
 ): AuthUser {
   return new AuthService({ ...options, enabled: true }).bootstrapSuperadmin(
-    options.username,
-    options.password,
+    options.username, options.password, options.phone,
   );
 }
 export function createAuthRouter(service: AuthService): Router {

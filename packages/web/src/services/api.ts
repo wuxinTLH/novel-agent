@@ -3,17 +3,26 @@ let sessionRequest: Promise<string> | undefined;
 let authCsrfToken: string | undefined;
 let authCsrfRequest: Promise<string> | undefined;
 let identityEpoch = 0;
+let csrfEpoch = 0;
+let refreshRequest: Promise<boolean> | undefined;
+let refreshGeneration = 0;
 let adminCsrfToken: string | undefined;
 let adminCsrfRequest: Promise<{ mode: string; csrfToken?: string }> | undefined;
 async function adminMutationToken() {
   if (adminCsrfToken) return { mode: 'local', csrfToken: adminCsrfToken };
   if (!adminCsrfRequest) {
     const epoch = identityEpoch;
-    adminCsrfRequest = api<{ mode: string; csrfToken?: string }>('/admin/session').then(session => {
-      if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
-      adminCsrfToken = session.csrfToken;
-      return session;
-    }).finally(() => { if (epoch === identityEpoch) adminCsrfRequest = undefined; });
+    const tokenEpoch = csrfEpoch;
+    adminCsrfRequest = api<{ mode: string; csrfToken?: string }>('/admin/session')
+      .then((session) => {
+        if (epoch !== identityEpoch || tokenEpoch !== csrfEpoch)
+          throw new Error('用户会话已切换，请重新操作。');
+        adminCsrfToken = session.csrfToken;
+        return session;
+      })
+      .finally(() => {
+        if (epoch === identityEpoch && tokenEpoch === csrfEpoch) adminCsrfRequest = undefined;
+      });
   }
   return adminCsrfRequest;
 }
@@ -21,6 +30,8 @@ async function adminMutationToken() {
 /** Invalidate both token domains; old in-flight responses may not repopulate them. */
 export function resetApiSession() {
   identityEpoch += 1;
+  csrfEpoch += 1;
+  refreshRequest = undefined;
   csrfToken = undefined;
   sessionRequest = undefined;
   authCsrfToken = undefined;
@@ -33,20 +44,22 @@ async function authMutationToken() {
   if (authCsrfToken) return authCsrfToken;
   if (!authCsrfRequest) {
     const epoch = identityEpoch;
-    authCsrfRequest = api<{ authenticated: boolean; csrfToken?: string }>('/auth/session')
+    const tokenEpoch = csrfEpoch;
+    authCsrfRequest = apiRequest<{ authenticated: boolean; csrfToken?: string }>('/auth/session', {}, false)
       .then((session) =>
         session.authenticated && session.csrfToken
           ? { csrfToken: session.csrfToken }
           : api<{ csrfToken: string }>('/auth/csrf'),
       )
       .then((session) => {
-        if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+        if (epoch !== identityEpoch || tokenEpoch !== csrfEpoch)
+          throw new Error('用户会话已切换，请重新操作。');
         if (!session.csrfToken) throw new Error('无法取得登录会话凭据，请刷新后重试。');
         authCsrfToken = session.csrfToken;
         return session.csrfToken;
       })
       .finally(() => {
-        if (epoch === identityEpoch) authCsrfRequest = undefined;
+        if (epoch === identityEpoch && tokenEpoch === csrfEpoch) authCsrfRequest = undefined;
       });
   }
   return authCsrfRequest;
@@ -73,25 +86,65 @@ export class ApiError extends Error {
   runId?: string;
 }
 export type ApiOptions = RequestInit & { timeoutMs?: number };
+/** Refresh only when the server reports an existing, valid refresh cookie. */
+async function refreshSession(): Promise<boolean> {
+  if (refreshRequest) return refreshRequest;
+  const epoch = identityEpoch;
+  const request = (async () => {
+    // A session CSRF token is not a prelogin nonce. Fetch a fresh nonce and its HttpOnly cookie.
+    const { csrfToken: nonce } = await apiRequest<{ csrfToken: string }>('/auth/csrf', {}, false);
+    if (epoch !== identityEpoch) return false;
+    if (!nonce) throw new Error('无法取得登录会话凭据，请刷新后重试。');
+    try {
+      await apiRequest('/auth/refresh', { method: 'POST', headers: { 'x-csrf-token': nonce } }, false);
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        if (epoch === identityEpoch) authCsrfToken = undefined;
+        return false;
+      }
+      throw error;
+    }
+    if (epoch !== identityEpoch) return false;
+    // Existing in-flight CSRF requests cannot restore credentials from the old session.
+    csrfEpoch++;
+    refreshGeneration++;
+    csrfToken = authCsrfToken = adminCsrfToken = undefined;
+    sessionRequest = authCsrfRequest = adminCsrfRequest = undefined;
+    return true;
+  })();
+  refreshRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (refreshRequest === request) refreshRequest = undefined;
+  }
+}
 async function mutationToken() {
   if (csrfToken) return csrfToken;
   if (!sessionRequest) {
     const epoch = identityEpoch;
+    const tokenEpoch = csrfEpoch;
     sessionRequest = api<{ csrfToken: string }>('/platforms/session')
       .then((session) => {
-        if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+        if (epoch !== identityEpoch || tokenEpoch !== csrfEpoch)
+          throw new Error('用户会话已切换，请重新操作。');
         if (!session.csrfToken) throw new Error('无法取得本地会话凭据，请刷新页面后重试。');
         csrfToken = session.csrfToken;
         return csrfToken;
       })
       .finally(() => {
-        if (epoch === identityEpoch) sessionRequest = undefined;
+        if (epoch === identityEpoch && tokenEpoch === csrfEpoch) sessionRequest = undefined;
       });
   }
   return sessionRequest;
 }
-export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> {
+export function api<T>(url: string, options: ApiOptions = {}): Promise<T> {
+  return apiRequest<T>(url, options, true);
+}
+async function apiRequest<T>(url: string, options: ApiOptions, allowRefresh: boolean): Promise<T> {
+  const generation = refreshGeneration;
   const epoch = identityEpoch;
+  const tokenEpoch = csrfEpoch;
   const authRoute = url.startsWith('/auth/');
   const adminRoute = url.startsWith('/admin/');
   const method = (options.method || 'GET').toUpperCase();
@@ -159,10 +212,24 @@ export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> 
   if (!response.ok) {
     const data = body as
       { error?: unknown; code?: string; retryable?: boolean; requestId?: string; runId?: string } | undefined;
-    if (response.status === 403 && mutation && epoch === identityEpoch) {
+    if (response.status === 403 && mutation && epoch === identityEpoch && tokenEpoch === csrfEpoch) {
       if (authRoute || adminRoute) authCsrfToken = undefined;
       if (adminRoute) adminCsrfToken = undefined;
       if (!authRoute && !adminRoute) csrfToken = undefined;
+    }
+    if (
+      response.status === 401 &&
+      !authRoute &&
+      epoch === identityEpoch &&
+      allowRefresh &&
+      method === 'GET'
+    ) {
+      if (generation !== refreshGeneration) return apiRequest<T>(url, options, false);
+      // Session inspection is safe even in local/disabled mode; only the server's
+      // refreshAvailable bit permits exchanging an existing refresh cookie.
+      await apiRequest('/auth/session', {}, true);
+      if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+      if (generation !== refreshGeneration) return apiRequest<T>(url, options, false);
     }
     if (response.status === 401 && !authRoute && epoch === identityEpoch)
       window.dispatchEvent(new Event('novel-auth-expired'));
@@ -181,14 +248,25 @@ export async function api<T>(url: string, options: ApiOptions = {}): Promise<T> 
     );
   }
   if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+  if (url === '/auth/session' && allowRefresh) {
+    // A concurrent rotation may have completed while this older response was in flight.
+    if (generation !== refreshGeneration) return apiRequest<T>(url, options, false);
+    const session = body as { authenticated?: boolean; refreshAvailable?: boolean };
+    if (session.authenticated === false && session.refreshAvailable === true) {
+      if (await refreshSession()) {
+        if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+        return apiRequest<T>(url, options, false);
+      }
+    }
+  }
   if (url === '/auth/session' || url === '/auth/csrf') {
     const token = (body as { csrfToken?: string } | undefined)?.csrfToken;
-    if (token) authCsrfToken = token;
+    if (token && tokenEpoch === csrfEpoch && (url !== '/auth/csrf' || !refreshRequest)) authCsrfToken = token;
   }
   if (url === '/auth/login' || url === '/auth/logout') resetApiSession();
   if (url === '/platforms/session') {
     const token = (body as { csrfToken?: string } | undefined)?.csrfToken;
-    if (token) csrfToken = token;
+    if (token && tokenEpoch === csrfEpoch) csrfToken = token;
   }
   return body as T;
 }

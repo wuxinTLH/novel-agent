@@ -1,9 +1,10 @@
-import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { Request, Response, Router } from 'express';
 import { z } from 'zod';
 import { createRemoteJWKSet, jwtVerify, customFetch } from 'jose';
 import { AuthError, type AuthDocument } from './auth.js';
 import { emptyAccountState, type AccountState, type AccountEmailTransport } from './account-state.js';
+import type { SmsTransport } from './sms-provider.js';
 
 const fail = (status: number, code: string): never => {
   throw new AuthError(status, code);
@@ -20,6 +21,11 @@ const email = z
   .max(254)
   .transform((v) => v.trim().toLowerCase());
 const tokenInput = z.string().regex(/^[a-f0-9]{64}$/);
+const phoneInput = z.string().regex(/^\+[1-9]\d{7,14}$/);
+const smsCodeInput = z.string().regex(/^\d{6}$/);
+const smsTtl = 5 * 60000;
+const smsCooldown = 60 * 1000;
+const smsMaxAttempts = 5;
 export interface AccountHost {
   read(): AuthDocument;
   save(document: AuthDocument): void;
@@ -32,9 +38,13 @@ export interface AccountHost {
   rate(req: Request, key: string): void;
   turnstile(value: unknown): Promise<void>;
   issue(req: Request, res: Response, id: string): unknown;
+  invalidateBrowserCredentials?(req: Request, res: Response, document?: AuthDocument): void;
+  invalidateUserCredentials?(userId: string, res?: Response, document?: AuthDocument): void;
   cookie(req: Request, name: string): string;
   setCookie(res: Response, name: string, value: string, age: number, lax?: boolean): void;
   mail?: AccountEmailTransport;
+  sms?: SmsTransport;
+  securityProfile?: 'local' | 'server';
   fetcher: typeof fetch;
   password(value: unknown, username: string, previousHash?: string): string;
 }
@@ -82,6 +92,13 @@ export class AccountExtension {
   private save(a: AccountState, users = this.h.read().users, sessions = this.h.read().sessions) {
     this.h.save({ ...this.h.read(), account: a, users, sessions });
   }
+  private saveRevokingUser(id: string, res: Response, next: AuthDocument) {
+    if (this.h.invalidateUserCredentials) this.h.invalidateUserCredentials(id, res, next);
+    else {
+      this.h.save({ ...next, sessions: next.sessions.filter((s) => s.userId !== id) });
+      this.h.setCookie(res, 'novel_session', '', 0);
+    }
+  }
   private gate(feature: 'registration' | 'emailVerification' | 'passwordRecovery' | 'mfa') {
     if (!this.state().config[feature]) fail(404, 'ACCOUNT_FEATURE_DISABLED');
   }
@@ -97,7 +114,7 @@ export class AccountExtension {
     const raw = secret(),
       a = this.state();
     const tokens = a.tokens.filter(
-      (t) => t.expires > this.h.now() && !(t.kind === kind && userId && t.userId === userId),
+      (t) => t.expires > this.h.now() && !(t.kind === kind && kind !== 'sms-login' && userId && t.userId === userId),
     );
     if (tokens.length >= 20000) fail(503, 'ACCOUNT_TOKEN_CAPACITY');
     this.save({
@@ -137,28 +154,102 @@ export class AccountExtension {
   private profile(id: string) {
     return this.state().profiles.find((p) => p.userId === id);
   }
-  /** Called after password or OIDC verification. No authenticated session exists until MFA completes. */
-  finish(req: Request, res: Response, id: string): unknown {
+  private smsTransport(): SmsTransport {
+    if (!this.h.sms) fail(503, 'ACCOUNT_SMS_UNAVAILABLE');
+    return this.h.sms!;
+  }
+  private challenge(raw: string, kind: 'sms-login' | 'sms-register' | 'sms-phone') {
+    return this.state().tokens.find((t) => t.kind === kind && t.hash === hash(raw) && t.expires > this.h.now());
+  }
+  private async sendSms(
+    req: Request, res: Response, kind: 'sms-login' | 'sms-register' | 'sms-phone',
+    phone: string, payload: Record<string, string>, cookieName: string, purpose: 'register' | 'login',
+  ) {
+    const sms = this.smsTransport();
+    const now = this.h.now();
+    // A reissued browser token cannot evade the per-phone cooldown. Persist before delivery.
+    if (this.state().tokens.some((t) => t.kind === 'sms-cooldown' && t.expires > now &&
+      t.payload.phone === phone && t.payload.purpose === purpose)) fail(429, 'ACCOUNT_SMS_COOLDOWN');
+    const raw = secret();
+    const code = randomInt(0, 1000000).toString().padStart(6, '0');
+    const a = this.state();
+    if (a.tokens.length + 2 > 20000) fail(503, 'ACCOUNT_TOKEN_CAPACITY');
+    this.save({ ...a, tokens: [...a.tokens.filter((t) => t.expires > now &&
+      !(t.kind === kind && (t.userId && t.userId === payload.userId || t.payload.phone === phone))),
+      { hash: hash(secret()), kind: 'sms-cooldown', expires: now + smsCooldown,
+        payload: { phone, purpose } },
+      { hash: hash(raw), kind, userId: payload.userId, expires: now + smsTtl,
+        payload: { ...payload, phone, codeHash: hash(`${raw}:${code}`), attempts: '0' } }] });
+    this.h.setCookie(res, cookieName, raw, smsTtl);
+    try {
+      await sms({ to: phone, purpose, code });
+    } catch {
+      const current = this.state();
+      this.save({ ...current, tokens: current.tokens.filter((t) => t.hash !== hash(raw)) });
+      this.h.setCookie(res, cookieName, '', 0);
+      fail(503, 'ACCOUNT_SMS_UNAVAILABLE');
+    }
+  }
+  private verifySms(raw: string, kind: 'sms-login' | 'sms-register' | 'sms-phone', code: string) {
+    const t = this.challenge(raw, kind);
+    if (!t || !/^[a-f0-9]{64}$/.test(t.payload.codeHash ?? '') ||
+      Number(t.payload.attempts) >= smsMaxAttempts) fail(401, 'ACCOUNT_SMS_FAILED');
+    const valid = timingSafeEqual(Buffer.from(t!.payload.codeHash), Buffer.from(hash(`${raw}:${code}`)));
+    if (!valid) {
+      const a = this.state();
+      this.save({ ...a, tokens: a.tokens.map((v) => v === t ?
+        { ...v, payload: { ...v.payload, attempts: String(Number(v.payload.attempts) + 1) } } : v) });
+      fail(401, 'ACCOUNT_SMS_FAILED');
+    }
+    return this.take(raw, kind);
+  }
+  /** Called after password or OIDC verification. No authenticated session exists until SMS and MFA complete. */
+  finish(req: Request, res: Response, id: string, smsVerified = false): unknown {
+    if (this.h.securityProfile === 'server' && !smsVerified) {
+      this.smsTransport();
+      const user = this.h.read().users.find((u) => u.id === id && !u.disabled);
+      if (!user) fail(401, 'AUTH_LOGIN_FAILED');
+      const profile = this.profile(id);
+      if (!profile?.phoneVerified || !profile.phone) fail(403, 'ACCOUNT_SMS_NOT_BOUND');
+      const raw = secret();
+      const a = this.state();
+      if (a.tokens.length >= 20000) fail(503, 'ACCOUNT_TOKEN_CAPACITY');
+      const next = { ...this.h.read(), account: { ...a, tokens: [...a.tokens.filter((t) =>
+        t.expires > this.h.now()),
+        { hash: hash(raw), kind: 'sms-login' as const, userId: id, expires: this.h.now() + smsTtl,
+          payload: { credential: hash(user!.passwordHash), role: user!.role,
+            phone: profile!.phone!, attempts: '0' } }] } };
+      if (this.h.invalidateBrowserCredentials) this.h.invalidateBrowserCredentials(req, res, next);
+      else {
+        this.h.save({ ...next, sessions: next.sessions.filter((s) => s.tokenHash !==
+          hash(this.h.cookie(req, 'novel_session'))) });
+        this.h.setCookie(res, 'novel_session', '', 0);
+      }
+      this.h.setCookie(res, 'novel_sms', raw, smsTtl);
+      if (req.path === '/account/oidc/callback' && req.get('accept')?.includes('text/html'))
+        return res.redirect(303, '/account/complete?oidc=sms');
+      return res.json({ smsRequired: true });
+    }
     const profile = this.profile(id);
     if (profile?.encryptedTotp) {
       if (!this.state().config.mfa) return fail(403, 'ACCOUNT_MFA_DISABLED');
       const user = this.h.read().users.find((u) => u.id === id && !u.disabled);
       if (!user) return fail(401, 'AUTH_LOGIN_FAILED');
-      const pending = this.mint(
-        'mfa',
-        id,
-        { credential: hash(user.passwordHash), role: user.role },
-        5 * 60000,
-      );
-      this.h.setCookie(res, 'novel_mfa', pending, 5 * 60000);
-      // Revoke the current browser's authenticated session before entering a pending flow.
-      const old = hash(this.h.cookie(req, 'novel_session'));
-      this.save(
-        this.state(),
-        this.h.read().users,
-        this.h.read().sessions.filter((s) => s.tokenHash !== old),
-      );
-      this.h.setCookie(res, 'novel_session', '', 0);
+      const pending = secret();
+      const a = this.state();
+      if (a.tokens.length >= 20000) fail(503, 'ACCOUNT_TOKEN_CAPACITY');
+      const next = { ...this.h.read(), account: { ...a, tokens: [...a.tokens.filter((t) =>
+        t.expires > this.h.now() && !(t.kind === 'mfa' && t.userId === id)),
+        { hash: hash(pending), kind: 'mfa' as const, userId: id, expires: this.h.now() + smsTtl,
+          payload: { credential: hash(user.passwordHash), role: user.role,
+            ...(smsVerified ? { smsVerified: 'true' } : {}) } }] } };
+      if (this.h.invalidateBrowserCredentials) this.h.invalidateBrowserCredentials(req, res, next);
+      else {
+        this.h.save({ ...next, sessions: next.sessions.filter((s) => s.tokenHash !==
+          hash(this.h.cookie(req, 'novel_session'))) });
+        this.h.setCookie(res, 'novel_session', '', 0);
+      }
+      this.h.setCookie(res, 'novel_mfa', pending, smsTtl);
       if (req.path === '/account/oidc/callback' && req.get('accept')?.includes('text/html'))
         return res.redirect(303, '/account/complete?oidc=mfa');
       return res.json({ mfaRequired: true });
@@ -192,6 +283,7 @@ export class AccountExtension {
           passwordRecovery: c.passwordRecovery,
           mfa: c.mfa,
           oidc: c.oidc.enabled,
+          smsRequired: h.securityProfile === 'server',
         });
       });
       router.get('/account', (req, res) => {
@@ -200,9 +292,112 @@ export class AccountExtension {
         res.json({
           email: p?.email ?? '',
           emailVerified: p?.verified ?? false,
+          phone: p?.phone ?? '',
+          phoneVerified: p?.phoneVerified ?? false,
           mfaEnabled: !!p?.encryptedTotp,
           recoveryCodesRemaining: p?.recoveryHashes.length ?? 0,
         });
+      });
+      router.post('/account/sms/request', async (req, res) => {
+        if (h.securityProfile !== 'server') fail(404, 'ACCOUNT_FEATURE_DISABLED');
+        this.csrf(req);
+        h.rate(req, 'sms-request');
+        const { turnstileToken } = z.object({ turnstileToken: z.string().optional() }).strict().parse(req.body);
+        this.smsTransport();
+        await h.turnstile(turnstileToken);
+        const raw = h.cookie(req, 'novel_sms');
+        const t = this.challenge(raw, 'sms-login');
+        const user = t?.userId ? h.read().users.find((u) => u.id === t.userId && !u.disabled) : undefined;
+        const profile = user ? this.profile(user.id) : undefined;
+        if (!t || !user || t.payload.credential !== hash(user.passwordHash) ||
+          t.payload.role !== user.role || !profile?.phoneVerified || profile.phone !== t.payload.phone)
+          fail(401, 'ACCOUNT_SMS_FAILED');
+        await this.sendSms(req, res, 'sms-login', profile!.phone!,
+          { userId: user!.id, credential: t!.payload.credential, role: t!.payload.role },
+          'novel_sms', 'login');
+        res.status(202).json({ ok: true });
+      });
+      router.post('/account/sms/verify', (req, res) => {
+        if (h.securityProfile !== 'server') fail(404, 'ACCOUNT_FEATURE_DISABLED');
+        this.csrf(req);
+        h.rate(req, 'sms-verify');
+        const { code } = z.object({ code: smsCodeInput }).strict().parse(req.body);
+        const raw = h.cookie(req, 'novel_sms');
+        const t = this.challenge(raw, 'sms-login');
+        const user = t?.userId ? h.read().users.find((u) => u.id === t.userId && !u.disabled) : undefined;
+        const profile = user ? this.profile(user.id) : undefined;
+        if (!t || !user || !profile?.phoneVerified || profile.phone !== t.payload.phone ||
+          t.payload.credential !== hash(user.passwordHash) || t.payload.role !== user.role ||
+          !t.payload.codeHash) fail(401, 'ACCOUNT_SMS_FAILED');
+        this.verifySms(raw, 'sms-login', code);
+        h.setCookie(res, 'novel_sms', '', 0);
+        return this.finish(req, res, user!.id, true);
+      });
+      router.post('/account/phone/request', async (req, res) => {
+        const id = h.self(req).user.id;
+        h.rate(req, `phone:${id}`);
+        const { phone, turnstileToken } = z.object({ phone: phoneInput,
+          turnstileToken: z.string().optional() }).strict().parse(req.body);
+        this.smsTransport();
+        await h.turnstile(turnstileToken);
+        if (this.state().profiles.some((p) => p.userId !== id && p.phone === phone))
+          fail(409, 'ACCOUNT_PHONE_UNAVAILABLE');
+        await this.sendSms(req, res, 'sms-phone', phone, { userId: id }, 'novel_phone_sms', 'register');
+        res.status(202).json({ ok: true });
+      });
+      router.post('/account/phone/verify', (req, res) => {
+        const id = h.self(req).user.id;
+        h.rate(req, `phone-verify:${id}`);
+        const { code } = z.object({ code: smsCodeInput }).strict().parse(req.body);
+        const raw = h.cookie(req, 'novel_phone_sms');
+        const t = this.challenge(raw, 'sms-phone');
+        if (!t || t.userId !== id || this.state().profiles.some((p) =>
+          p.userId !== id && p.phone === t.payload.phone)) fail(401, 'ACCOUNT_SMS_FAILED');
+        this.verifySms(raw, 'sms-phone', code);
+        const a = this.state();
+        const profile = this.profile(id) ?? { userId: id, verified: false, phoneVerified: false,
+          lastCounter: -1, recoveryHashes: [] };
+        const next = { ...h.read(), account: { ...a,
+          tokens: a.tokens.filter((v) => v.userId !== id),
+          profiles: [...a.profiles.filter((p) => p.userId !== id),
+            { ...profile, phone: t!.payload.phone, phoneVerified: true }] } };
+        this.saveRevokingUser(id, res, next);
+        h.setCookie(res, 'novel_phone_sms', '', 0);
+        res.json({ ok: true });
+      });
+      router.post('/account/register/sms/request', async (req, res) => {
+        this.gate('registration');
+        if (h.securityProfile !== 'server') fail(404, 'ACCOUNT_FEATURE_DISABLED');
+        this.csrf(req);
+        h.rate(req, 'register-sms-request');
+        const input = z.object({ username: z.string().regex(/^[a-z0-9][a-z0-9_.-]{2,63}$/),
+          email, phone: phoneInput, turnstileToken: z.string().optional() }).strict().parse(req.body);
+        this.smsTransport();
+        await h.turnstile(input.turnstileToken);
+        this.gate('registration');
+        if (!h.read().users.some((u) => u.role === 'superadmin' && !u.disabled))
+          fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
+        if (!h.read().users.some((u) => u.username === input.username) &&
+          !this.state().profiles.some((p) => p.email === input.email || p.phone === input.phone)) {
+          await this.sendSms(req, res, 'sms-register', input.phone,
+            { username: input.username, email: input.email }, 'novel_register_sms', 'register');
+        }
+        res.status(202).json({ ok: true });
+      });
+      router.post('/account/register/sms/verify', (req, res) => {
+        this.gate('registration');
+        if (h.securityProfile !== 'server') fail(404, 'ACCOUNT_FEATURE_DISABLED');
+        this.csrf(req);
+        h.rate(req, 'register-sms-verify');
+        const { code } = z.object({ code: smsCodeInput }).strict().parse(req.body);
+        const t = this.verifySms(h.cookie(req, 'novel_register_sms'), 'sms-register', code);
+        const binding = secret();
+        this.mint('sms-proof', undefined, { username: t.payload.username, email: t.payload.email,
+          phone: t.payload.phone, binding: hash(binding) }, 15 * 60000);
+        // The proof is a browser-bound bearer cookie, never an API response.
+        this.h.setCookie(res, 'novel_register_sms_proof', binding, 15 * 60000);
+        this.h.setCookie(res, 'novel_register_sms', '', 0);
+        res.json({ ok: true });
       });
       router.post('/account/register', async (req, res) => {
         this.gate('registration');
@@ -213,23 +408,36 @@ export class AccountExtension {
             username: z.string().regex(/^[a-z0-9][a-z0-9_.-]{2,63}$/),
             email,
             password: z.string(),
+            phone: phoneInput.optional(),
             turnstileToken: z.string().optional(),
           })
           .strict()
           .parse(req.body);
         await h.turnstile(input.turnstileToken);
         this.gate('registration');
+        let proof: AccountState['tokens'][number] | undefined;
+        if (h.securityProfile === 'server') {
+          this.smsTransport();
+          if (!input.phone) fail(400, 'ACCOUNT_PHONE_REQUIRED');
+          proof = this.state().tokens.find((t) => t.kind === 'sms-proof' &&
+            t.expires > h.now() && t.payload.binding === hash(h.cookie(req, 'novel_register_sms_proof')) &&
+            t.payload.username === input.username && t.payload.email === input.email &&
+            t.payload.phone === input.phone);
+          if (!proof) fail(403, 'ACCOUNT_SMS_PROOF_REQUIRED');
+        }
         if (!h.read().users.some((u) => u.role === 'superadmin' && !u.disabled))
           fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
         const hashed = passwordHash(h.password(input.password, input.username));
         if (
           !h.read().users.some((u) => u.username === input.username) &&
-          !this.state().profiles.some((p) => p.email === input.email)
+          !this.state().profiles.some((p) => p.email === input.email ||
+            (h.securityProfile === 'server' && p.phone === input.phone))
         ) {
           const raw = this.mint('register', undefined, {
             username: input.username,
             email: input.email,
             passwordHash: hashed,
+            ...(proof ? { phone: input.phone!, proof: proof.hash } : {}),
           });
           await this.sendAccepted(input.email, 'register', raw);
         }
@@ -239,24 +447,41 @@ export class AccountExtension {
         this.gate('registration');
         this.csrf(req);
         h.rate(req, 'register-complete');
-        const { token } = z.object({ token: tokenInput }).strict().parse(req.body),
-          t = this.take(token, 'register');
+        const { token } = z.object({ token: tokenInput }).strict().parse(req.body);
+        const candidate = this.state().tokens.find((t) => t.kind === 'register' &&
+          t.hash === hash(token) && t.expires > h.now());
+        if (!candidate) fail(400, 'ACCOUNT_TOKEN_INVALID');
+        if (h.securityProfile === 'server') {
+          this.smsTransport();
+          const proof = this.state().tokens.find((t) => t.kind === 'sms-proof' &&
+            t.hash === candidate!.payload.proof && t.expires > h.now() &&
+            t.payload.binding === hash(h.cookie(req, 'novel_register_sms_proof')) &&
+            t.payload.username === candidate!.payload.username &&
+            t.payload.email === candidate!.payload.email &&
+            t.payload.phone === candidate!.payload.phone);
+          if (!proof || !candidate!.payload.phone) fail(403, 'ACCOUNT_SMS_PROOF_REQUIRED');
+        }
+        const t = this.take(token, 'register');
         if (!h.read().users.some((u) => u.role === 'superadmin' && !u.disabled))
           fail(409, 'AUTH_BOOTSTRAP_REQUIRED');
         const a = this.state();
         if (
           h.read().users.length >= 10000 ||
           h.read().users.some((u) => u.username === t.payload.username) ||
-          a.profiles.some((p) => p.email === t.payload.email)
+          a.profiles.some((p) => p.email === t.payload.email ||
+            (h.securityProfile === 'server' && p.phone === t.payload.phone))
         )
           fail(409, 'ACCOUNT_UNAVAILABLE');
         const id = randomUUID();
         this.save(
           {
             ...a,
+            tokens: a.tokens.filter((v) => v.hash !== t.payload.proof),
             profiles: [
               ...a.profiles,
-              { userId: id, email: t.payload.email, verified: true, lastCounter: -1, recoveryHashes: [] },
+              { userId: id, email: t.payload.email, verified: true,
+                ...(h.securityProfile === 'server' ? { phone: t.payload.phone } : {}),
+                lastCounter: -1, recoveryHashes: [], phoneVerified: h.securityProfile === 'server' },
             ],
           },
           [
@@ -271,6 +496,7 @@ export class AccountExtension {
             },
           ],
         );
+        h.setCookie(res, 'novel_register_sms_proof', '', 0);
         res.status(201).json({ ok: true });
       });
       router.post('/account/email', async (req, res) => {
@@ -296,7 +522,7 @@ export class AccountExtension {
         )
           fail(400, 'ACCOUNT_TOKEN_INVALID');
         const a = this.state(),
-          p = this.profile(id) ?? { userId: id, lastCounter: -1, recoveryHashes: [], verified: false };
+          p = this.profile(id) ?? { userId: id, lastCounter: -1, recoveryHashes: [], verified: false, phoneVerified: false };
         this.save({
           ...a,
           tokens: a.tokens.filter((v) => v.userId !== id || v.kind !== 'reset'),
@@ -337,11 +563,11 @@ export class AccountExtension {
           return fail(400, 'ACCOUNT_TOKEN_INVALID');
         const hashed = passwordHash(h.password(input.password, user.username, user.passwordHash));
         const a = this.state();
-        this.save(
-          { ...a, tokens: a.tokens.filter((v) => v.userId !== t.userId) },
-          h.read().users.map((u) => (u.id === t.userId ? { ...u, passwordHash: hashed } : u)),
-          h.read().sessions.filter((s) => s.userId !== t.userId),
-        );
+        const next = { ...h.read(),
+          account: { ...a, tokens: a.tokens.filter((v) => v.userId !== t.userId) },
+          users: h.read().users.map((u) => u.id === t.userId ? { ...u, passwordHash: hashed } : u),
+        };
+        this.saveRevokingUser(t.userId!, res, next);
         res.json({ ok: true });
       });
       router.post('/account/mfa/setup', (req, res) => {
@@ -370,24 +596,13 @@ export class AccountExtension {
         const v = this.verifyFactor(id, input.code, h.decrypt(t.payload.encryptedSecret)),
           codes = Array.from({ length: 10 }, () => randomBytes(10).toString('hex'));
         const a = this.state(),
-          p = this.profile(id) ?? { userId: id, verified: false, lastCounter: -1, recoveryHashes: [] };
-        this.save(
-          {
-            ...a,
-            profiles: [
-              ...a.profiles.filter((p) => p.userId !== id),
-              {
-                ...p,
-                encryptedTotp: t.payload.encryptedSecret,
-                lastCounter: v.counter,
-                recoveryHashes: codes.map(hash),
-              },
-            ],
-          },
-          h.read().users,
-          h.read().sessions.filter((s) => s.userId !== id),
-        );
-        h.setCookie(res, 'novel_session', '', 0);
+          p = this.profile(id) ?? { userId: id, verified: false, phoneVerified: false, lastCounter: -1, recoveryHashes: [] };
+        const next = { ...h.read(), account: { ...a, profiles: [
+          ...a.profiles.filter((p) => p.userId !== id),
+          { ...p, encryptedTotp: t.payload.encryptedSecret, lastCounter: v.counter,
+            recoveryHashes: codes.map(hash) },
+        ] } };
+        this.saveRevokingUser(id, res, next);
         res.json({ recoveryCodes: codes });
       });
       router.post('/account/mfa/verify', (req, res) => {
@@ -406,6 +621,8 @@ export class AccountExtension {
           user = h.read().users.find((u) => u.id === id && !u.disabled);
         if (!user || t!.payload.credential !== hash(user.passwordHash) || t!.payload.role !== user.role)
           fail(401, 'ACCOUNT_MFA_FAILED');
+        if (h.securityProfile === 'server' && (t!.payload.smsVerified !== 'true' ||
+          !this.profile(id)?.phoneVerified || !this.profile(id)?.phone)) fail(401, 'ACCOUNT_MFA_FAILED');
         const v = this.verifyFactor(id, code);
         this.take(raw, 'mfa');
         const next = this.state();
@@ -428,18 +645,12 @@ export class AccountExtension {
           .parse(req.body);
         this.verifyFactor(id, code);
         const a = this.state();
-        this.save(
-          {
-            ...a,
-            tokens: a.tokens.filter((t) => t.userId !== id),
-            profiles: a.profiles.map((p) =>
-              p.userId === id ? { ...p, encryptedTotp: undefined, recoveryHashes: [], lastCounter: -1 } : p,
-            ),
-          },
-          h.read().users,
-          h.read().sessions.filter((s) => s.userId !== id),
-        );
-        h.setCookie(res, 'novel_session', '', 0);
+        const next = { ...h.read(), account: { ...a,
+          tokens: a.tokens.filter((t) => t.userId !== id),
+          profiles: a.profiles.map((p) => p.userId === id
+            ? { ...p, encryptedTotp: undefined, recoveryHashes: [], lastCounter: -1 } : p),
+        } };
+        this.saveRevokingUser(id, res, next);
         res.json({ ok: true });
       });
     }
@@ -634,7 +845,7 @@ export class AccountExtension {
       const a = this.state();
       if (a.profiles.some((p) => p.userId !== id && p.oidcIssuer === issuer && p.oidcSubject === subject))
         fail(409, 'ACCOUNT_OIDC_ALREADY_LINKED');
-      const p = this.profile(id) ?? { userId: id, verified: false, lastCounter: -1, recoveryHashes: [] };
+      const p = this.profile(id) ?? { userId: id, verified: false, phoneVerified: false, lastCounter: -1, recoveryHashes: [] };
       this.save({
         ...a,
         profiles: [

@@ -153,6 +153,7 @@ function completionFromLocation(): Completion | undefined {
 function Login({ session }: { session: Session }) {
   const { t } = useLocale();
   const [pendingMfa, setPendingMfa] = useState(false);
+  const [pendingSms, setPendingSms] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [turnstileToken, setToken] = useState('');
@@ -167,11 +168,15 @@ function Login({ session }: { session: Session }) {
     const token = turnstileToken;
     setToken('');
     try {
-      const result = await api<Session | { mfaRequired: true }>('/auth/login', {
+      const result = await api<Session | { mfaRequired: true } | { smsRequired: true }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password, ...(token ? { turnstileToken: token } : {}) }),
       });
       setPassword('');
+      if ('smsRequired' in result && result.smsRequired) {
+        setPendingSms(true);
+        return;
+      }
       if ('mfaRequired' in result && result.mfaRequired) {
         setPendingMfa(true);
         return;
@@ -189,14 +194,29 @@ function Login({ session }: { session: Session }) {
   return (
     <main style={{ maxWidth: 460, margin: '10vh auto', padding: 16 }}>
       <LanguageSwitcher />
-      {pendingMfa ? (
+      {pendingMfa || pendingSms ? (
         <div style={{ ...card, ...stack }}>
           <AccountAccess
             request={accountRequest}
-            pendingMfa
+            pendingMfa={pendingMfa}
+            pendingSms={pendingSms}
+            onMfaRequired={() => {
+              setPendingSms(false);
+              setPendingMfa(true);
+            }}
+            turnstile={session.turnstile}
+            renderChallenge={(attempt, token) => (
+              <Challenge settings={session.turnstile} attempt={attempt} token={token} />
+            )}
             onAuthenticated={() => window.location.reload()}
           />
-          <button type="button" onClick={() => setPendingMfa(false)}>
+          <button
+            type="button"
+            onClick={() => {
+              setPendingMfa(false);
+              setPendingSms(false);
+            }}
+          >
             {t('返回密码登录')}
           </button>
         </div>
@@ -250,6 +270,7 @@ function Login({ session }: { session: Session }) {
 function CompletionPage({ session, completion }: { session: Session; completion?: Completion }) {
   const { t } = useLocale();
   const [done, setDone] = useState(false);
+  const [oidcPendingMfa, setOidcPendingMfa] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const oidc = new URLSearchParams(window.location.search).get('oidc');
@@ -263,7 +284,18 @@ function CompletionPage({ session, completion }: { session: Session; completion?
       <h1>{t('账户操作')}</h1>
       {done ? (
         <p role="status">{t('账户操作已完成，请返回登录。')}</p>
-      ) : oidc === 'mfa' ? (
+      ) : oidc === 'sms' && !oidcPendingMfa ? (
+        <AccountAccess
+          request={accountRequest}
+          pendingSms
+          turnstile={session.turnstile}
+          renderChallenge={(attempt, token) => (
+            <Challenge settings={session.turnstile} attempt={attempt} token={token} />
+          )}
+          onMfaRequired={() => setOidcPendingMfa(true)}
+          onAuthenticated={home}
+        />
+      ) : oidc === 'mfa' || oidcPendingMfa ? (
         <AccountAccess request={accountRequest} pendingMfa onAuthenticated={home} />
       ) : completion?.purpose === 'email' ? (
         session.enabled && session.authenticated ? (
@@ -364,7 +396,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     const switched = (event: StorageEvent) => {
       if (event.key === 'novel-auth-identity' || event.key === null) void refresh();
     };
-    const focused = () => { void refresh(); };
+    const focused = () => {
+      void refresh();
+    };
     const visible = () => {
       if (document.visibilityState === 'visible') void refresh();
     };

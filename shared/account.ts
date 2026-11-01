@@ -5,10 +5,13 @@ export interface AccountFeatures {
   passwordRecovery: boolean;
   mfa: boolean;
   oidc: boolean;
+  smsRequired?: boolean;
 }
 export interface AccountSettings {
   email: string;
   emailVerified: boolean;
+  phone?: string;
+  phoneVerified?: boolean;
   mfaEnabled: boolean;
   recoveryCodesRemaining: number;
 }
@@ -30,6 +33,9 @@ export interface MfaEnrollment {
   token: string;
   secret: string;
   uri: string;
+}
+export interface AccountSmsPending {
+  smsRequired: true;
 }
 export interface AccountMfaPending {
   mfaRequired: true;

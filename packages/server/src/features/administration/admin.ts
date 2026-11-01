@@ -23,13 +23,15 @@ const authConfigSchema = z
   .strict();
 export type LocalAuthConfig = z.infer<typeof authConfigSchema>;
 const uuid = z.string().uuid();
-const commands = ['bootstrap-admin', 'migrate-sql', 'enable-auth', 'disable-auth', 'assign-legacy'] as const;
+const commands = ['bootstrap-admin', 'set-phone', 'migrate-sql', 'enable-auth', 'disable-auth', 'assign-legacy'] as const;
+const phonePattern = /^\+[1-9]\d{7,14}$/;
 type Command = (typeof commands)[number];
 export interface AdminOptions {
   command: Command;
   dataDir: string;
   owner?: string;
   username?: string;
+  phone?: string;
   noLegacy: boolean;
   allowPublicAccess: boolean;
 }
@@ -40,14 +42,17 @@ export interface AdminResult {
   restartRequired: true;
 }
 export const adminUsage = `Local administration (stop the server first):
-  bootstrap-admin --username NAME --confirm
+  bootstrap-admin --username NAME [--phone E164] --confirm
+  set-phone --username NAME --phone E164 --confirm (server mode only)
   migrate-sql --owner UUID --confirm
   enable-auth (--owner UUID | --no-legacy) --confirm
   disable-auth --allow-public-access --confirm
   assign-legacy --owner UUID --confirm
 All commands accept --data-dir PATH (default: appRoot/data).
 Bootstrap password: NOVEL_BOOTSTRAP_PASSWORD environment variable only.
-Backups contain private credentials; keep them private. Legacy files are never deleted.
+Server bootstrap requires --phone; local bootstrap rejects --phone and keeps existing behavior.
+Server bootstrap persists the account and verified phone together; set-phone updates an existing account offline.
+Backups contain private credentials and phone data; keep them private. Legacy files are never deleted.
 Backups cover selected control/business files, NOT uploads, browser/secret stores or other tenants.
 Keep an independent full data-directory and database backup before administration.
 Bootstrap before migration if enabling auth later; use the returned ownerId for both commands.
@@ -66,7 +71,7 @@ export function parseAdminArguments(args: string[]): AdminOptions {
   for (let index = 1; index < args.length; index++) {
     const argument = args[index];
     requireCondition(!values.has(argument) && !flags.has(argument), 'ADMIN_DUPLICATE_ARGUMENT');
-    if (['--data-dir', '--owner', '--username'].includes(argument)) {
+    if (['--data-dir', '--owner', '--username', '--phone'].includes(argument)) {
       const value = args[++index];
       requireCondition(value && !value.startsWith('--'), 'ADMIN_ARGUMENT_VALUE_REQUIRED');
       values.set(argument, value);
@@ -81,6 +86,8 @@ export function parseAdminArguments(args: string[]): AdminOptions {
   requireCondition(flags.has('--confirm'), 'ADMIN_CONFIRM_REQUIRED');
   const owner = values.get('--owner');
   const username = values.get('--username');
+  const phone = values.get('--phone');
+  if (phone !== undefined) requireCondition(phonePattern.test(phone), 'ADMIN_PHONE_INVALID');
   if (owner)
     requireCondition(uuid.safeParse(owner).success && owner !== globalAuthOwner, 'ADMIN_OWNER_INVALID');
   const noLegacy = flags.has('--no-legacy');
@@ -89,11 +96,13 @@ export function parseAdminArguments(args: string[]): AdminOptions {
     !owner || ['migrate-sql', 'enable-auth', 'assign-legacy'].includes(command),
     'ADMIN_OWNER_NOT_APPLICABLE',
   );
-  requireCondition(!username || command === 'bootstrap-admin', 'ADMIN_USERNAME_NOT_APPLICABLE');
+  requireCondition(!username || ['bootstrap-admin', 'set-phone'].includes(command), 'ADMIN_USERNAME_NOT_APPLICABLE');
+  requireCondition(phone === undefined || ['bootstrap-admin', 'set-phone'].includes(command), 'ADMIN_PHONE_NOT_APPLICABLE');
   requireCondition(!noLegacy || command === 'enable-auth', 'ADMIN_NO_LEGACY_NOT_APPLICABLE');
   requireCondition(!allowPublicAccess || command === 'disable-auth', 'ADMIN_PUBLIC_ACCESS_NOT_APPLICABLE');
-  if (command === 'bootstrap-admin')
+  if (command === 'bootstrap-admin' || command === 'set-phone')
     requireCondition(username && /^[a-z0-9][a-z0-9_.-]{2,63}$/.test(username), 'ADMIN_USERNAME_INVALID');
+  if (command === 'set-phone') requireCondition(phone, 'ADMIN_PHONE_REQUIRED');
   if (command === 'migrate-sql' || command === 'assign-legacy')
     requireCondition(owner, 'ADMIN_OWNER_REQUIRED');
   if (command === 'enable-auth')
@@ -104,6 +113,7 @@ export function parseAdminArguments(args: string[]): AdminOptions {
     dataDir: path.resolve(values.get('--data-dir') ?? path.join(appRoot, 'data')),
     owner,
     username,
+    phone,
     noLegacy,
     allowPublicAccess,
   };
@@ -321,10 +331,16 @@ export async function runAdmin(
   const args = [options.command, '--data-dir', options.dataDir, '--confirm'];
   if (options.owner) args.push('--owner', options.owner);
   if (options.username) args.push('--username', options.username);
+  if (options.phone !== undefined) args.push('--phone', options.phone);
   if (options.noLegacy) args.push('--no-legacy');
   if (options.allowPublicAccess) args.push('--allow-public-access');
   options = parseAdminArguments(args);
   const coreModel = readCoreModel(environment);
+  if (options.command === 'set-phone') requireCondition(coreModel === 'server', 'ADMIN_SERVER_ONLY');
+  if (options.command === 'bootstrap-admin') {
+    if (coreModel === 'server') requireCondition(options.phone, 'ADMIN_PHONE_REQUIRED');
+    else requireCondition(!options.phone, 'ADMIN_PHONE_SERVER_ONLY');
+  }
   safeDirectory(options.dataDir);
   const release = acquireDataLock(options.dataDir);
   try {
@@ -349,10 +365,12 @@ export async function runAdmin(
             .readDocument(globalAuthOwner, 'auth.json')
             .then((document) => ({ ownerId: globalAuthOwner, key: 'auth.json', document })),
         ]);
-        fs.writeFileSync(
-          path.join(destination, 'postgres-snapshot.json'),
-          JSON.stringify({ version: 1, snapshots }) + '\n',
-          { flag: 'wx', mode: 0o600 },
+        const snapshotFile = path.join(destination, 'postgres-snapshot.json');
+        const snapshotBytes = Buffer.from(JSON.stringify({ version: 1, snapshots }) + '\n');
+        fs.writeFileSync(snapshotFile, snapshotBytes, { flag: 'wx', mode: 0o600 });
+        requireCondition(
+          fs.readFileSync(snapshotFile).equals(snapshotBytes),
+          'ADMIN_BACKUP_VERIFICATION_FAILED',
         );
       } finally {
         await storage.close();
@@ -365,9 +383,25 @@ export async function runAdmin(
         typeof password === 'string' && password.length >= 12 && Buffer.byteLength(password) <= 1024,
         'ADMIN_BOOTSTRAP_PASSWORD_REQUIRED',
       );
-      const { service } = authState(options.dataDir, coreModel);
-      const user = service.bootstrapSuperadmin(options.username!, password);
+      const { service, document } = authState(options.dataDir, coreModel);
+      // Reject predictable failures before bootstrap persists the account.
+      requireCondition(!document?.users.some((user) => user.role === 'superadmin'), 'ADMIN_AUTH_ALREADY_BOOTSTRAPPED');
+      requireCondition(!document?.users.some((user) => user.username === options.username), 'ADMIN_USERNAME_EXISTS');
+      if (options.phone) requireCondition(
+        !document?.account?.profiles.some((profile) => profile.phone === options.phone && profile.phoneVerified),
+        'ADMIN_PHONE_IN_USE',
+      );
+      const user = service.bootstrapSuperadmin(options.username!, password, options.phone);
       result.ownerId = user.id;
+      return result;
+    }
+    if (options.command === 'set-phone') {
+      const { service, document } = authState(options.dataDir, coreModel);
+      requireCondition(
+        document?.users.some((user) => user.username === options.username && !user.disabled),
+        'ADMIN_PHONE_USER_NOT_FOUND',
+      );
+      service.provisionVerifiedPhone(options.username!, options.phone!);
       return result;
     }
     if (options.command === 'migrate-sql') {

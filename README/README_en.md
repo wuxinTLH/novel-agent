@@ -2,11 +2,13 @@
 
 Language / 语言: [简体中文 (default)](README_zhCN.md) · [English](README_en.md) · [Root README](../README.md)
 
-A local-first novel-writing workbench, deployment-mode prerelease `v0.0.2-a.2`. It supports multiple projects and workflows, worldbuilding, character generation, chapter editing and generation, reference assets, model profiles, themes, and persistent data. The default remains single-user access without login. Authentication and tenant isolation require explicit local administration. **This is not a production deployment solution for the public Internet.**
+A local-first novel-writing workbench, deployment-mode prerelease `v0.0.3a`. It supports multiple projects and workflows, worldbuilding, character generation, chapter editing and generation, reference assets, model profiles, themes, and persistent data. The default remains single-user access without login. Authentication and tenant isolation require explicit local administration. **This is not a production deployment solution for the public Internet.**
+
+Release tag: `v0.0.3a`; npm/package SemVer: `0.0.3-a`. See [bilingual release notes](../RELEASE_NOTES.md). Assets remain undecided, preferring source plus compiled output only after a successful build; no build or external-service acceptance is preclaimed. Project Skills are described in the [agent capability guide](../docs/agent-capabilities.md); the optional Playwright MCP bundle is **not installed, not running and not an application dependency**.
 
 ## Quick start
 
-Use Node.js **22.16 or newer**, and run commands from the repository root:
+Use patched Node.js **22.23.4+ within 22.x or 24.22.2+ within 24.x** (24.22.2 recommended; see `.node-version` / `.nvmrc`), and run commands from the repository root. Older patches and other majors are unsupported; restart services after upgrading. See the [Node.js security baseline](../docs/node-security.md).
 
 ```powershell
 npm ci
@@ -23,7 +25,7 @@ npm run build
 npm start
 ```
 
-The production UI is served at `http://127.0.0.1:3001` by default. `CoreModel` accepts only local/server (unset: local; invalid: fail). Local binds only `127.0.0.1`, without LAN access. Server binds `0.0.0.0`, requires offline-enabled auth, forces hardened/audit and must be reached only through a same-origin real HTTPS proxy. See [deployment modes](../docs/en/deployment-modes.md). Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
+The production UI is served at `http://127.0.0.1:3001` by default. `CoreModel` accepts only local/server (unset: local; invalid: fail). Local binds only `127.0.0.1`, without LAN access. Server binds `0.0.0.0`, requires offline-enabled auth, forces hardened/audit and must be reached only through a same-origin real HTTPS proxy. See [deployment modes](../docs/en/deployment-modes.md), [security-hardening gaps](../docs/en/security-hardening.md) and the [auth contract](../packages/server/src/features/auth/README.md). Server requires an SMS provider before startup, verifies phone possession before registration, and requires bound-phone SMS on every password login; configured Turnstile is enforced on registration, login and SMS issuance. Access lasts 60 minutes, rotating refresh seven days with a persisted 30-day idle cap (eight days offline cannot refresh); unbound accounts fail closed. Native local defaults remain unchanged. The client refreshes eligible reads without automatically replaying writes; real vendor delivery and deployment still require independent acceptance. Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
 
 Build separately with root `npm run build:web` and `npm run build:server` (including backend Workers/SQL assets). `SERVE_WEB` defaults to `true`; `false` runs APIs/uploads without a web build, HTML, themes or SPA fallback. When hosting, `WEB_DIST_DIR` chooses a trusted static output directory, default application-root `dist`; relative paths also resolve from the application root. A separate static server must proxy `/api` and `/uploads` on the same browser origin to one backend, without enabling cross-origin business CORS or removing Cookie/Origin/CSRF checks. HTTPS additionally requires an explicit trusted origin. See [separate deployment](../docs/en/user-guide.md#separate-builds-and-same-origin-deployment).
 

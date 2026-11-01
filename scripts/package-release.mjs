@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const version = process.argv[2];
-if (!/^v[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.]+$/.test(version || '')) throw new Error('Expected prerelease version argument');
+if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:a|-[a-z0-9.]+)$/.test(version || '')) throw new Error('Expected prerelease version argument');
 const output = path.join(root, '.tmp-build', 'release', version);
 if (fs.existsSync(output)) throw new Error('Release directory already exists; inspect it before retrying');
 fs.mkdirSync(output, { recursive: true });
@@ -24,7 +24,7 @@ for (const dir of ['build', 'dist']) {
   fs.cpSync(path.join(root, dir), path.join(stage, dir), { recursive: true });
 }
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-fs.writeFileSync(path.join(stage, 'RELEASE-MANIFEST.json'), JSON.stringify({ version, commit, runtime: 'Node.js >=22.16', dependenciesIncluded: false, dockerValidated: false, complianceCertified: false, sourceIncluded: true }, null, 2));
+fs.writeFileSync(path.join(stage, 'RELEASE-MANIFEST.json'), JSON.stringify({ version, commit, runtime: 'Node.js ^22.23.4 || ^24.22.2', dependenciesIncluded: false, dockerValidated: false, complianceCertified: false, sourceIncluded: true }, null, 2));
 const archive = path.join(output, `novel-agent-${version}.tar.gz`);
 execFileSync('tar', ['-czf', path.basename(archive), 'novel-agent'], { cwd: output, stdio: 'inherit' });
 fs.writeFileSync(path.join(output, 'SHA256SUMS.txt'), `${crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex')}  ${path.basename(archive)}\n`);

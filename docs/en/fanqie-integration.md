@@ -2,7 +2,7 @@
 
 [中文原文](../番茄平台接入.md) · [English index](README.md) · [Step-by-step user guide](user-guide.md#fanqie-publication)
 
-This describes v0.0.2a implementation boundaries. Playwright operates an isolated Chromium author session, not an official Fanqie API. Initial login requires an interactive desktop on the backend host. Install with `npm ci` and `npm run browser:install`; start with `npm run dev`, or build and start production normally.
+This describes v0.0.3a implementation boundaries. Playwright operates an isolated Chromium author session, not an official Fanqie API. Initial login requires an interactive desktop on the backend host. Install with `npm ci` and `npm run browser:install`; start with `npm run dev`, or build and start production normally.
 
 ## Supported operations
 

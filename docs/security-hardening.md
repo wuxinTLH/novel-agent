@@ -15,7 +15,7 @@
 
 | 控制方向       | 已有应用控制                                                                                                                       | 仍需实施 / 验证的条件与差距                                                                                                                                                     |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 身份鉴别       | 本地 CLI 引导首个超级管理员；认证显式启用，旧数据 owner 显式分配；密码变更 / 停用 / 角色变更撤销会话；可选 TOTP 与预映射 OIDC      | 默认免登录不适合高保障部署。制定实名唯一账号、管理员 MFA、身份生命周期、登录策略、会话期限和紧急访问制度；现有可选 MFA 不等于全体强制 MFA 或硬件因素                            |
+| 身份鉴别       | 本地 CLI 引导首个超级管理员；认证显式启用，旧数据 owner 显式分配；server 工作树每次密码登录强制绑定手机号 SMS，未绑定拒绝，可选 TOTP / 预映射 OIDC；凭据变化撤销会话 | 默认 local 免登录不适合高保障部署。server SMS 不是硬件因素、实名或认证等级证明；需逐账号迁移手机号、验证供应商投递、制定独立恢复 / 管理员紧急访问及身份生命周期制度 |
 | 访问控制       | 服务端逐端点角色 / 模块权限；独立租户运行时；来源和 CSRF 校验；运维角色不能任意写安全配置                                          | 四角色不是操作系统 / 数据库 / 网络设备权限体系，也不提供全面三权分立、强制访问控制或数据密级隔离。须验证所有接口、导出与维护路径的授权矩阵                                      |
 | HTTP 边界      | 同源策略、请求限流、业务 no-store、CSP / 防嵌入 / nosniff 等响应头；可信 HTTPS origin 显式配置，不信任转发头                       | 本轮共享 HTTP 应用边界统一入口 / 租户头部、方法与路径检查、服务端 UUID；原始 HTTP 解析失败仍可能先被 Node 拒绝。反向代理必须保留 Host、清除外来转发头、限制请求和连接并屏蔽后端直连 |
 | 数据及密钥     | 模型 / 平台凭据采用应用加密；模型出站阻止本机、私网及元数据目标；认证密钥本地保存                                                  | 当前应用加密不是国密合规证明；无已验证的国密协议栈、密码产品、HSM / KMS 接入或密钥双人管理。SQLconnect 密码仍为明文；需单独保护配置、数据库 TLS、备份和端点                     |
@@ -42,15 +42,17 @@
 
 ```powershell
 $env:CoreModel='server' # CLI 不自动加载 .env；使引导采用服务端密码策略
-npm run admin -- bootstrap-admin --username admin --data-dir <DATA_DIRECTORY> --confirm
+npm run admin -- bootstrap-admin --username admin --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm
 npm run admin -- enable-auth --owner <RETURNED_OWNER_UUID> --data-dir <DATA_DIRECTORY> --confirm
+# 旧用户先停服、备份，再逐个离线绑定并撤销旧会话：
+npm run admin -- set-phone --username <EXISTING_USERNAME> --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm
 ```
 
 已有数据必须明确 owner；仅全新空目录可选择 `--no-legacy`。创建用户、设置 MFA 或配置代理均不会自动开启认证。不要把真实密码写进命令参数。
 
-3. 配置精确 HTTPS origin 与代理、防火墙，保护目录 / 密钥，启用认证后启动；测试匿名拒绝、跨角色 / 租户拒绝、CSRF、会话撤销及 HTTPS Cookie。
-4. 核对管理员 MFA、恢复码与紧急流程；可选功能开关不等于组织策略已强制执行。
-5. 原生 local 默认 `SECURITY_PROFILE=standard`，可显式选择 hardened；server 强制 hardened，显式 `SECURITY_PROFILE=standard` 拒绝启动。其他值启动失败。严格模式要求：认证已经启用、有效 `NOVEL_TRUSTED_PUBLIC_ORIGIN` HTTPS origin、网关关闭、`MODEL_SECRETS_KEY` 与 `PLATFORM_SECRETS_KEY` 各至少 32 字符且不同，并强制启用安全审计。32 字符检查不是熵评估；请分别生成高熵秘密。它只检查有限配置，不能证明真实代理 TLS、强制 MFA、网络隔离或合规，也不强制非 root / 只读根。
+3. 配置精确 HTTPS origin、代理、防火墙与 SMS 提供商；server 缺少合规的 `NOVEL_SMS_PROVIDER=aliyun` / `tencent` 及对应凭据、签名 / 模板时拒绝启动。所选 Alibaba China Dysmsapi/2017-05-25 或 Tencent SMS v20210111 须由运营方自行申请、审核模板与签名，并在真实环境验收投递，配置校验不保证送达。配置 Turnstile 时注册、密码登录和注册 / 登录 / 绑定短信发放须服务端校验；提供站点密钥并核对代理来源与相关日志。完成后测试匿名拒绝、每次密码登录二次短信、未绑定用户拒绝、跨角色 / 租户拒绝、CSRF、会话撤销与 HTTPS Cookie。
+4. 核对管理员短信登录 / 额外 TOTP；手机遗失须停服并按受控流程离线 `set-phone`，**TOTP 恢复码不能绕过短信**。服务端持久化会话采用 access 60 分钟、轮换 refresh 7 天、空闲上限 30 天，**断网 8 天后 refresh 已失效，不能离线 30 天保持登录**。客户端只对可安全重试的读取作刷新后重试，不自动重放可能已提交的写入；重新登录应显式核对原操作结果。
+5. 原生 local 默认 `SECURITY_PROFILE=standard`，可显式选择 hardened；server 强制 hardened，显式 `SECURITY_PROFILE=standard` 拒绝启动。其他值启动失败。严格模式要求：认证已经启用、有效 `NOVEL_TRUSTED_PUBLIC_ORIGIN` HTTPS origin、网关关闭、`MODEL_SECRETS_KEY` 与 `PLATFORM_SECRETS_KEY` 各至少 32 字符且不同，并强制启用安全审计。32 字符检查不是熵评估；请分别生成高熵秘密。它只检查有限配置，不能证明真实代理 TLS、真实短信投递、组织级别 MFA 策略、网络隔离或合规，也不强制非 root / 只读根。
 
 ### 请求边界、超时与审计参数
 
@@ -64,7 +66,7 @@ Node 服务头部接收时限 15 秒、请求接收时限 120 秒、keep-alive 5
 
 ## 5. 容器运行与验证
 
-[Dockerfile](../Dockerfile) 使用 Node 22 bookworm-slim 多阶段构建，以非 root `node` 用户（UID 1000）运行；不包含 Chromium。基础镜像标签不是固定摘要，正式流水线应核验并固定 digest、扫描依赖和镜像。[Compose](../compose.yaml) 配置只读根、`/tmp` tmpfs（128 MiB、noexec/nosuid/nodev）、`cap_drop: ALL`、`no-new-privileges`、PID 上限 256、内存 2 GiB、2 CPU。保留运行时默认 seccomp；项目未提供定制 syscall 白名单，宿主机仍须验证实际策略。
+[Dockerfile](../Dockerfile) 使用 Node 22.23.4 bookworm-slim 多阶段构建（[安全基线与升级流程](node-security.md)），以非 root `node` 用户（UID 1000）运行；不包含 Chromium。基础镜像标签不是固定摘要，正式流水线应核验并固定 digest、扫描依赖和镜像。[Compose](../compose.yaml) 配置只读根、`/tmp` tmpfs（128 MiB、noexec/nosuid/nodev）、`cap_drop: ALL`、`no-new-privileges`、PID 上限 256、内存 2 GiB、2 CPU。保留运行时默认 seccomp；项目未提供定制 syscall 白名单，宿主机仍须验证实际策略。
 
 运行环境必须保持非 root、只读根文件系统、能力最小化、no-new-privileges，并使用宿主机实际生效的 seccomp / AppArmor / SELinux 等策略，不能使用 privileged、宿主网络或 Docker socket 挂载来绕过限制。数据、临时目录、浏览器资料及外部备份分别评估必要写权限和容量。不得把 Docker 默认 seccomp 当作项目自带专用白名单。
 
@@ -80,7 +82,7 @@ docker compose build
 # 首次启动之前完成离线引导；已有运行实例先停止，共用同一命名数据卷
 docker compose stop
 # 先通过受控方式把 NOVEL_BOOTSTRAP_PASSWORD 注入当前进程环境
-docker compose run --rm --no-deps -e NOVEL_BOOTSTRAP_PASSWORD novel-agent node build/packages/server/src/features/administration/admin.js bootstrap-admin --username admin --data-dir /app/data --confirm
+docker compose run --rm --no-deps -e NOVEL_BOOTSTRAP_PASSWORD novel-agent node build/packages/server/src/features/administration/admin.js bootstrap-admin --username admin --phone <E164_PHONE> --data-dir /app/data --confirm
 docker compose run --rm --no-deps novel-agent node build/packages/server/src/features/administration/admin.js enable-auth --owner <RETURNED_OWNER_UUID> --data-dir /app/data --confirm
 # 完成下述真实 HTTPS / 独立密钥配置后，才首次启动
 docker compose up -d
@@ -90,12 +92,13 @@ docker compose up -d
 
 默认数据卷 `/app/data`、独立备份卷 `/app/.data-managed-backups` 和 `/tmp` 可写；镜像为两个持久目录预设 UID 1000 所有权。自定义 bind mount 必须自行配置 UID / ACL 并测试，否则维护会失败，不能改成根文件系统可写来掩盖。离线维护备份目的地也须显式提供独立可写挂载，且位于数据目录外；备份含秘密、不可使用 `docker compose down -v` 删除唯一数据卷。镜像无 Chromium，默认不支持远程容器中番茄首次交互登录。
 
-本轮检查环境仅有 Docker CLI 29.3.1，Docker Engine pipe 不存在，**未实际构建镜像或运行容器**。主实施者确认 `docker compose config --quiet` 通过；静态检查 / 应用测试不是 Node 22 容器、宿主隔离或真实 TLS 的验证。GitHub 安全预发布拟采用 `v0.0.2-a.2`；最终标签与发布由主实施者决定，不将预发布视为合规证明。发布产物为 `.tar.gz` 压缩包，包含受 Git 跟踪的源码、编译后的服务 / 前端产物和锁文件，不含 node_modules、`.env` 或数据目录，并提供 commit manifest 与 SHA256SUMS。下载后核对校验信息，从解压根目录执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再 `node build/packages/server/src/index.js`；保留锁文件并按发布校验信息核对来源。发布包包含已编译产物，不代表已安装依赖或完成容器验收。
+本轮检查环境仅有 Docker CLI 29.3.1，Docker Engine pipe 不存在，**未实际构建镜像或运行容器**。主实施者确认 `docker compose config --quiet` 通过；静态检查 / 应用测试不是 Node 22 容器、宿主隔离或真实 TLS 的验证。本次预发布标签为 `v0.0.3a`，npm/package SemVer 为 `0.0.3-a`；实际发布状态由发布者确认，不将预发布视为合规证明。发布资产尚未最终决定，仅在本次构建成功后优先提供源码 + 编译产物；拟排除 node_modules、真实 `.env`、数据、凭据及浏览器登录态，并提供来源 manifest 与 SHA256 校验信息。以最终资产清单为准，不预先声称已打包或验证。若资产实际包含已编译产物，核对校验信息后，从解压根目录使用 Node `^22.23.4 || ^24.22.2` 执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再 `node build/packages/server/src/index.js`；纯源码资产须先安装开发依赖并构建。编译产物不代表已安装依赖或完成容器验收。见[本次发布说明](../RELEASE_NOTES.md)。
 
 ## 6. 交付验收清单
 
 - [ ] 明确保护对象、适用要求、责任人及外部依赖；未作等级 / 认证声明。
-- [ ] 认证已显式启用；拒绝匿名与跨角色 / 租户访问；身份 / MFA / 恢复策略有实测证据。
+- [ ] 认证已显式启用；拒绝匿名与跨角色 / 租户访问；每个账号已绑定手机号，逐次密码登录 SMS / 已启用 TOTP、手机遗失恢复流程有实测证据。
+- [ ] SMS 供应商密钥 / 签名 / 模板获批并受控；真实 Alibaba / Tencent 投递及失效处理独立验收。Turnstile 已配置时逐路径验证服务端拒绝无效令牌。验证刷新轮换、7 天过期、30 天空闲上限、离线 8 天不能刷新，确认写请求无自动重放。
 - [ ] 真实 HTTPS 入口、Host / Origin / CSRF / Cookie、代理限流及后端不可直连已验证。
 - [ ] 非 root、只读根、能力 / seccomp、卷权限、资源限额、重启与维护目录可写性已在目标宿主机实测。
 - [ ] 审计外送、链校验、轮转后归档、删除 / 重写检测、时钟与容量告警已演练；没有把本地链等同不可篡改。

@@ -31,9 +31,9 @@ npm start
 ## 服务端：先离线引导，再启动
 
 1. 停止服务并保护数据、数据库及外部密钥；CLI 也持有数据目录锁。
-2. 在 CLI 进程显式设置 `$env:CoreModel='server'`（CLI 不自动加载 `.env`），安全注入 `NOVEL_BOOTSTRAP_PASSWORD`，离线执行 `npm run admin -- bootstrap-admin --username admin --data-dir <DATA_DIRECTORY> --confirm`。
+2. 在 CLI 进程显式设置 `$env:CoreModel='server'`（CLI 不自动加载 `.env`），安全注入 `NOVEL_BOOTSTRAP_PASSWORD`，离线执行 `npm run admin -- bootstrap-admin --username admin --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm`。现有未绑定用户需停服后用 `npm run admin -- set-phone --username <USERNAME> --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm` 离线迁移；该操作撤销其既有会话。号码须符合 `+` 加国家码的 E.164 形式；备份包含敏感手机号。
 3. 记录返回的 owner UUID，再执行 `npm run admin -- enable-auth --owner <RETURNED_OWNER_UUID> --data-dir <DATA_DIRECTORY> --confirm`。只有全新空数据目录才可使用 `--no-legacy`；创建账号本身不会开启认证。
-4. 配置 `CoreModel=server`、精确 HTTPS `NOVEL_TRUSTED_PUBLIC_ORIGIN`、两个独立且各至少 32 字符的高熵 `MODEL_SECRETS_KEY` / `PLATFORM_SECRETS_KEY`，保持 `GATEWAY_ENABLED=false`。可显式设置 `SECURITY_PROFILE=hardened` / `SECURITY_AUDIT=true`，但不能设置反向值。
+4. 配置 `CoreModel=server`、精确 HTTPS `NOVEL_TRUSTED_PUBLIC_ORIGIN`、两个独立且各至少 32 字符的高熵 `MODEL_SECRETS_KEY` / `PLATFORM_SECRETS_KEY`，保持 `GATEWAY_ENABLED=false`。**启动前必须配置短信提供商** `NOVEL_SMS_PROVIDER=aliyun` 或 `tencent` 及该提供商的全部凭据、已批准签名 / 模板；未配置 / 无效配置拒绝启动，不向真实供应商发送启动探测短信。变量清单及认证流程见[认证模块契约](../packages/server/src/features/auth/README.md#sms-provider-and-turnstile-server-mode)。可显式设置 `SECURITY_PROFILE=hardened` / `SECURITY_AUDIT=true`，但不能设置反向值。
 5. 部署真实 TLS 反向代理，保留浏览器 Host（含非默认端口）、Origin、Cookie 和 CSRF；清除不可信转发头，只允许代理到后端。Node 自身不提供 TLS，也不信任 `X-Forwarded-*`；仅填写 HTTPS origin 不会安装证书或启用认证。独立 Web 入口必须同源代理 `/api` 与 `/uploads`，不开放跨源业务 CORS。
 6. 启动并在实际 HTTPS 入口验证匿名拒绝、角色 / 租户隔离、CSRF、Secure Cookie、审计及后端不可直连。
 
@@ -41,7 +41,7 @@ HTTPS origin 必须是单一精确来源，无用户信息、非根路径、quer
 
 ### server 账号策略
 
-server 对新设密码要求至少 15 个 Unicode 字符、最多 1024 字节，拒绝有限常见密码清单、低字符多样性及账号名衍生密码；改密 / 重置 / 恢复不能重用当前密码。该规则不追溯否定已保存密码，也不强迫现有用户立即改密。完成身份验证（已配置 MFA 时须通过该验证）后才签发会话，每个用户最多保留 5 个有效会话；新增会话达到上限时撤销最早到期的会话（按 expiresAt）。local 保留既有密码与会话策略。可选 MFA 不是默认强制 MFA；相关最终行为应与[认证模块契约](../packages/server/src/features/auth/README.md)及实际回归一致。
+server 对新设密码要求至少 15 个 Unicode 字符、最多 1024 字节，拒绝有限常见密码清单、低字符多样性及账号名衍生密码；改密 / 重置 / 恢复不能重用当前密码。**每次密码登录均须验证绑定手机短信验证码**，未绑定 / 未验证手机号拒绝登录，不以邮件或可选 TOTP 绕过；已启用的 TOTP 仍需额外完成。自助注册先验证手机号，后确认邮箱，才创建已绑定账号。配置 Turnstile 时，登录、注册及发放注册 / 登录 / 绑定短信均须完成服务端校验，挑战令牌不可跨请求重复使用。v0.0.3a 服务端 access 有效期 60 分钟、轮换 refresh 7 天、持久化空闲上限 30 天；**离线 8 天后已过 refresh 有效期，不能宣称离线 30 天免登录**。客户端会在会话恢复和符合条件的失败读取上尝试刷新；不自动重放可能已提交的写操作。最多 5 个有效浏览器会话族。local 保留既有密码与会话策略；相关行为仍以[认证模块契约](../packages/server/src/features/auth/README.md)及完成后的回归 / 真实服务验收为准。
 
 ## Docker 与 Compose
 
@@ -51,4 +51,4 @@ server 对新设密码要求至少 15 个 Unicode 字符、最多 1024 字节，
 
 **容器 local 仅监听容器内部 `127.0.0.1`。宿主机发布端口不能访问该监听地址；不要把 `CoreModel=local` 加端口映射宣传为可用的本机 Docker 方案。** 建议本机用户原生 local；需要容器外浏览器入口时使用符合全部前置条件的 server 与真实 HTTPS 代理。
 
-当前实现环境缺少可用 Docker Engine，未实际构建镜像或运行容器；配置静态检查不代表目标宿主机验收。镜像不含 Chromium。模式检查、HTTP 防护和本地有界审计不是 OS 内核防护增强、不可篡改集中审计、认证或公网生产安全保证；单实例、非 HA 及外部服务独立验收边界保持不变。目标预发布为 `v0.0.2-a.2`，实际发布由发布者确认。
+当前实现环境缺少可用 Docker Engine，未实际构建镜像或运行容器；配置静态检查不代表目标宿主机验收。镜像不含 Chromium。模式检查、HTTP 防护和本地有界审计不是 OS 内核防护增强、不可篡改集中审计、认证或公网生产安全保证；单实例、非 HA 及外部服务独立验收边界保持不变。目标预发布为 `v0.0.3a`，实际发布由发布者确认。

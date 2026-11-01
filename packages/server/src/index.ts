@@ -1,3 +1,4 @@
+import { assertSupportedNodeVersion } from '../../../shared/node-runtime.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import express from 'express';
@@ -14,6 +15,7 @@ import { readLocalGatewayConfig, startLocalGateway, type LocalGateway } from './
 import { SQLConnectService, createSQLconnectRouter } from './infrastructure/database/sqlconnect.js';
 import { AuthService } from './features/auth/auth.js';
 import { createAccountEmailTransport } from './features/auth/account-mail.js';
+import { createSmsTransport } from './features/auth/sms-provider.js';
 import { OnlineMaintenanceManager } from './features/administration/online-maintenance.js';
 import { RelationalStorage } from './infrastructure/storage/relational-storage.js';
 import {
@@ -22,6 +24,7 @@ import {
   readStorageManifest,
   readStorageProfiles,
 } from './infrastructure/storage/storage-config.js';
+assertSupportedNodeVersion();
 try {
   process.loadEnvFile(path.join(appRoot, '.env'));
 } catch (error) {
@@ -43,6 +46,8 @@ if (fs.existsSync(path.join(dir, '.maintenance-journal.json')))
 // Read-only preflight must fail before acquiring the lock or creating audit/data files.
 const mode = readAuthMode(dir);
 assertHardenedStartup({ ...securityProfile, authEnabled: mode.enabled, trustedOrigin: publicOrigin, gatewayEnabled: gatewayConfig.enabled, modelKey: process.env.MODEL_SECRETS_KEY, platformKey: process.env.PLATFORM_SECRETS_KEY });
+const smsTransport = createSmsTransport();
+if (coreModel === 'server' && !smsTransport) throw new Error('SERVER_SMS_PROVIDER_REQUIRED');
 const releaseDataLock = acquireDataLock(dir);
 process.once('exit', releaseDataLock);
 const securityAudit = securityProfile.audit ? new SecurityAuditLog(path.join(dir, 'security-audit')) : undefined;
@@ -58,6 +63,7 @@ const auth = new AuthService({
   securityProfile: coreModel,
   persistence: authPersistence,
   emailTransport: createAccountEmailTransport(),
+  smsTransport,
 });
 if (mode.enabled && !auth.hasSuperadmin()) throw new Error('AUTH_BOOTSTRAP_REQUIRED');
 const sqlconnect = new SQLConnectService({ dataDir: dir, appRoot });

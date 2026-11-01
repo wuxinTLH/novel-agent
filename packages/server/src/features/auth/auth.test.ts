@@ -21,16 +21,21 @@ async function setup(
 ) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-auth-'));
   let now = Date.now();
+  let smsCode = '';
   const service = new AuthService({
     dataDir: dir,
     enabled: true,
     sessionTtlMs: options.ttl,
     securityProfile: options.securityProfile,
+    ...(options.securityProfile === 'server' ? { smsTransport: Object.assign(
+      async (message: { to: string; purpose: 'register' | 'login'; code: string }) => { smsCode = message.code; },
+      { send: async (_message: { phone: string; code: string }) => {} },
+    ) } : {}),
     now: () => now,
     fetch: options.fetch,
     persistence: options.persistence,
   });
-  service.bootstrapSuperadmin('admin', password);
+  service.bootstrapSuperadmin('admin', password, options.securityProfile === 'server' ? '+15551234567' : undefined);
   const app = express();
   app.use(express.json());
   if (options.authorize) app.use('/api/auth/management', service.createManagementRouter(options.authorize));
@@ -59,11 +64,38 @@ async function setup(
       csrfToken,
     );
     const result = await response.json();
+    if (options.securityProfile === 'server' && response.status === 200 && result.smsRequired) {
+      const pending = response.headers.getSetCookie().find((v) => v.startsWith('novel_sms='))!.split(';')[0];
+      const requested = await request('/account/sms/request', 'POST', {},
+        `${preCookie}; ${pending}`, csrfToken);
+      assert.equal(requested.status, 202);
+      const active = requested.headers.getSetCookie().find((v) => v.startsWith('novel_sms='))!.split(';')[0];
+      const completed = await request('/account/sms/verify', 'POST', { code: smsCode },
+        `${preCookie}; ${active}`, csrfToken);
+      const session = await completed.json();
+      return { response: completed, result: session,
+        cookie: completed.headers.getSetCookie().find((v) => v.startsWith('novel_session='))!.split(';')[0],
+        refresh: completed.headers.getSetCookie().find((v) => v.startsWith('novel_refresh='))!.split(';')[0],
+        csrf: session.csrfToken as string };
+    }
     return {
       response,
       result,
       cookie: response.headers.getSetCookie()[0]?.split(';')[0] ?? '',
+      refresh: '',
       csrf: result.csrfToken as string,
+    };
+  }
+  async function refresh(refreshCookie: string, accessCookie = '') {
+    const pre = await request('/csrf');
+    const { csrfToken } = await pre.json();
+    const preCookie = pre.headers.getSetCookie()[0].split(';')[0];
+    const response = await request('/refresh', 'POST', {},
+      `${preCookie}; ${refreshCookie}; ${accessCookie}`, csrfToken);
+    const result = await response.json();
+    return { response, result,
+      cookie: response.headers.getSetCookie().find((v) => v.startsWith('novel_session='))?.split(';')[0] ?? '',
+      refresh: response.headers.getSetCookie().find((v) => v.startsWith('novel_refresh='))?.split(';')[0] ?? '',
     };
   }
   return {
@@ -71,6 +103,7 @@ async function setup(
     service,
     request,
     login,
+    refresh,
     now: () => now,
     advance: (ms: number) => {
       now += ms;
@@ -190,8 +223,9 @@ test('server limits each user to five sessions; failed persistence does not evic
     const sessions = [];
     for (let i = 0; i < 5; i++) {
       sessions.push(await s.login());
-      s.advance(1);
+      s.advance(60001); // SMS send cooldown per phone.
     }
+    s.advance(15 * 60000 + 1);
     broken = true;
     assert.equal((await s.login()).response.status, 503);
     assert.equal(
@@ -205,6 +239,7 @@ test('server limits each user to five sessions; failed persistence does not evic
       (await s.request('/session', 'GET', undefined, sessions[0].cookie).then((r) => r.json())).authenticated,
       false,
     );
+    assert.equal((await s.refresh(sessions[0].refresh)).response.status, 401);
     const listed = await s.request('/sessions', 'GET', undefined, newest.cookie);
     assert.equal((await listed.json()).sessions.length, 5);
     assert.equal(listed.headers.get('cache-control'), 'no-store');
@@ -931,6 +966,180 @@ test('legacy persisted users normalize to writer and invalid persisted roles fai
   } finally {
     await s.close();
   }
+});
+
+test('server proxy users have independent SMS and refresh quotas without weakening password limits', async () => {
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const admin = await s.login();
+    const logins = [admin];
+    for (let i = 0; i < 5; i++) {
+      const name = `writer${i}`;
+      assert.equal((await s.request('/users', 'POST', { username: name, password },
+        admin.cookie, admin.csrf)).status, 201);
+      s.service.provisionVerifiedPhone(name, `+1555000000${i}`);
+      const login = await s.login(name);
+      assert.equal(login.response.status, 200);
+      logins.push(login);
+    }
+    // All requests use the same loopback socket address, as with the production proxy.
+    for (const login of logins) {
+      let refresh = login.refresh;
+      for (let i = 0; i < 2; i++) {
+        const rotated = await s.refresh(refresh);
+        assert.equal(rotated.response.status, 200);
+        refresh = rotated.refresh;
+      }
+    }
+    // Same username is still limited independently of the larger proxy ingress budget.
+    for (let i = 0; i < 9; i++) assert.equal((await s.login('writer0', 'wrong')).response.status, 401);
+    assert.equal((await s.login('writer0', 'wrong')).response.status, 429);
+    assert.equal((await s.login('unrelated', 'wrong')).response.status, 401);
+  } finally {
+    await s.close();
+  }
+});
+
+test('verified refresh families remain bounded and invalid refresh traffic cannot consume their quota', async () => {
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const login = await s.login();
+    for (let i = 0; i < 10; i++) assert.equal((await s.refresh('novel_refresh=invalid')).response.status, 401);
+    assert.equal((await s.refresh('novel_refresh=invalid')).response.status, 429);
+    let refresh = login.refresh;
+    for (let i = 0; i < 10; i++) {
+      const rotated = await s.refresh(refresh);
+      assert.equal(rotated.response.status, 200);
+      refresh = rotated.refresh;
+    }
+    assert.equal((await s.refresh(refresh)).response.status, 429);
+    s.advance(15 * 60000 + 1);
+    assert.equal((await s.refresh(refresh)).response.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test('server refresh rotates strictly once, exposes availability and revokes family on replay', async () => {
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const login = await s.login();
+    assert.equal(login.response.status, 200);
+    assert.ok(login.refresh.startsWith('novel_refresh='));
+    const persisted = JSON.parse(fs.readFileSync(path.join(s.dir, 'auth.json'), 'utf8'));
+    assert.equal(JSON.stringify(persisted).includes(login.refresh.slice('novel_refresh='.length)), false);
+    assert.equal(persisted.refreshFamilies.length, 1);
+    s.advance(60 * 60000 + 1);
+    const status = await s.request('/session', 'GET', undefined, `${login.cookie}; ${login.refresh}`);
+    assert.deepEqual([((await status.json()) as { authenticated: boolean; refreshAvailable: boolean }).authenticated,
+      ((await s.request('/session', 'GET', undefined, `${login.cookie}; ${login.refresh}`).then((r) => r.json())) as { refreshAvailable: boolean }).refreshAvailable],
+      [false, true]);
+    const fresh = await s.refresh(login.refresh, login.cookie);
+    assert.equal(fresh.response.status, 200);
+    assert.notEqual(fresh.refresh, login.refresh);
+    assert.equal((await s.request('/session', 'GET', undefined, fresh.cookie).then((r) => r.json())).authenticated, true);
+    const replay = await s.refresh(login.refresh);
+    assert.equal(replay.response.status, 401);
+    assert.equal(replay.result.error, 'AUTH_REFRESH_REPLAY');
+    assert.equal((await s.refresh(fresh.refresh)).response.status, 401);
+    assert.equal((await s.request('/session', 'GET', undefined, fresh.cookie).then((r) => r.json())).authenticated, false);
+  } finally { await s.close(); }
+});
+
+test('server refresh expires after seven days and cannot bypass login revocation', async () => {
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const first = await s.login();
+    s.advance(7 * 86400000 + 1);
+    assert.equal((await s.refresh(first.refresh)).response.status, 401);
+    const next = await s.login();
+    const out = await s.request('/logout', 'POST', {}, `${next.cookie}; ${next.refresh}`, next.csrf);
+    assert.equal(out.status, 200);
+    assert.equal((await s.refresh(next.refresh)).response.status, 401);
+    s.advance(15 * 60000 + 1);
+    const last = await s.login();
+    const changed = await s.request('/password', 'POST', { currentPassword: password,
+      newPassword: 'a unique server password 567!' }, `${last.cookie}; ${last.refresh}`, last.csrf);
+    assert.equal(changed.status, 200);
+    assert.equal((await s.refresh(last.refresh)).response.status, 401);
+  } finally { await s.close(); }
+});
+
+test('server refresh survives restart; legacy local access requires fresh server login', async () => {
+  const local = await setup();
+  try {
+    const old = await local.login();
+    const strict = new AuthService({ dataDir: local.dir, enabled: true, securityProfile: 'server' });
+    const req = { headers: { cookie: old.cookie } } as Request;
+    assert.equal(strict.session(req), null);
+  } finally { await local.close(); }
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const login = await s.login();
+    const restarted = new AuthService({ dataDir: s.dir, enabled: true, securityProfile: 'server', now: s.now });
+    assert.ok(restarted.session({ headers: { cookie: login.cookie } } as Request));
+    const rotated = await s.refresh(login.refresh);
+    assert.equal(rotated.response.status, 200);
+    const reloaded = new AuthService({ dataDir: s.dir, enabled: true, securityProfile: 'server', now: s.now });
+    assert.ok(reloaded.session({ headers: { cookie: rotated.cookie } } as Request));
+    const families = JSON.parse(fs.readFileSync(path.join(s.dir, 'auth.json'), 'utf8')).refreshFamilies;
+    assert.equal(families.length, 1);
+    assert.equal(families[0].sessionHash.length, 64);
+  } finally { await s.close(); }
+});
+
+test('failed refresh persistence preserves old cookie and refuses replacement credentials', async () => {
+  let saved: AuthDocument | null = null;
+  let broken = false;
+  const s = await setup({ securityProfile: 'server', persistence: {
+    read: () => saved, write: (next) => { if (broken) throw Error('write failed'); saved = structuredClone(next); },
+  } });
+  try {
+    const login = await s.login();
+    broken = true;
+    const failed = await s.refresh(login.refresh);
+    assert.equal(failed.response.status, 503);
+    assert.equal(failed.refresh, '');
+    broken = false;
+    const recovered = await s.refresh(login.refresh);
+    assert.equal(recovered.response.status, 200);
+    const blocked = await s.request('/refresh', 'POST', {}, login.refresh, '');
+    assert.equal(blocked.status, 403);
+  } finally { await s.close(); }
+});
+
+test('family IDs remain revocable after access expiry, including admin disable', async () => {
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const first = await s.login();
+    s.advance(15 * 60000 + 1);
+    const second = await s.login();
+    s.advance(60 * 60000 + 1);
+    const active = await s.refresh(second.refresh);
+    assert.equal(active.response.status, 200);
+    const list = await s.request('/sessions', 'GET', undefined, `${active.cookie}; ${active.refresh}`);
+    const { sessions } = await list.json() as { sessions: { id: string; current: boolean }[] };
+    assert.equal(sessions.length, 2);
+    const stale = sessions.find((item) => !item.current)!;
+    assert.equal((await s.request(`/sessions/${stale.id}`, 'DELETE', {},
+      `${active.cookie}; ${active.refresh}`, active.result.csrfToken)).status, 200);
+    assert.equal((await s.refresh(first.refresh)).response.status, 401);
+    assert.equal((await s.refresh(active.refresh)).response.status, 200);
+  } finally { await s.close(); }
+});
+
+test('concurrent refresh requests cannot both succeed and replay revokes the issued session', async () => {
+  const s = await setup({ securityProfile: 'server' });
+  try {
+    const login = await s.login();
+    const [a, b] = await Promise.all([s.refresh(login.refresh), s.refresh(login.refresh)]);
+    assert.deepEqual([a.response.status, b.response.status].sort(), [200, 401]);
+    const winner = a.response.status === 200 ? a : b;
+    const loser = a.response.status === 401 ? a : b;
+    assert.equal(loser.result.error, 'AUTH_REFRESH_REPLAY');
+    assert.equal((await s.refresh(winner.refresh)).response.status, 401);
+    assert.equal((await s.request('/session', 'GET', undefined, winner.cookie).then((r) => r.json())).authenticated, false);
+  } finally { await s.close(); }
 });
 
 test('corrupt persistence fails closed and failed write never installs a session', async () => {

@@ -1,10 +1,20 @@
 # Authentication and opt-in accounts
 
+> **v0.0.3a prerelease:** The server SMS/refresh behavior below is included in this prerelease; publication does not establish real SMS delivery or external deployment acceptance. Independently validate configured providers and end-to-end deployment before use.
+
 Native local authentication and optional account capabilities remain **off by default**; `CoreModel=server` refuses startup until authentication is enabled offline. See [deployment modes](../../../../../docs/en/deployment-modes.md). Creating users, configuring extensions, or sending mail never enables authentication. Initial superadmin creation remains local CLI only. Account metadata lives in the existing version-1 auth document (optional `account` field), including when the owner's AuthPersistence is SQL-backed. TOTP seeds and OIDC client secrets use the existing auth encryption key. Do not downgrade binaries after account extensions are configured: older schemas can strip unknown fields.
 
 ## Server credential and session policy
 
-New server credentials require at least 15 Unicode characters (at most 1024 bytes), reject limited-common-blocklist/low-character-diversity/account-name-derived passwords and current-password reuse; existing credentials are not retroactively invalidated. Sessions are issued after authentication, including enrolled MFA when configured; server retains at most 5 active sessions per user, revoking the session with the earliest expiresAt on overflow. Local retains its existing policy. Policy selection uses `AuthServiceOptions.securityProfile` (`local` / `server`); changing mode does not rehash stored passwords. Public registration and recovery retain generic 202 on delivery failure and revoke uncertain-delivery tokens: accepted does not mean delivered. Authenticated email-change delivery failure still reports an error.
+New server credentials require at least 15 Unicode characters (at most 1024 bytes), reject limited-common-blocklist/low-character-diversity/account-name-derived passwords and current-password reuse; existing credentials are not retroactively invalidated. Server passwords lead to an SMS second factor **on every password login**; no authenticated session is issued before successful SMS verification, and a previously enrolled TOTP factor must also pass. Users without a verified bound phone fail closed; there is no email/TOTP fallback around the mandatory SMS step. A lost phone requires controlled offline `set-phone` while stopped, not a TOTP recovery-code bypass. Server bootstrap requires `--phone` in E.164 format and offline `set-phone` migrates existing users (revoking their sessions); local bootstrap rejects `--phone` and keeps its legacy policy.
+
+Current server implementation sets a 60-minute access cookie, a rotating 7-day refresh cookie, and a persisted 30-day inactivity cutoff checked when refreshing; it allows at most five active browser families per user and rejects refresh-token reuse. The idle cutoff is an upper bound, **not** an offline 30-day sign-in promise: with a seven-day refresh expiry, returning after eight days offline cannot refresh. Refresh requires a fresh prelogin CSRF token and rotates the token; current client wiring refreshes on session bootstrap and eligible failed reads, but does not automatically replay failed mutations. Local session behavior remains unchanged. Policy selection uses `AuthServiceOptions.securityProfile` (`local` / `server`); changing mode does not rehash stored passwords. Public registration and recovery retain generic 202 on delivery failure and revoke uncertain-delivery tokens: accepted does not mean delivered. Authenticated email-change delivery failure still reports an error.
+
+## SMS provider and Turnstile (server mode)
+
+Before server startup, choose `NOVEL_SMS_PROVIDER=aliyun` or `NOVEL_SMS_PROVIDER=tencent`; missing provider fails with `SERVER_SMS_PROVIDER_REQUIRED`, invalid or incomplete selected-provider settings fail configuration validation. Alibaba uses the official China Dysmsapi `SendSms` action/version `2017-05-25`, with `NOVEL_SMS_ALIYUN_ACCESS_KEY_ID`, `NOVEL_SMS_ALIYUN_ACCESS_KEY_SECRET`, `NOVEL_SMS_ALIYUN_SIGN_NAME`, and `NOVEL_SMS_ALIYUN_TEMPLATE_CODE`. Tencent uses SMS `SendSms` version `2021-01-11`, with `NOVEL_SMS_TENCENT_SECRET_ID`, `NOVEL_SMS_TENCENT_SECRET_KEY`, `NOVEL_SMS_TENCENT_SDK_APP_ID`, `NOVEL_SMS_TENCENT_SIGN_NAME`, and `NOVEL_SMS_TENCENT_TEMPLATE_ID`. Use approved sign/template values, secure secret injection, account quota and independently verified delivery; configured is not delivered. No real vendor delivery has been validated.
+
+When Turnstile is enabled in admin settings, the server verifies token success, expected action and hostname at Cloudflare siteverify and fails closed on missing/failed tokens for password login, registration and registration/login/phone SMS issuance. The client must obtain a **fresh** token for each request; do not reuse a one-time challenge across registration and SMS issuance. Disabled Turnstile does not remove CSRF, rate limits or SMS possession checks. See [deployment](../../../../../docs/en/deployment-modes.md) and [hardening](../../../../../docs/en/security-hardening.md).
 
 ## Integration contracts
 
@@ -16,10 +26,17 @@ The existing auth router installs the endpoints below automatically. The existin
 
 All mutating public endpoints require the existing `/csrf` prelogin cookie and `X-CSRF-Token`, except OIDC GET callback which requires single-use state and a browser-bound SameSite=Lax HttpOnly cookie. Authenticated mutations require the existing authenticated CSRF token; admin mutations require existing admin authorization/CSRF. All responses are no-store. Endpoint names below are relative to `/api/auth`:
 
-- `GET /account/features`: public default-off capabilities.
-- `GET /account`: own email, verification, MFA status and remaining recovery count only.
-- `POST /account/register`: `{username,email,password,turnstileToken?}`; generic 202, sends confirmation; registered users can only have ordinary user role.
-- `POST /account/register/complete`: `{token}`; single-use, verified email, no automatic login.
+- `GET /account/features`: public capabilities, including server `smsRequired`.
+- `GET /account`: own email, verified-phone status/phone, MFA status and remaining recovery count only.
+- `POST /account/register/sms/request`: server-only `{username,email,phone,turnstileToken?}`; sends a six-digit code to an E.164 phone after prelogin CSRF and configured Turnstile verification.
+- `POST /account/register/sms/verify`: server-only `{code}`; stores a browser-bound, short-lived registration proof cookie, not an authenticated session.
+- `POST /account/register`: `{username,email,password,phone?,turnstileToken?}`; server requires `phone` and matching verified SMS proof; generic 202, sends email confirmation; registered users can only have ordinary user role.
+- `POST /account/register/complete`: `{token}`; single-use email confirmation, server requires matching SMS proof and binds the verified phone, no automatic login.
+- `POST /account/sms/request`: server-only `{turnstileToken?}` after password challenge; reissues a code for the bound phone.
+- `POST /account/sms/verify`: server-only `{code}`; completes mandatory SMS factor before optional enrolled TOTP and session issuance.
+- `POST /account/phone/request`: authenticated `{phone,turnstileToken?}`; sends a phone-binding code after configured Turnstile verification.
+- `POST /account/phone/verify`: authenticated `{code}`; binds verified phone and revokes existing sessions/refresh credentials.
+- `POST /refresh`: server-only prelogin CSRF; verifies and rotates the refresh cookie, applies idle/expiry checks, and issues a new access/CSRF session. Client may retry eligible GET reads after refresh, but never automatically replays writes.
 - `POST /account/email`: authenticated `{email}`; sends verification.
 - `POST /account/email/complete`: authenticated `{token}`; token bound to that user. Replacing a verified email revokes previous reset links; reset links additionally bind the currently verified email.
 - `POST /account/recovery`: `{email}`; generic 202 for unknown and known addresses.
@@ -33,7 +50,7 @@ All mutating public endpoints require the existing `/csrf` prelogin cookie and `
 - `GET/PUT /account/config`: admin only. Full config: `registration,emailVerification,passwordRecovery,mfa,publicOrigin,oidc`; OIDC object contains `enabled,issuer,clientId,authorizationEndpoint,tokenEndpoint,jwksUri,redirectUri,clientSecret?`. GET returns `hasClientSecret`, never the secret. HTTPS URLs required for enabled delivery/OIDC. Config changes invalidate outstanding extension tokens. MFA cannot be globally disabled while users have enrolled factors.
 - `PUT /account/oidc/users/:id`: admin-only explicit `{issuer,subject}` link. This endpoint is available on the management router too.
 
-Normal password login returns `{mfaRequired:true}` instead of an authenticated session for enrolled users. Parent AuthGate must retain prelogin CSRF, prompt for factor, and submit `/account/mfa/verify`. No business/tenant principal is created before successful second factor. Pending challenges are invalidated on password, disabled or role changes. Disabling MFA globally cannot bypass enrolled factors.
+Normal server password login returns `{smsRequired:true}` instead of an authenticated session, even if no TOTP factor is enrolled. Parent AuthGate must retain prelogin CSRF, request and verify an SMS code, and then prompt for enrolled TOTP if present. Local enrolled-MFA login retains the original `{mfaRequired:true}` path. No business/tenant principal is created before all required factors succeed. Pending challenges are invalidated on password, disabled or role changes. Disabling optional TOTP globally cannot bypass server SMS.
 
 `AuthService.waitForIdle()` drains actual handler promises (including aborted HTTP's ongoing scrypt/mail/provider operations). Parent maintenance **must prevent new requests first**, then await this method before snapshotting. It is not itself an admission lock.
 

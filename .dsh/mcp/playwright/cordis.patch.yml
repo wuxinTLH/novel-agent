@@ -1,0 +1,21 @@
+# Prepared only: install this directory through DSH plugin_manager.
+# Paths below are workspace-specific; update both when moving the repository.
+- insert:
+    - name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: novel-playwright
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@playwright/mcp/package.json')), 'cli.js')
+          - --headless
+          - --isolated
+          - --block-service-workers
+          - --no-webmcp
+          - --allowed-origins
+          - http://127.0.0.1:5173;http://127.0.0.1:3001
+          - --output-dir
+          - E:/code/novel agent/test-results/playwright-mcp
+        cwd: E:/code/novel agent
+        toolCallTimeoutMs: 60000
+        failOnStartupError: false
