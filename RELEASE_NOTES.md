@@ -1,41 +1,46 @@
-# v0.0.3a — Phone/SMS authentication and runtime baseline
+# v0.0.4a — Chapter management, world stages and safer platform automation
 
-Release tag: `v0.0.3a` · npm/package SemVer: `0.0.3-a`
+Release tag: `v0.0.4a` · npm/package SemVer: `0.0.4-a`
 
 ## 中文
 
-本次预发布汇总用户授权的完整工作树变更，不只包含上一个版本之后的文档调整。**不声明公网生产就绪、等保四级达标、认证或 OS 内核防护。** 部署者仍须独立验收真实外部服务与运行环境。
+本次预发布汇总 v0.0.3a 之后的章节管理、世界观资产和番茄自动化改进。**不声明公网生产就绪、等保认证或真实外部服务全面验收。**
 
-- **手机与短信认证：** server 启动要求配置 Alibaba China Dysmsapi/2017-05-25 或 Tencent SMS v20210111 的凭据及获批签名 / 模板。注册先验证手机号，再确认邮箱；每次密码登录均须验证绑定手机号的短信，已启用 TOTP 时仍须额外完成。未绑定账号失败关闭；服务停机后通过 CLI `--phone` 引导或 `set-phone` 迁移，后者撤销旧会话。配置 Turnstile 时对注册、登录及短信发放作服务端校验，不能复用一次性挑战。
-- **会话与安全重试：** server access 60 分钟，refresh 轮换有效期 7 天并拒绝重用，持久化空闲上限 30 天；离线 8 天已不能刷新，不是离线 30 天免登录。客户端在会话恢复与符合条件的读取失败时刷新，**不自动重放写操作**；操作结果不明确时先只读核对。local 原有默认免登录行为不变。修复反向代理下刷新与短信登录共用 IP 配额造成的互相阻塞；有效刷新按已验证会话族独立限流，保留用户名、短信尝试及有界入口限制。
-- **Node 安全基线：** 仅支持 `^22.23.4 || ^24.22.2`，推荐 24.22.2；旧补丁和其他主版本不支持，升级后重启实际服务。Docker 基础镜像为 Node 22.23.4 bookworm-slim；运行时检查不是 OS 沙箱或系统已升级的证明。
-- **部署与容器配置：** 保留 local 仅回环、server 强制认证 / hardened / 审计、同源真实 HTTPS 代理、独立密钥、单实例 / 非 HA 边界。Compose 镜像标识为 `novel-agent:v0.0.3a`，转发选定短信供应商环境变量，默认空值不包含秘密；Docker 增加 OCI 版本 / 源码 / 标题标签，构建上下文排除缓存、测试报告与项目代理配置。容器保持非 root、只读根和独立数据 / 备份卷，不含 Chromium；container local 不能通过发布端口访问。
-- **项目代理能力：** 新增项目级 Skills 与能力 / 验收指引；可选 Playwright MCP 只是待通过 DSH plugin_manager 安装的配置 bundle，**未安装、未运行，也不是应用依赖**。
-- 创作、文件、存储与平台安全限制继续有效：PDF 上传拒绝；真实 SQL 兼容性、外部服务与代理需独立验收；番茄未知结果只读核对、不盲目重发，送审不等于已发布。
+- **章节分页与批量删除：** 批量模式默认关闭，点击后显示勾选操作；每页 20 / 50 / 100 条，本页全选，跨页保留所选项并显示数量。未保存草稿须先保存或放弃；删除有明确确认。后端对整批修订号执行 CAS，一次提交，失败回滚；不重排章节编号、不降低编号高水位、不删除远端平台草稿。
+- **世界观阶段：** 按自定义阶段分别管理世界观文本和地图，支持阶段新建、改名、空阶段删除及资产移动；旧资产保持未分组。阶段仅组织资产，不自动成为生成上下文。保留租户 / 项目隔离与修订冲突保护。
+- **界面与流程：** 模式和身份在 Logo 下方，语言紧邻主题，系统设置位于指南下方；弹窗启闭及尺寸变化平滑过渡，遵循减少动态效果偏好。小说流 / 人物流 / 世界观流创建对应各自预设，修复同类流程切换回跳和资源页尾随斜杠路由。
+- **番茄稳定性：** 显式选中账号可复用其现有活跃登录窗口，不接管个人浏览器。空闲和聚焦时刷新本地记录，不定时调用远端平台。作品列表等待就绪，区分未加载和真实空列表，保留 64 位 ID。
+- **安全自动核对：** 仅对 `autoApprove=true` 的不可变预览，在已开始写入且已持久化精确远端草稿 ID 后，执行一次精确 ID 的只读完整核对；只有可证明的完整结果才继续。验证码、账号变化、对话框或不确定结果停止；不绕过验证、不重复创建。旧 unknown 批次不会自动重放，缺少远端 ID 仍须人工提供证据。
+- **并发租户启动：** 修复首次创建共享目录的检查 / 创建竞态，仅容忍 EEXIST 并强制逐层检查真实目录；符号链接、非目录和其他创建错误继续失败关闭。
+- 中英文操作指南、接口说明、项目 Skills 指引及版本标识同步更新；[本次验证报告](docs/release-validation-v0.0.4a.md)记录实际测试结果与限制。
 
-### 升级、交付与验证边界
+### 升级和资产
 
-升级前备份数据、数据库、手机号与外部密钥；server 既有账号须安排停机手机号迁移、凭据轮换及真实 HTTPS / Cookie / CSRF / 短信验收。详见[部署模式](docs/deployment-modes.md)、[安全加固与差距](docs/security-hardening.md)、[Node 基线](docs/node-security.md)和[代理能力](docs/agent-capabilities.md)。
+升级前备份数据、数据库与外部密钥，停止原服务后更换产物，再重启。重启会丢失活跃平台浏览器会话，必要时重新登录并在应用内核验账号。server 仍要求已配置的短信供应商、离线启用认证、同源真实 HTTPS、独立密钥及 hardened / 审计；单实例 / 非 HA 边界不变。
 
-发布资产为 `novel-agent-v0.0.3a.tar.gz`（跟踪源码 + 本次成功构建的服务 / 前端产物）及 `SHA256SUMS.txt`，包内包含提交 manifest。排除 node_modules、真实 `.env`、业务数据、凭据、浏览器登录态及测试产物；GitHub 自动生成的源码归档不含编译产物。若资产包含编译产物，从解压根目录用支持的 Node 执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，然后 `node build/packages/server/src/index.js`；纯源码资产须安装开发依赖并先构建。
+资产为 `novel-agent-v0.0.4a.tar.gz`（跟踪源码 + 本次服务 / 前端编译产物）及 `SHA256SUMS.txt`，内含提交 manifest。排除依赖、真实配置、业务数据、凭据、浏览器登录态和本地记忆 / 测试产物。使用 Node `^22.23.4 || ^24.22.2`，推荐 24.22.2；从解压根目录执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再执行 `node build/packages/server/src/index.js`。GitHub 自动源码归档不含编译产物，须另行安装开发依赖并构建。Docker 镜像标识为 `novel-agent:v0.0.4a`，不含 Chromium。
 
-本文不新增测试通过或构建成功的声明；以本次发布者实际记录的验证结果为准。历史 Compose 静态检查不证明本次 Docker 镜像构建 / 运行；真实 SMS、SMTP、OIDC、Turnstile、TLS 代理、数据库、容器宿主机与平台发布验收仍不能由桩测试推导。发布或标签不改变这些限制。
+已知验证限制：TypeScript 源码模式的 SQL Worker 启动测试曾间歇触发 5 秒超时，根因尚未证实；未放宽超时或跳过断言，随后多次源码复测及三次编译产物启动通过。详细失败与复测证据保留于验证报告，不能称为已修复。
+
+隔离测试不等于真实模型、短信、SMTP、OIDC、Turnstile、TLS 代理、供应商 SQL 或番茄送审验收；草稿核对不等于公开发布。详见[部署指南](docs/deployment-modes.md)、[番茄接入](docs/番茄平台接入.md)和[验证报告](docs/release-validation-v0.0.4a.md)。
 
 ## English
 
-This prerelease covers the user-authorized full working tree, not only documentation since the previous tag. **It does not claim public-production readiness, MLPS Level 4 compliance/certification or OS-kernel protection.**
+This prerelease adds chapter management, world-stage organization and safer Fanqie automation since v0.0.3a. **It does not claim public-production readiness, certification or complete real-service acceptance.**
 
-- **Phone/SMS authentication:** server startup requires configured Alibaba China Dysmsapi/2017-05-25 or Tencent SMS v20210111 credentials and approved signature/templates. Registration verifies phone possession before email confirmation; every password login requires bound-phone SMS plus enrolled TOTP where applicable. Unbound accounts fail closed. Bootstrap with CLI `--phone`, or stop the service and migrate existing accounts with `set-phone`, which revokes their sessions. Configured Turnstile is checked server-side on registration, login and SMS issuance; challenges are single-use.
-- **Rotating sessions, no write replay:** server access lasts 60 minutes; refresh rotates with a seven-day lifetime, reuse rejection and persisted 30-day idle cap. Eight days offline cannot refresh: this is not a 30-day offline sign-in promise. The client refreshes on restoration and eligible failed reads, **never automatically replays writes**. Reconcile uncertain operations read-only. Native local defaults remain unchanged. Fix shared proxy-IP quota interference between SMS login and refresh: verified refresh families have separate limits while username, SMS-attempt and bounded ingress protections remain.
-- **Patched Node baseline:** only `^22.23.4 || ^24.22.2` is supported, with 24.22.2 recommended. Restart actual services after upgrading; other majors and older patches are unsupported. Docker uses Node 22.23.4 bookworm-slim. Runtime checks are not an OS sandbox or proof that system Node was upgraded.
-- **Deployment/container configuration:** local remains loopback-only; server requires enabled authentication, hardened/audit, a same-origin real HTTPS proxy and independent keys. Single-instance/non-HA limits remain. Compose identifies `novel-agent:v0.0.3a` and forwards SMS provider settings with empty, secret-free defaults. Docker adds OCI version/source/title labels; build context excludes caches, test reports and project-agent configuration. Non-root/read-only execution and separate data/backup volumes remain; Chromium is absent and container-local listeners cannot be reached through published ports.
-- **Project agent capabilities:** project Skills and capability/acceptance guidance are included. The optional Playwright MCP is a configuration bundle awaiting DSH plugin_manager installation: **not installed, not running and not an application dependency**.
-- Existing authoring/file/storage/publication restrictions remain: PDF uploads are rejected; live SQL/service/proxy compatibility requires separate acceptance; unknown Fanqie outcomes use read-only reconciliation, never blind resend, and review submission is not public publication.
+- **Chapters:** batch mode is off until explicitly enabled; 20/50/100 pagination, current-page select-all, retained revision-pinned cross-page selections and destructive confirmation. Unsaved selected drafts must be saved or discarded first. The server validates the entire CAS set and commits atomically, rolling back persistence failures. Survivors are not renumbered, the high watermark is retained, and remote platform drafts are never deleted.
+- **World stages:** create/rename stages, delete empty stages, upload/filter/move world text and maps. Legacy assets remain ungrouped. Organization does not implicitly alter generation context; tenant/project isolation and revision checks remain.
+- **UI/workflows:** identity below the logo, adjacent language/theme controls, administration below the guide, smooth accessible modal motion, family-specific novel/character/world creation, stable workflow selection and trailing-slash resource routing.
+- **Fanqie:** reuse only explicitly selected live app-owned sessions; no personal-browser adoption. Automatic polling reads local records only. Wait separately for work-list readiness and preserve 64-bit IDs. Only immutable `autoApprove=true` previews may run one exact-ID full read-back after an execution failure with a durably pinned ID. Continue only on proven results; challenges, identity changes or uncertainty stop safely. No blind replay, CAPTCHA bypass or automatic retry of historical unknown batches.
+- **Concurrent tenant startup:** tolerate only a competing directory-creation EEXIST, then validate every ancestor with lstat; symlinks, non-directories and other errors still fail closed.
+- Updated bilingual operational guides, API notes, project-skill guidance and version labels. The [validation report](docs/release-validation-v0.0.4a.md) is the source for actual results and limitations.
 
-### Upgrade, delivery and validation boundaries
+### Upgrade and delivery
 
-Back up data, databases, phone information and external keys before upgrading. Plan stopped-service phone migration and credential rotation for existing server accounts, then independently accept HTTPS/cookies/CSRF and actual SMS delivery. See [deployment](docs/en/deployment-modes.md), [hardening gaps](docs/en/security-hardening.md), [Node baseline](docs/node-security.md) and [agent capabilities](docs/agent-capabilities.md).
+Back up data, databases and independent secrets; stop the service, replace artifacts and restart. Browser sessions do not survive restart: re-login and verify the account in the app if required. Server SMS/authentication, exact same-origin HTTPS, distinct keys, hardened auditing and single-instance/non-HA restrictions remain.
 
-Assets are `novel-agent-v0.0.3a.tar.gz` (tracked source plus freshly built server/web output) and `SHA256SUMS.txt`, with a commit manifest inside the archive. Dependencies, live `.env`, business data, credentials, browser sessions and test artifacts are excluded. GitHub's automatically generated source archives do not include compiled output. For an asset that actually includes compiled output, use supported Node and run `npm ci --omit=dev --ignore-scripts`, `npm rebuild sharp`, then `node build/packages/server/src/index.js` from the extracted root. Source-only assets require development dependencies and a build first.
+Assets: `novel-agent-v0.0.4a.tar.gz` (tracked source plus built web/server output) and `SHA256SUMS.txt`, including a commit manifest. Dependencies, live configuration/data, credentials, browser sessions, local memory and test artifacts are excluded. With Node `^22.23.4 || ^24.22.2` (24.22.2 recommended), run `npm ci --omit=dev --ignore-scripts`, `npm rebuild sharp`, then `node build/packages/server/src/index.js` from the extracted root. GitHub-generated source archives require development dependencies and a build. Docker identifies `novel-agent:v0.0.4a` and does not include Chromium.
 
-This document adds no claim that tests or builds passed; use the publisher's actual current-release verification record. Historical Compose checks do not validate this image build/run. Stub tests cannot establish real SMS/SMTP/OIDC/Turnstile, TLS proxy, database, container-host or platform-publication acceptance. A tag or release changes none of these limits.
+Known verification caveat: the TypeScript-source SQL-worker bootstrap test intermittently exceeded its 5-second deadline; the root cause remains unproven. No timeout was relaxed or assertion skipped. Repeated unchanged-source checks and three compiled-worker startups subsequently passed. The validation report preserves both failures and repeat evidence; this is not described as fixed.
+
+Isolated tests do not prove real paid-model/SMS/SMTP/OIDC/Turnstile/TLS/vendor-SQL/Fanqie acceptance. Verified drafts are not public publication. See [deployment](docs/en/deployment-modes.md), [Fanqie integration](docs/en/fanqie-integration.md) and [validation](docs/release-validation-v0.0.4a.md).

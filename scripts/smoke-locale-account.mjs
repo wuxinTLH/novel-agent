@@ -107,6 +107,16 @@ try {
   });
   assert.ok(created.ok, `isolated project fixture: HTTP ${created.status}`);
   const project = await created.json();
+  const secondWorkflowResponse = await fetch(`${base}/api/projects/${project.id}/workflows`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Platform-CSRF': health.platform.csrfToken },
+    body: JSON.stringify({ name: 'Switch regression second', preset: 'chapter' }),
+  });
+  assert.ok(secondWorkflowResponse.ok, 'second same-family workflow fixture created');
+  const withSecondWorkflow = await secondWorkflowResponse.json();
+  const firstWorkflow = withSecondWorkflow.workflows.find((graph) => graph.id !== withSecondWorkflow.activeWorkflowId);
+  const secondWorkflow = withSecondWorkflow.workflows.find((graph) => graph.id === withSecondWorkflow.activeWorkflowId);
+  assert.ok(firstWorkflow && secondWorkflow);
 
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -158,6 +168,10 @@ try {
     await page.evaluate(
       () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
     );
+    await page.evaluate(async () => {
+      const animations = [...document.querySelectorAll('.modal')].flatMap((panel) => panel.getAnimations());
+      await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
+    });
     const documentSize = await page.evaluate(() => ({
       width: innerWidth,
       scroll: document.documentElement.scrollWidth,
@@ -218,6 +232,68 @@ try {
 
   stage = 'Chinese default and English persistence';
   await page.goto(`${base}/projects`);
+  await page.locator('#shell-mode-status').getByRole('region', { name: '本机模式状态' }).waitFor();
+  await page.locator('#shell-system-settings').getByRole('button', { name: '管理控制台' }).waitFor();
+  assert.equal(await page.locator('.topbar-right .language-switcher').count(), 1);
+  assert.equal(await page.locator('.topbar-right').getByRole('button', { name: '管理控制台' }).count(), 0);
+  assert.equal(await page.locator('.sidebar-bottom').evaluate((element) => {
+    const guide = [...element.querySelectorAll('button')].find((button) => button.textContent.includes('使用指南'));
+    const settings = element.querySelector('#shell-system-settings');
+    return !!guide && !!settings && !!(guide.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }), true, 'administration follows user guide');
+  await page.screenshot({ path: path.join(screenshots, 'shell-layout-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: path.join(screenshots, 'shell-layout-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  stage = 'same-family workflow selection persists without route reset';
+  await page.goto(`${base}/workflow`);
+  const switcher = page.getByRole('button', { name: '切换工作流', exact: true });
+  for (const graph of [secondWorkflow, firstWorkflow, secondWorkflow]) {
+    await switcher.click();
+    const option = page.getByRole('menuitemradio').filter({ hasText: graph.name });
+    await option.waitFor();
+    if (await option.getAttribute('aria-checked') !== 'true') {
+      await Promise.all([
+        page.waitForResponse((response) => response.url().endsWith(`/workflows/${graph.id}/select`) && response.request().method() === 'POST' && response.ok()),
+        option.click(),
+      ]);
+    } else await page.keyboard.press('Escape');
+    await page.waitForFunction((name) => document.querySelector('.workflow-switch > button')?.textContent.includes(name), graph.name);
+    // A reload confirms server persistence and re-runs the route synchronizer.
+    await page.reload();
+    await switcher.filter({ hasText: graph.name }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('.workflow-switch > button')?.disabled);
+    const saved = await getJson(`/api/projects/${project.id}`);
+    assert.equal(saved.activeWorkflowId, graph.id, 'explicit workflow selection survives route synchronization');
+  }
+  stage = 'create workflows in character and world pages without chapter leakage';
+  for (const [route, title, preset, kind] of [
+    ['character-workflow', '人物', 'character', 'character'],
+    ['world-workflow', '世界观', 'world', 'world'],
+  ]) {
+    await page.goto(`${base}/${route}`);
+    await switcher.waitFor();
+    await page.waitForFunction(() => !document.querySelector('.workflow-switch > button')?.disabled);
+    await page.getByRole('button', { name: `创建${title}流`, exact: true }).click();
+    const creator = page.getByRole('dialog', { name: `创建${title}流`, exact: true });
+    await creator.getByLabel('工作流名称', { exact: true }).fill(`${title} regression`);
+    assert.equal(await creator.getByRole('radio', { name: '小说章节创作模板' }).count(), 0);
+    const [response] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith(`/projects/${project.id}/workflows`) && response.request().method() === 'POST'),
+      creator.getByRole('button', { name: '创建', exact: true }).click(),
+    ]);
+    assert.equal(response.request().postDataJSON().preset, preset);
+    assert.ok(response.ok());
+    const updated = await response.json();
+    assert.ok(updated.steps.some((step) => step.kind === kind));
+    await creator.waitFor({ state: 'detached' });
+    await switcher.filter({ hasText: `${title} regression` }).waitFor();
+    assert.equal(new URL(page.url()).pathname, `/${route}`);
+    await page.reload();
+    await switcher.filter({ hasText: `${title} regression` }).waitFor();
+    const saved = await getJson(`/api/projects/${project.id}`);
+    assert.equal(saved.activeWorkflowId, updated.activeWorkflowId, 'new family workflow survives route synchronization');
+  }
   await expectLocale('zh-CN');
   await language().click();
   assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['中文', 'English'], 'supported language options are explicit');

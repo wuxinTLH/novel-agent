@@ -1,6 +1,6 @@
 # Authentication and opt-in accounts
 
-> **v0.0.3a prerelease:** The server SMS/refresh behavior below is included in this prerelease; publication does not establish real SMS delivery or external deployment acceptance. Independently validate configured providers and end-to-end deployment before use.
+> **Introduced in v0.0.3a, retained in v0.0.4a:** The server SMS/refresh behavior below remains included; publication does not establish real SMS delivery or external deployment acceptance. Independently validate configured providers and end-to-end deployment before use.
 
 Native local authentication and optional account capabilities remain **off by default**; `CoreModel=server` refuses startup until authentication is enabled offline. See [deployment modes](../../../../../docs/en/deployment-modes.md). Creating users, configuring extensions, or sending mail never enables authentication. Initial superadmin creation remains local CLI only. Account metadata lives in the existing version-1 auth document (optional `account` field), including when the owner's AuthPersistence is SQL-backed. TOTP seeds and OIDC client secrets use the existing auth encryption key. Do not downgrade binaries after account extensions are configured: older schemas can strip unknown fields.
 

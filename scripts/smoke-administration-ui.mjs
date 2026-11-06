@@ -129,10 +129,10 @@ try {
       `${description}: document overflow at ${width}px (${size.actual}px)`,
     );
   };
-  stage = 'open local Administration from top toolbar and verify overview';
+  stage = 'open local Administration from sidebar settings and verify overview';
   await page.goto(`${base}/projects`);
   await page
-    .getByRole('region', { name: '本机模式状态' })
+    .locator('#shell-system-settings')
     .getByRole('button', { name: '管理控制台', exact: true })
     .click();
   const dialog = page.getByRole('dialog', { name: '管理控制台', exact: true });

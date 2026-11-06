@@ -4,6 +4,8 @@
 
 `Administration.tsx` accesses management APIs using the existing local administration token or an authenticated session with explicit permissions. It does not change authentication startup mode. Superadmins, administrators and operations administrators see different entries according to the shared permission table; writers do not get the administration center. The dashboard is the default view. Desktop sidebar and narrow-screen horizontal categories share tab/tabpanel associations, with arrow-key and Home/End support.
 
+The authoring-shell administration entry is below the sidebar guide; mode/account status is below the logo, and language is left of the top-bar theme control. Relocation does not change permissions, authentication enablement or server-side administration boundaries.
+
 ## Routine operations
 
 - Dashboard: read-only status and shortcuts; loaded tenant count is not described as online user count.

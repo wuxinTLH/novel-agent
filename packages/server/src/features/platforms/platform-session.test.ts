@@ -89,6 +89,367 @@ function fixtureBrowser() {
   };
 }
 
+// Opt in only these tests to resident behavior; legacy fixtures still exercise close-on-login.
+function residentFixtureBrowser() {
+  const fixture = fixtureBrowser();
+  const residents = new Set<string>();
+  const closedLogins: string[] = [];
+  const retained: Array<{ loginId: string; connectionId: string }> = [];
+  let refreshCount = 0;
+  let closeCount = 0;
+  const originalCloseLogin = fixture.browser.closeLogin.bind(fixture.browser);
+  const originalCloseConnection = fixture.browser.closeConnection.bind(fixture.browser);
+  fixture.browser.retainLogin = async (loginId, connectionId) => {
+    assert.equal(fixture.browser.loginOpen(loginId), true);
+    // Transfer ownership without invoking the closeLogin operation under test.
+    await originalCloseLogin(loginId);
+    residents.add(connectionId);
+    retained.push({ loginId, connectionId });
+  };
+  fixture.browser.refreshSession = async connectionId => {
+    refreshCount++;
+    if (!residents.has(connectionId))
+      throw new PlatformError(410, 'PLATFORM_LOGIN_CLOSED', 'Offline resident window is closed');
+    return (await fixture.browser.completeLogin(connectionId)).account;
+  };
+  fixture.browser.closeLogin = async loginId => {
+    closedLogins.push(loginId);
+    await originalCloseLogin(loginId);
+  };
+  fixture.browser.closeConnection = async connectionId => {
+    residents.delete(connectionId);
+    await originalCloseConnection(connectionId);
+  };
+  fixture.browser.close = async () => {
+    closeCount++;
+    residents.clear();
+  };
+  return { ...fixture, residents, closedLogins, retained,
+    refreshCount: () => refreshCount, closeCount: () => closeCount };
+}
+
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function setupResident() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-resident-session-'));
+  const fixture = residentFixtureBrowser();
+  const runtime = new PlatformRuntime(new Store(dir), { browser: fixture.browser });
+  try {
+    const projectId = runtime.store.projects[0].id;
+    const login = await runtime.startLogin(projectId);
+    const connection = await runtime.completeLogin(projectId, login.id);
+    return { dir, fixture, runtime, projectId, login, record: runtime.connection(projectId, connection.id) };
+  } catch (error) {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+test('completeLogin transfers the verified login to a resident without closing it', async () => {
+  const f = await setupResident();
+  try {
+    assert.deepEqual(f.fixture.retained, [{ loginId: f.login.id, connectionId: f.record.id }]);
+    assert.deepEqual(f.fixture.closedLogins, []);
+    assert.equal(f.fixture.browser.loginOpen(f.login.id), false);
+    assert.equal(f.fixture.residents.has(f.record.id), true);
+    assert.equal(f.fixture.refreshCount(), 0);
+    assert.equal(f.runtime.login(f.projectId, f.login.id).status, 'completed');
+  } finally {
+    await f.runtime.close();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('resident refresh persists rotated browser cookies and localStorage only as encrypted state', async () => {
+  const previousKey = process.env.PLATFORM_SECRETS_KEY;
+  process.env.PLATFORM_SECRETS_KEY = 'offline-resident-session-test-key';
+  let f: Awaited<ReturnType<typeof setupResident>> | undefined;
+  try {
+    f = await setupResident();
+    f.fixture.rotate('resident-rotated-cookie');
+    await f.runtime.refreshResidentSession(f.projectId, f.record.id);
+    assert.equal(f.fixture.refreshCount(), 1);
+    assert.deepEqual(JSON.parse(f.runtime.secrets.get(f.record.credentialRef)!).state,
+      snapshot('resident-rotated-cookie'));
+    const disk = fs.readFileSync(path.join(f.dir, 'platform-secrets.enc'), 'utf8');
+    assert.equal(disk.includes('resident-rotated-cookie'), false);
+    assert.equal(f.runtime.connection(f.projectId, f.record.id).needsReauth, false);
+    assert.equal(f.fixture.residents.has(f.record.id), true);
+  } finally {
+    await f?.runtime.close();
+    if (f) fs.rmSync(f.dir, { recursive: true, force: true });
+    if (previousKey === undefined) delete process.env.PLATFORM_SECRETS_KEY;
+    else process.env.PLATFORM_SECRETS_KEY = previousKey;
+  }
+});
+
+test('resident identity mismatch preserves the prior state, marks reauthentication and closes the window', async () => {
+  const f = await setupResident();
+  try {
+    const original = f.runtime.secrets.get(f.record.credentialRef);
+    f.fixture.rotate('resident-wrong-account-cookie');
+    f.fixture.switchAccount();
+    await assert.rejects(f.runtime.refreshResidentSession(f.projectId, f.record.id),
+      { code: 'PLATFORM_ACCOUNT_MISMATCH' });
+    assert.equal(f.runtime.secrets.get(f.record.credentialRef), original);
+    assert.equal(f.runtime.connection(f.projectId, f.record.id).needsReauth, true);
+    assert.deepEqual(f.fixture.closed, [f.record.id]);
+    assert.equal(f.fixture.residents.has(f.record.id), false);
+    await f.runtime.refreshResidentSession(f.projectId, f.record.id);
+    assert.equal(f.fixture.refreshCount(), 1, 'invalid identities must not enter refresh again');
+    assert.equal(f.runtime.secrets.get(f.record.credentialRef), original);
+  } finally {
+    await f.runtime.close();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('a closed resident is not reopened and requires reauthentication without replacing saved state', async () => {
+  const f = await setupResident();
+  try {
+    const original = f.runtime.secrets.get(f.record.credentialRef);
+    f.fixture.residents.delete(f.record.id);
+    await assert.rejects(f.runtime.refreshResidentSession(f.projectId, f.record.id),
+      { code: 'PLATFORM_LOGIN_CLOSED' });
+    assert.equal(f.runtime.connection(f.projectId, f.record.id).needsReauth, true);
+    assert.equal(f.runtime.secrets.get(f.record.credentialRef), original);
+    assert.equal(f.fixture.residents.size, 0);
+    assert.equal(f.fixture.retained.length, 1);
+  } finally {
+    await f.runtime.close();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('resident refresh cannot enter the browser while a cross-runtime account lease is held', async () => {
+  const f = await setupResident(), other = await setup();
+  const entered = deferredSignal();
+  const blocked = deferredSignal();
+  const work = other.runtime.withLock(other.projectId, other.record, async () => {
+    entered.resolve();
+    await blocked.promise;
+  });
+  try {
+    await entered.promise;
+    await assert.rejects(f.runtime.refreshResidentSession(f.projectId, f.record.id), { code: 'PLATFORM_BUSY' });
+    assert.equal(f.fixture.refreshCount(), 0);
+    assert.equal(f.runtime.connection(f.projectId, f.record.id).needsReauth, false);
+    blocked.resolve();
+    await work;
+    await f.runtime.refreshResidentSession(f.projectId, f.record.id);
+    assert.equal(f.fixture.refreshCount(), 1);
+  } finally {
+    blocked.resolve();
+    await work;
+    await f.runtime.close();
+    await other.runtime.close();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+    fs.rmSync(other.dir, { recursive: true, force: true });
+  }
+});
+
+test('shutdown waits for in-flight resident refresh before closing its browser', async () => {
+  const f = await setupResident();
+  const entered = deferredSignal();
+  const blocked = deferredSignal();
+  const originalRefresh = f.fixture.browser.refreshSession!;
+  f.fixture.browser.refreshSession = async (id, state) => {
+    entered.resolve();
+    await blocked.promise;
+    return originalRefresh(id, state);
+  };
+  const refresh = f.runtime.refreshResidentSession(f.projectId, f.record.id);
+  let shutdown: Promise<void> | undefined;
+  let shutdownComplete = false;
+  try {
+    await entered.promise;
+    shutdown = f.runtime.close().then(() => { shutdownComplete = true; });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(shutdownComplete, false);
+    assert.equal(f.fixture.closeCount(), 0);
+    assert.equal(f.fixture.residents.has(f.record.id), true);
+    blocked.resolve();
+    await refresh;
+    await shutdown;
+    assert.equal(f.fixture.refreshCount(), 1);
+    assert.equal(f.fixture.closeCount(), 1);
+    assert.equal(f.fixture.residents.size, 0);
+  } finally {
+    blocked.resolve();
+    await refresh;
+    await shutdown;
+    if (!shutdown) await f.runtime.close();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('an open manual login survives more than fifteen minutes and can still become resident', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-manual-login-lifetime-'));
+  const fixture = residentFixtureBrowser();
+  const runtime = new PlatformRuntime(new Store(dir), { browser: fixture.browser });
+  try {
+    const projectId = runtime.store.projects[0].id;
+    const login = await runtime.startLogin(projectId);
+    t.mock.timers.tick(16 * 60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(runtime.login(projectId, login.id).status, 'waiting');
+    assert.equal(fixture.browser.loginOpen(login.id), true);
+    assert.deepEqual(fixture.closedLogins, []);
+    const connection = await runtime.completeLogin(projectId, login.id);
+    assert.equal(fixture.residents.has(connection.id), true);
+    assert.equal(fixture.refreshCount(), 0);
+  } finally {
+    await runtime.close();
+    t.mock.timers.reset();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('manual window watcher releases its lease on close and shutdown cancels the watcher', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-login-window-watcher-'));
+  const fixture = residentFixtureBrowser();
+  let releases = 0;
+  const runtime = new PlatformRuntime(new Store(dir), { browser: fixture.browser,
+    accountLocks: { acquire: async () => () => { releases++; } } });
+  try {
+    const projectId = runtime.store.projects[0].id;
+    const login = await runtime.startLogin(projectId);
+    await fixture.browser.closeLogin(login.id);
+    t.mock.timers.tick(4_999);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(releases, 0);
+    t.mock.timers.tick(1);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(releases, 1, 'window observation must release the provider lease without a login request');
+    assert.equal(runtime.login(projectId, login.id).status, 'closed');
+    await runtime.startLogin(projectId);
+    await runtime.close();
+    assert.equal(releases, 2);
+    const closeCalls = fixture.closedLogins.length;
+    t.mock.timers.tick(60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(releases, 2);
+    assert.equal(fixture.closedLogins.length, closeCalls);
+  } finally {
+    await runtime.close();
+    t.mock.timers.reset();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scheduled resident refresh skips a busy account and retries on the next interval', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = await setupResident();
+  const entered = deferredSignal(), blocked = deferredSignal();
+  const work = f.runtime.withLock(f.projectId, f.record, async () => {
+    entered.resolve();
+    await blocked.promise;
+  });
+  try {
+    await entered.promise;
+    t.mock.timers.tick(5 * 60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.fixture.refreshCount(), 0);
+    assert.equal(f.fixture.residents.has(f.record.id), true);
+    blocked.resolve();
+    await work;
+    t.mock.timers.tick(5 * 60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.fixture.refreshCount(), 1);
+  } finally {
+    blocked.resolve();
+    await work;
+    await f.runtime.close();
+    t.mock.timers.reset();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('transient resident refresh failure preserves state and browser for the next scheduled attempt', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = await setupResident();
+  const originalRefresh = f.fixture.browser.refreshSession!;
+  let attempts = 0;
+  f.fixture.browser.refreshSession = async (id, state) => {
+    if (++attempts === 1) throw new PlatformError(502, 'PLATFORM_REQUEST_FAILED', 'Offline transient failure');
+    return originalRefresh(id, state);
+  };
+  try {
+    const original = f.runtime.secrets.get(f.record.credentialRef);
+    f.fixture.rotate('resident-after-transient');
+    t.mock.timers.tick(5 * 60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(f.runtime.secrets.get(f.record.credentialRef), original);
+    assert.equal(f.runtime.connection(f.projectId, f.record.id).needsReauth, false);
+    assert.equal(f.fixture.residents.has(f.record.id), true);
+    assert.deepEqual(f.fixture.closed, []);
+    t.mock.timers.tick(5 * 60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(attempts, 2);
+    assert.deepEqual(JSON.parse(f.runtime.secrets.get(f.record.credentialRef)!).state,
+      snapshot('resident-after-transient'));
+  } finally {
+    await f.runtime.close();
+    t.mock.timers.reset();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('closed-window verification invalidates a resident and cancels its refresh timer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = await setupResident();
+  f.fixture.browser.verifyAccount = async () => {
+    throw new PlatformError(410, 'PLATFORM_LOGIN_CLOSED', 'Offline resident window is closed');
+  };
+  try {
+    const original = f.runtime.secrets.get(f.record.credentialRef);
+    await assert.rejects(f.runtime.testConnection(f.record), { code: 'PLATFORM_LOGIN_CLOSED' });
+    assert.equal(f.runtime.connection(f.projectId, f.record.id).needsReauth, true);
+    assert.equal(f.runtime.secrets.get(f.record.credentialRef), original);
+    assert.deepEqual(f.fixture.closed, [f.record.id]);
+    t.mock.timers.tick(10 * 60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.fixture.refreshCount(), 0);
+  } finally {
+    await f.runtime.close();
+    t.mock.timers.reset();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('resident refresh runs every five minutes and shutdown cancels the next scheduled refresh', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = await setupResident();
+  try {
+    t.mock.timers.tick(5 * 60_000 - 1);
+    assert.equal(f.fixture.refreshCount(), 0);
+    t.mock.timers.tick(1);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.fixture.refreshCount(), 1);
+    t.mock.timers.tick(5 * 60_000 - 1);
+    assert.equal(f.fixture.refreshCount(), 1);
+    t.mock.timers.tick(1);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.fixture.refreshCount(), 2);
+    await f.runtime.close();
+    t.mock.timers.tick(10 * 60_000);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.fixture.refreshCount(), 2);
+  } finally {
+    await f.runtime.close();
+    t.mock.timers.reset();
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
 test('separate runtimes exclude verified same-account work and hold unknown login through browser close', async () => {
   const a = await setup(), b = await setup();
   let finish!: () => void;
@@ -249,6 +610,26 @@ test('idle verified contexts do not block manual relogin, but another login does
     chromium.launch = originalLaunch;
     await browser.close();
   }
+});
+
+test('repeat manual login reuses pending window and passes explicit connection for relogin', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-login-reuse-'));
+  const fixture = fixtureBrowser();
+  const starts: { id: string; connectionId?: string }[] = [];
+  const original = fixture.browser.startLogin.bind(fixture.browser);
+  fixture.browser.startLogin = async (id, connectionId) => { starts.push({ id, connectionId }); await original(id); };
+  const runtime = new PlatformRuntime(new Store(dir), { browser: fixture.browser });
+  try {
+    const projectId = runtime.store.projects[0].id;
+    const first = await runtime.startLogin(projectId);
+    assert.equal((await runtime.startLogin(projectId)).id, first.id);
+    assert.equal(starts.length, 1, 'no second browser for repeated pending login');
+    const connection = await runtime.completeLogin(projectId, first.id);
+    const relogin = await runtime.startLogin(projectId, connection.id);
+    assert.equal(starts.at(-1)?.connectionId, connection.id);
+    assert.equal((await runtime.startLogin(projectId, connection.id)).id, relogin.id);
+    assert.equal(starts.length, 2);
+  } finally { await runtime.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('real adapter snapshot on unknown connection does not open a browser', async () => {

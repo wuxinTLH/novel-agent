@@ -5,7 +5,12 @@ import { addManualChapter } from './manual-chapters.js';
 import { archiveChapterRevision, normalizeChapterHistory } from '../../../../../shared/chapter-history.js';
 import { restoreChapterRevision } from './chapter-history.js';
 import type { FeatureService } from '../../core/context.js';
-import { checkWorkflow, createProjectOperations, inputError, invalidateSteps } from '../projects/project-operations.js';
+import {
+  checkWorkflow,
+  createProjectOperations,
+  inputError,
+  invalidateSteps,
+} from '../projects/project-operations.js';
 export const chaptersService: FeatureService = {
   id: 'chapters',
   register(app, context) {
@@ -72,14 +77,61 @@ export const chaptersService: FeatureService = {
       const p = res.locals.project as Project;
       const chapter = p.chapters.find((item) => item.id === req.params.chapterId);
       if (!chapter) throw inputError(404, 'CHAPTER_NOT_FOUND', '章节不存在。');
-      res.json({ chapterId: chapter.id, revision: chapter.revision, revisions: normalizeChapterHistory(chapter.revisions) });
+      res.json({
+        chapterId: chapter.id,
+        revision: chapter.revision,
+        revisions: normalizeChapterHistory(chapter.revisions),
+      });
     });
     app.post('/api/projects/:projectId/chapters/:chapterId/restore', (req, res) => {
-      const v = z.object({ ...chapterScopeSchema, revision: z.number().int().min(1) }).strict().parse(req.body);
+      const v = z
+        .object({ ...chapterScopeSchema, revision: z.number().int().min(1) })
+        .strict()
+        .parse(req.body);
       const p = res.locals.project as Project;
       checkWorkflow(p, v);
       mutateProject(p, (draft) => {
         restoreChapterRevision(draft, req.params.chapterId, v.expectedRevision, v.revision);
+        invalidateSteps(draft);
+      });
+      res.json(p);
+    });
+    app.post('/api/projects/:projectId/chapters/delete', (req, res) => {
+      const v = z
+        .object({
+          chapters: z
+            .array(
+              z
+                .object({ id: z.string().min(1), expectedRevision: chapterScopeSchema.expectedRevision })
+                .strict(),
+            )
+            .min(1)
+            .max(500)
+            .refine((chapters) => new Set(chapters.map((chapter) => chapter.id)).size === chapters.length, {
+              message: '章节 ID 不能重复。',
+            }),
+          workflowId: chapterScopeSchema.workflowId,
+        })
+        .strict()
+        .parse(req.body);
+      const p = res.locals.project as Project;
+      checkWorkflow(p, v);
+      mutateProject(p, (draft) => {
+        const chaptersById = new Map(draft.chapters.map((chapter) => [chapter.id, chapter]));
+        // Validate the entire CAS set before deleting anything or invalidating workflow output.
+        for (const requested of v.chapters) {
+          const chapter = chaptersById.get(requested.id);
+          if (!chapter || chapter.revision !== requested.expectedRevision)
+            throw inputError(409, 'REVISION_CONFLICT', '章节已被修改或删除，请刷新后重试。');
+        }
+        const ids = new Set(v.chapters.map((chapter) => chapter.id));
+        // Keep all historical/reserved chapter numbers; surviving chapters are never renumbered.
+        draft.chapterNumberHighWatermark = Math.max(
+          draft.chapterNumberHighWatermark || 0,
+          ...draft.chapters.map((chapter) => chapter.number),
+          ...(draft.candidates || []).map((candidate) => candidate.number),
+        );
+        draft.chapters = draft.chapters.filter((chapter) => !ids.has(chapter.id));
         invalidateSteps(draft);
       });
       res.json(p);

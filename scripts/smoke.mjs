@@ -105,11 +105,21 @@ try {
     'world-expand',
     'system-end',
   ]);
+  // Keep the UI fixture separate from the workflow-switching fixture, whose active graph is world-only.
+  const uiProjects = await (await fetch(`${base}/api/projects`)).json();
+  const uiProject = uiProjects.find((project) => project.id !== isolationProject.id);
+  assert.ok(uiProject, 'fresh local storage supplies the demonstration chapter project');
+  const uiProjectState = await (await fetch(`${base}/api/projects/${uiProject.id}`)).json();
+  assert.ok(uiProjectState.steps.some((step) => step.id === 'plan'));
+  assert.ok(uiProjectState.steps.some((step) => step.id === 'draft'));
   browser = await chromium.launch({
     headless: true,
     ...(process.env.SMOKE_BROWSER_CHANNEL ? { channel: process.env.SMOKE_BROWSER_CHANNEL } : {}),
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  await context.addInitScript((projectId) => {
+    localStorage.setItem('novel-project', projectId);
+  }, uiProject.id);
   const page = await context.newPage();
   const pageErrors = [];
   const badResponses = [];
@@ -192,7 +202,7 @@ try {
   await page.getByRole('button', { name: /主题 ·/ }).click();
   await page.getByRole('menuitem', { name: '跟随系统', exact: true }).click();
   await page.getByRole('button', { name: '主题 · 跟随系统', exact: true }).waitFor();
-  const assetProjectId = (await (await fetch(`${base}/api/projects`)).json())[0].id;
+  const assetProjectId = uiProject.id;
   const originalAssetCount = (await (await fetch(`${base}/api/projects/${assetProjectId}`)).json()).assets.length;
   for (const [name, category] of [['烟雨城', 'world'], ['巡夜人', 'characters'], ['城门地图', 'world']]) {
     const created = await fetch(`${base}/api/projects/${assetProjectId}/assets`, {
@@ -231,13 +241,13 @@ try {
   await page.getByLabel('选择 城门地图').waitFor({ state: 'detached' });
   assert.equal((await (await fetch(`${base}/api/projects/${assetProjectId}`)).json()).assets.length, 0);
   await page.getByRole('button', { name: /^创作工作流$/ }).click();
-  await page.locator('.react-flow__node[data-id="outline"]').click();
+  await page.locator('.react-flow__node[data-id="plan"]').click();
   await page.getByLabel('结果名称', { exact: false }).fill('剧情结果测试');
   await page.getByLabel('结果名称', { exact: false }).press('Tab');
   await page.getByText('结果名称已更新', { exact: true }).waitFor();
-  await page.locator('.react-flow__node[data-id="plan"]').click();
+  await page.locator('.react-flow__node[data-id="draft"]').click();
   assert.equal(await page.locator('#node-output-name').inputValue(), '');
-  await page.locator('.react-flow__node[data-id="outline"]').click();
+  await page.locator('.react-flow__node[data-id="plan"]').click();
   assert.equal(await page.locator('#node-output-name').inputValue(), '剧情结果测试');
   await page.getByRole('button', { name: '工作流设置', exact: true }).click();
   await page
@@ -255,8 +265,7 @@ try {
   await modal.getByLabel('创作要求', { exact: true }).last().fill('以一封遗失的信作为线索。');
   await page.screenshot({ path: path.join(artifacts, 'generation.png'), fullPage: true });
   await modal.getByRole('button', { name: '保存要求并开始', exact: true }).click();
-  const projects = await (await fetch(`${base}/api/projects`)).json();
-  const projectId = projects[0].id;
+  const projectId = uiProject.id;
   const getProject = async () => (await fetch(`${base}/api/projects/${projectId}`)).json();
   const waitRun = async () => {
     for (let i = 0; i < 200; i++) {
@@ -277,7 +286,10 @@ try {
   await page.getByLabel('章节正文', { exact: true }).waitFor();
   await page.getByLabel('章节正文', { exact: true }).fill('这是一份必须保留的本地原稿。');
   await page.getByRole('button', { name: '保存书稿', exact: true }).click();
-  await page.getByRole('button', { name: '保存书稿', exact: true }).waitFor({ state: 'visible' });
+  // A committed API revision precedes the browser's save acknowledgement. Reloading before
+  // acknowledgement can persist the still-dirty editor via beforeunload and recover it on reload.
+  await page.getByText('提交的版本已保存；保存期间的新输入仍保留在编辑器', { exact: true }).waitFor();
+  await page.locator('.editor-status').getByText('当前章节已与服务器版本一致。', { exact: true }).waitFor();
   for (let i = 0; i < 50; i++) {
     project = await getProject();
     if (project.chapters[0].content === '这是一份必须保留的本地原稿。') break;
@@ -288,6 +300,7 @@ try {
   await page.getByRole('button', { name: /^章节书稿(?:\s*\d+)?$/ }).click();
   await page.getByLabel('章节正文', { exact: true }).waitFor();
   assert.equal(await page.getByLabel('章节正文', { exact: true }).inputValue(), '这是一份必须保留的本地原稿。');
+  await page.locator('.editor-status').getByText('当前章节已与服务器版本一致。', { exact: true }).waitFor();
   await page.getByRole('button', { name: '重生成此章', exact: true }).click();
   const session = await (await fetch(`${base}/api/platforms/session`)).json();
   const regeneration = await fetch(`${base}/api/projects/${projectId}/run`, {
@@ -322,7 +335,8 @@ try {
   }
   assert.equal(project.candidates.length, 0);
   assert.equal(project.chapters[0].revision, 3);
-  assert.equal(project.chapters[0].revisions.at(-1).content, '这是一份必须保留的本地原稿。');
+  assert.deepEqual(project.chapters[0].revisions.map((revision) => revision.revision), [2, 1]);
+  assert.equal(project.chapters[0].revisions.find((revision) => revision.revision === 2).content, '这是一份必须保留的本地原稿。');
   await page.getByRole('button', { name: /^创作工作流$/ }).click();
   const createdWorldWorkflow = await fetch(`${base}/api/projects/${projectId}/workflows`, {
     method: 'POST',
@@ -393,7 +407,7 @@ try {
   for (const width of [390, 360, 768]) {
     await page.setViewportSize({ width, height: 844 });
     for (const navigation of [/^创作工作流$/, /^小说设定库(?:\s*\d+)?$/, /^章节书稿(?:\s*\d+)?$/, /^平台作品$/, /^模型设置$/]) {
-      await page.getByRole('button', { name: navigation }).click();
+      await page.locator('aside').getByRole('button', { name: navigation }).click();
       await assertNoDocumentOverflow();
       if (width === 390) await page.screenshot({ path: path.join(artifacts, `mobile-${navigation.source.includes('创作') ? 'workflow' : navigation.source.includes('设定库') ? 'assets' : navigation.source.includes('章节') ? 'chapters' : navigation.source.includes('平台') ? 'platforms' : 'settings'}.png`), fullPage: true });
     }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { worldStageIdSchema, worldStagesSchema, validWorldStageAssignment } from '../../../../../shared/world-stages.js';
 import { chapterRequirementsSchema, MAX_CHAPTER_NUMBER, requirementsSchema } from '../../../../../shared/generation.js';
 import type { Project, Step } from '../../../../../shared/types.js';
 import { normalizeWorkflow, starterProject, syncActiveWorkflow } from './defaults.js';
@@ -72,12 +73,14 @@ const projectSchema = z
     createdAt: z.string(),
     updatedAt: z.string(),
     steps: z.array(stepSchema),
+    worldStages: worldStagesSchema.optional(),
     assets: z.array(
       z
         .object({
           id: z.string(),
           name: z.string(),
           category: z.enum(['world', 'characters', 'plot', 'chapters']),
+          worldStageId: worldStageIdSchema.optional(),
           content: z.string(),
         })
         .passthrough(),
@@ -164,6 +167,9 @@ export function migrateProjects(value: unknown): Project[] {
   const projects = structuredClone(value as Project[]);
   assertUnique(projects, '项目');
   for (const p of projects) {
+    if (p.worldStages !== undefined) p.worldStages = worldStagesSchema.parse(p.worldStages);
+    if (p.assets.some((asset) => !validWorldStageAssignment(p, asset.category, asset.worldStageId)))
+      throw new Error('世界观资料阶段无效，原始数据未修改。');
     const current = (p.dataVersion || 0) >= 1;
     assertUnique(p.chapters, '章节');
     assertUnique(p.candidates || [], '候选版本');

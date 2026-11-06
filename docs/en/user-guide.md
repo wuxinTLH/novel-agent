@@ -2,7 +2,7 @@
 
 [中文原文](../使用手册.md) · [English documentation index](README.md) · [English overview](../../README/README_en.md)
 
-This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Deployment-mode prerelease v0.0.3a defaults to local-only use, authentication off; server requires offline-enabled authentication and hardened/audit checks. Do not expose the default service to the public Internet.
+This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Deployment-mode prerelease v0.0.4a defaults to local-only use, authentication off; server requires offline-enabled authentication and hardened/audit checks. Do not expose the default service to the public Internet.
 
 ## Install and start
 
@@ -36,6 +36,18 @@ A separate static process is not a second backend or a public-Internet safety gu
 - `/settings`: model profiles, protocols, credentials, execution mode and optional SQLconnect.
 
 Refresh preserves the route. Unknown routes show a 404 and return after five seconds. Workflow arrangement (layered, horizontal, vertical or grid) changes positions only, not dependencies or execution semantics. Project settings edit title, type, synopsis and a PNG/JPEG/WebP cover up to 4 MiB. Avatars are cropped and stored only in the current browser after server-side file checking.
+
+### v0.0.4a authoring and shell updates
+
+- **World stages:** create, rename and filter groups for worldbuilding text, uploaded references and map images; move records between a stage and Ungrouped. Existing assets remain ungrouped. Grouping organizes the library only: it does not filter generation context, and an empty node asset selection still references all assets. Choose explicit node references to limit context. Only empty stages can be deleted.
+- **Chapter paging and bulk deletion:** choose 20 / 50 / 100 chapters per page. Bulk mode defaults off, requires its explicit button, and resets on project switch/unmount. Select-all affects the current page only; explicitly selected chapters remain selected across pages with a total count, never an implicit whole-project selection. Selections pin revisions. Save or discard unsaved drafts for every selected chapter, including cached drafts, before deleting. The server atomically checks permissions, running state and all revisions; stale items reject the whole batch without partial deletion. Each batch permits at most 500 chapters. Deletion removes local canonical chapters and their embedded history, invalidates related workflow output, and preserves the chapter-number high-water mark: survivors are not renumbered and deleted numbers are not automatically reused. It never deletes remote platform text or withdraws in-flight remote requests.
+- **Shell and workflow families:** mode/account status sits below the sidebar logo; the permission-gated administration entry sits below the guide. Language is left of the theme control in the top bar. Creation buttons and dialogs match the current novel/character/worldbuilding family (创建小说流 / 创建人物流 / 创建世界观流), preserving matching templates and active family selections. Shared dialogs animate entry, exit and resize, respecting reduced motion while retaining focus, busy-state and dirty-edit safeguards.
+
+### Current platform state and automatic verification
+
+An explicitly selected account may reuse its login window still owned by this backend; new connections remain separate and restart never adopts orphaned browsers. Idle polling/focus synchronization reads local connections, receipts and queue records only, not remote works, reconciliation or writes. Author identity readiness is separate from works-list readiness: require independent list-loading evidence; failure/incomplete loading is not an empty list.
+
+Automatic verification requires explicit `autoApprove:true` in a newly prepared immutable preview; approving an old manual preview does not enable it retroactively. An execution exception with a durably pinned exact chapter ID permits at most one read-only reconciliation under the original account lock. Author, book, volume, historical title, full text/paragraphs and required review receipt must match; only persisted proof permits continuing queued chapters. Never retry the failed write. Missing IDs or unproven results remain unknown for manual exact-ID, read-only handling from the chapter's official edit link. Manual reconciliation still pauses remaining work pending explicit resumption. CAPTCHA and unknown dialogs remain manual. See [Fanqie integration](fanqie-integration.md).
 
 ### Knowledge facts and node-picker views
 

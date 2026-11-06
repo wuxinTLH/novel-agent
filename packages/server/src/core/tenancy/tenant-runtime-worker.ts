@@ -3,6 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
+import { ensureTenantDirectory } from './tenant-directory.js';
 import { createApplication } from '../application.js';
 import { createServiceContext, type ServiceContext } from '../context.js';
 import { activateScopedStorage } from '../../infrastructure/storage/storage-config.js';
@@ -69,14 +70,8 @@ async function run(data: RuntimeData) {
     // Validate the original path chain before mkdir; rejecting only the leaf permits users/ symlink escape.
     const relative = path.relative(path.resolve(data.root), path.resolve(data.dir));
     if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('UNSAFE_TENANT_DIRECTORY');
-    let cursor = path.resolve(data.root);
-    fs.mkdirSync(cursor, { recursive: true, mode: 0o700 });
-    for (const segment of ['', ...relative.split(path.sep).filter(Boolean)]) {
-      if (segment) cursor = path.join(cursor, segment);
-      if (!fs.existsSync(cursor)) fs.mkdirSync(cursor, { mode: 0o700 });
-      const stat = fs.lstatSync(cursor);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('UNSAFE_TENANT_DIRECTORY');
-    }
+    fs.mkdirSync(path.resolve(data.root), { recursive: true, mode: 0o700 });
+    ensureTenantDirectory(data.root, data.dir);
     binding = activateScopedStorage(data.root, data.dir, data.ownerId);
     installPlatformAccountLockClient(createWorkerPlatformAccountLockClient(parentPort!, data.platformAccountLocks));
     context = createServiceContext(data.dir, data.inheritEnvironment);

@@ -1,6 +1,6 @@
 {
   "name": "space.syjx.agent.novel.server",
-  "version": "0.0.3-a",
+  "version": "0.0.4-a",
   "private": true,
   "type": "module",
   "scripts": {

@@ -45,6 +45,8 @@ export interface Asset {
   updatedAt?: string;
   name: string;
   category: Category;
+  /** Only world assets may belong to a stage in their own project. */
+  worldStageId?: string;
   content: string;
   url?: string;
   mime?: string;
@@ -304,6 +306,7 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
   assets: Asset[];
+  worldStages?: { id: string; name: string }[];
   steps: Step[];
   chapters: Chapter[];
   run?: Run;

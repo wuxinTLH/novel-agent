@@ -2,7 +2,7 @@
 
 [中文原文](../番茄平台接入.md) · [English index](README.md) · [Step-by-step user guide](user-guide.md#fanqie-publication)
 
-This describes v0.0.3a implementation boundaries. Playwright operates an isolated Chromium author session, not an official Fanqie API. Initial login requires an interactive desktop on the backend host. Install with `npm ci` and `npm run browser:install`; start with `npm run dev`, or build and start production normally.
+This describes v0.0.4a implementation boundaries. Playwright operates an isolated Chromium author session, not an official Fanqie API. Initial login requires an interactive desktop on the backend host. Install with `npm ci` and `npm run browser:install`; start with `npm run dev`, or build and start production normally.
 
 ## Supported operations
 
@@ -32,13 +32,26 @@ The split chapter number/title editor accepts `第1章 标题` and `第 1 章 �
 
 ## Sessions and automation
 
-Securely inject a fixed `PLATFORM_SECRETS_KEY` before startup for encrypted session persistence. Without it, sessions remain in memory and require login after restart. Real updated cookies/localStorage are synchronized after verified operations; no invented dual-token refresh endpoint is used. Retain the original encryption key privately. Expiry, revocation and CAPTCHA still require human login.
+Continuing login/reverification for an explicitly selected connection reuses its visible Chromium context if this backend still owns it; duplicate pending-login requests reuse their window too. New connections open separate contexts. Never infer the account from there being only one window; backend restart cannot adopt orphaned or personal browsers.
+
+Securely inject a fixed `PLATFORM_SECRETS_KEY` before startup for encrypted session persistence. Without it, sessions remain in memory and require login after restart. The manual login window no longer expires after 15 minutes. After explicit verification, the same visible Chromium remains open. Every five minutes after the last cycle settles, read-only author-home navigation verifies identity and saves website-managed cookies/localStorage; tokens are never returned to the UI. Busy project/account/workflow operations skip the cycle rather than interrupt uploads. Closing the window never reopens it; disconnect, project deletion and shutdown clean up timers, and restart does not launch windows. Unverified login still holds a provider-wide lock until verification or closure, so do not leave it unattended. Identity changes or verification prompts stop renewal; temporary network failures preserve old credentials. Real updated cookies/localStorage are also synchronized after verified operations; no invented dual-token refresh endpoint is used. Renewal does not guarantee an indefinitely valid session. Retain the original encryption key privately. Expiry, revocation and CAPTCHA still require human login.
 
 Local auto-approval is off by default and browser/project-local (`publication-auto-approve:<projectId>`). It authorizes prepare to approve/start while retaining snapshot hashes and approval provenance. It is not Fanqie's editorial approval.
 
 Workflow continuation is independently stored per workflow. Select automatic generation, explicitly save account binding, volume, action and required AI declaration. Only complete successful live runs with reviewed, hard-validated and saved/adopted canonical chapters from that run continue. Demo, single-node, canceled/failed/incomplete, conflicting or unadopted outputs never upload. No target is inferred from having a single account. Restart never replays uncertain continuation.
 
+## Automatic verification
+
+New previews with explicit `autoApprove:true` (auto-approval or automatic workflow continuation) enable automatic verification. Automatically approving an older manual preview does not rewrite its immutable mode.
+
+- New drafts wait for an exact book/editor URL and approved author, durably recording the chapter ID before filling/saving. No title-based ID guesses.
+- An execution exception with a pinned exact chapter ID permits at most one read-only reconciliation under the existing account lock. Identity, book, volume, historical title, full body/paragraphs and any required review receipt must match. Durable proof is required before continuing queued chapters; the failed write is never retried.
+- Missing identity, mismatches, CAPTCHA, unknown dialogs or unproven results still stop. No automatic acceptance of extra declarations or clearing staging.
+- Manual mode is unchanged. Existing unknown batches are not replayed; manually requested reconciliation still pauses remaining work for explicit resumption.
+
 ## Status and recovery
+
+An open page periodically synchronizes local connections, draft receipts and queue records, including on window focus. This never reads remote works, reconciles drafts or resends content on a timer, and does not clear pending choices, approvals or explicit action errors. Author identity readiness alone is not proof that the asynchronous remote works list has loaded; unavailable or incomplete list evidence must not be reported as a missing work.
 
 | Status | Required response |
 | --- | --- |
@@ -51,7 +64,7 @@ Workflow continuation is independently stored per workflow. Select automatic gen
 | Missing exact chapter ID | Obtain it from that chapter's official edit link, not work ID/title guesses; otherwise retain unknown. |
 | Login/CAPTCHA/extra declaration | Human handling; auto-approval cannot bypass it. |
 
-Reconciliation matches account, book, volume, historical title/full body and required review receipt. An empty list or missing chapter is not permission to resend. When reconciliation succeeds, remaining chapters pause for explicit resumption. Restart interruptions are reconciled first.
+Reconciliation matches account, book, volume, historical title/full body and required review receipt. An empty list or missing chapter is not permission to resend. After manually requested reconciliation succeeds, remaining chapters pause for explicit resumption. Only the explicit automatic-preview path above may continue remaining chapters after successful in-execution read-only verification and durable proof. Restart interruptions require manual read-only reconciliation first.
 
 Hiding inactive records is browser display-only; server audit/idempotency/unknown blocking remain. Advanced backup-and-clear removes project-local previews/operations/receipts/all batches, including hidden records, and can allow duplicates. Verify official state and confirm the risk first. Neither deletes local canonical chapters or remote text; clearing does not remove bindings or resend.
 

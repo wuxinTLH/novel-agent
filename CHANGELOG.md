@@ -1,5 +1,18 @@
 # 更新记录
 
+## v0.0.4a — 章节管理与世界观阶段 / Chapter management and world stages
+
+发布标签 `v0.0.4a`；npm/package SemVer `0.0.4-a`。本次汇总 v0.0.3a 之后的创作界面、阶段资产与番茄安全自动化更新；下方旧版数字和限制保留为历史记录。
+
+- **章节管理：** 批量删除默认关闭，显式进入后才显示选择框；支持 20 / 50 / 100 条分页、本页全选与跨页保留已选章节。删除前确认数量并固定版本；有未保存草稿时先保存或放弃。后端一次性校验全部版本并原子保存，冲突或持久化失败不部分删除；保留章节编号高水位，不重排编号，不删除远端平台草稿。
+- **世界观阶段：** 新建、重命名及删除空阶段；世界观文本和地图按阶段上传、筛选与移动，旧资产保留未分组。分组只管理资产，不隐式改变生成上下文；项目隔离、修订 CAS 与存储往返保留。
+- **创作界面：** 模式 / 身份置于 Logo 下方，语言与主题并列，系统设置位于使用指南下方；弹窗启闭和尺寸平滑过渡并尊重减少动态效果。小说流 / 人物流 / 世界观流创建使用匹配预设，切换同类流程不再回跳首项。
+- **番茄可靠性：** 复用明确选中账号的活跃登录窗口；本地状态在空闲、聚焦及可见性变化时只读同步，不以定时器访问远端作品。账号身份与作品列表就绪分离，保留 64 位作品 ID。自动批准的不可变预览允许在已持久化精确远端 ID 后进行一次只读完整核对；不绕过验证、不盲目重发，无法证明仍停止为 unknown。
+- **租户启动竞态：** 并发首次启动可能同时创建共享 users 目录；仅对创建竞争的 EEXIST 容忍，随后仍逐层 lstat 拒绝符号链接和非目录，避免合法租户偶发启动失败而不放宽路径边界。
+- **版本与交付：** Node 基线仍为 `^22.23.4 || ^24.22.2`；保持 local 回环、server 同源 HTTPS / 认证 / hardened / 审计和单实例限制。源码与编译产物归档及 SHA-256 校验和按本次实际验证发布；验证范围与外部服务缺口见[本次验收记录](docs/release-validation-v0.0.4a.md)。
+
+**English:** Bulk chapter mode is opt-in, with 20/50/100 pagination, current-page selection, revision-pinned cross-page selections, draft protection and atomic server-side CAS deletion. Local deletion never removes platform drafts or renumbers survivors. World stages organize world text/maps without changing generation context; legacy assets remain ungrouped. Shell controls, modal motion, family-specific workflow creation and selection continuity are improved. Fanqie reuses explicit live sessions, synchronizes local state read-only, separates identity from list readiness and preserves 64-bit IDs. Automatic immutable previews may perform one exact-ID full read-back after an execution failure, never blind replay or verification bypass. See the [current validation record](docs/release-validation-v0.0.4a.md); historic validation below is not current-release evidence.
+
 ## v0.0.3a — 完整工作树预发布 / Full-working-tree prerelease
 
 发布标签 `v0.0.3a`；npm/package SemVer `0.0.3-a`。本节汇总用户授权的完整工作树，以下旧版本、未发布增量及验证数字保留为历史记录，不当作本次全树验证结果。完整双语说明见 [RELEASE_NOTES](RELEASE_NOTES.md)。

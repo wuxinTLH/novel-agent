@@ -26,6 +26,8 @@ class PublicationFixtureBrowser implements DraftBrowserAdapter {
   reviewed: { draftId: string; snapshot: DraftSnapshot; useAi: 1 | 2 | undefined }[] = [];
   reads: string[] = [];
   failAfterSave = false;
+  failAfterIdentified = false;
+  automaticVerificationOptions: boolean[] = [];
   failAfterReview = false;
   reviewReceiptProven = false;
   async verifyReviewReceipt() { return this.reviewReceiptProven; }
@@ -71,7 +73,10 @@ class PublicationFixtureBrowser implements DraftBrowserAdapter {
     workId: string,
     snapshot: DraftSnapshot,
     identified: (id: string) => void,
+    _volumeId?: string,
+    options?: { automaticVerification?: boolean },
   ) {
+    this.automaticVerificationOptions.push(options?.automaticVerification === true);
     this.beforeCreate?.();
     this.created.push(structuredClone(snapshot));
     const id = `offline-draft-${this.created.length}`;
@@ -86,6 +91,7 @@ class PublicationFixtureBrowser implements DraftBrowserAdapter {
     });
     if (this.failAfterSave) throw new Error('PRIVATE_OFFLINE_BROWSER_ERROR');
     identified(id);
+    if (this.failAfterIdentified) throw new Error('PRIVATE_OFFLINE_IDENTIFIED_SAVE_ERROR');
     return { draftId: id };
   }
   async readDraft(_id: string, _state: BrowserSessionState, _workId: string, draftId: string) {
@@ -498,6 +504,44 @@ test('server automatic prepare approval is explicit, hashed and durable; review 
   assert.equal(f.browser.reviewed.length, 2);
   const persisted = JSON.parse(fs.readFileSync(path.join(f.dir, 'publication-queue.json'), 'utf8'));
   assert.equal(persisted.batches[0].approval.hash, batch.preview.hash);
+});
+
+test('automatic verification recovers identified drafts by full readback without another write', async (t) => {
+  const f = await fixture(t);
+  f.browser.failAfterIdentified = true;
+  const batch = await f.runtime.preparePublication(f.project.id, f.link.id, f.project.chapters.map(c => c.id), 'save_draft', undefined, undefined, true);
+  await f.runtime.waitForIdle();
+  const result = f.runtime.publications.get(batch.id);
+  assert.equal(result.state, 'completed');
+  assert.equal(f.browser.created.length, 2);
+  assert.deepEqual(f.browser.automaticVerificationOptions, [true, true]);
+  assert.ok(result.items.every(item => item.state === 'draft_verified' && item.reconciliation?.outcome === 'draft_verified'));
+  assert.equal(f.browser.reviewed.length, 0);
+});
+
+test('manual mode does not automatically reconcile an identified failed save', async (t) => {
+  const f = await fixture(t);
+  f.browser.failAfterIdentified = true;
+  const batch = await f.prepare(); f.start(batch); await f.runtime.waitForIdle();
+  assert.equal(f.runtime.publications.get(batch.id).state, 'unknown');
+  assert.deepEqual(f.browser.automaticVerificationOptions, [false]);
+  assert.equal(f.browser.reads.length, 0);
+  assert.equal(f.browser.created.length, 1);
+});
+
+test('automatic verification cannot adopt mismatched readback or missing remote identity', async (t) => {
+  for (const missingId of [false, true]) await t.test(String(missingId), async (t) => {
+    const f = await fixture(t);
+    f.browser.failAfterIdentified = !missingId;
+    f.browser.failAfterSave = missingId;
+    f.browser.corruptReadback = draft => { draft.accountId = 'different-author'; };
+    const batch = await f.runtime.preparePublication(f.project.id, f.link.id, f.project.chapters.map(c => c.id), 'save_draft', undefined, undefined, true);
+    await f.runtime.waitForIdle();
+    assert.equal(f.runtime.publications.get(batch.id).state, 'unknown');
+    assert.equal(f.browser.created.length, 1);
+    assert.equal(f.browser.reviewed.length, 0);
+    if (missingId) assert.equal(f.browser.reads.length, 0);
+  });
 });
 
 test('automatic start of existing preview audits explicit opt-in without rewriting immutable hash', async (t) => {

@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { MAX_WORLD_STAGES, worldStageNameSchema } from '../../../../../shared/world-stages.js';
+import { createProjectOperations } from './project-operations.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -64,6 +67,36 @@ export const projectsService: FeatureService = {
         platformRuntime.assertProjectIdle(res.locals.project.id);
       }
       next();
+    });
+    const { mutateProject } = createProjectOperations(store);
+    app.post('/api/projects/:projectId/world-stages', (req, res) => {
+      const { name } = z.object({ name: worldStageNameSchema }).strict().parse(req.body);
+      const p = res.locals.project as Project;
+      if ((p.worldStages?.length ?? 0) >= MAX_WORLD_STAGES)
+        return res.status(400).json({ code: 'WORLD_STAGE_LIMIT', error: '每个作品最多保存 50 个世界观阶段。' });
+      if (p.worldStages?.some((stage) => stage.name === name))
+        return res.status(409).json({ code: 'WORLD_STAGE_NAME_CONFLICT', error: '世界观阶段名称不能重复。' });
+      mutateProject(p, (draft) => { (draft.worldStages ??= []).push({ id: randomUUID(), name }); });
+      res.status(201).json(p);
+    });
+    app.patch('/api/projects/:projectId/world-stages/:stageId', (req, res) => {
+      const { name } = z.object({ name: worldStageNameSchema }).strict().parse(req.body);
+      const p = res.locals.project as Project;
+      if (!p.worldStages?.some((stage) => stage.id === req.params.stageId))
+        return res.status(404).json({ error: '世界观阶段不存在。' });
+      if (p.worldStages.some((stage) => stage.id !== req.params.stageId && stage.name === name))
+        return res.status(409).json({ code: 'WORLD_STAGE_NAME_CONFLICT', error: '世界观阶段名称不能重复。' });
+      mutateProject(p, (draft) => { draft.worldStages!.find((stage) => stage.id === req.params.stageId)!.name = name; });
+      res.json(p);
+    });
+    app.delete('/api/projects/:projectId/world-stages/:stageId', (req, res) => {
+      const p = res.locals.project as Project;
+      if (!p.worldStages?.some((stage) => stage.id === req.params.stageId))
+        return res.status(404).json({ error: '世界观阶段不存在。' });
+      if (p.assets.some((asset) => asset.worldStageId === req.params.stageId))
+        return res.status(409).json({ code: 'WORLD_STAGE_OCCUPIED', error: '请先移出或删除阶段内的资料。' });
+      mutateProject(p, (draft) => { draft.worldStages = draft.worldStages!.filter((stage) => stage.id !== req.params.stageId); });
+      res.json(p);
     });
   },
 };

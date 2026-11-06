@@ -69,6 +69,7 @@ export class PlatformRuntime {
   private logins = new Map<string, PlatformLogin>();
   private loginTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private tasks = new Set<Promise<void>>();
+  private residentTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private loginStarting = false;
   private closing = false;
   private publicationQueue?: PublicationQueue;
@@ -319,8 +320,9 @@ export class PlatformRuntime {
     } catch (error) {
       if (
         error instanceof PlatformError &&
-        ['PLATFORM_REAUTH_REQUIRED', 'PLATFORM_ACCOUNT_MISMATCH'].includes(error.code)
+        ['PLATFORM_REAUTH_REQUIRED', 'PLATFORM_ACCOUNT_MISMATCH', 'PLATFORM_LOGIN_CLOSED'].includes(error.code)
       ) {
+        this.stopResidentRefresh(record.id);
         this.platforms.putConnection({ ...record, needsReauth: true });
         await this.browser.closeConnection(record.id);
       }
@@ -371,6 +373,11 @@ export class PlatformRuntime {
   }
   async startLogin(projectId: string, connectionId?: string) {
     this.assertWritable(projectId);
+    // Repeat requests for the same explicit login target reuse the pending window/lease.
+    const pending = [...this.logins.values()].find(login => login.projectId === projectId &&
+      login.connectionId === connectionId && ['waiting', 'needs_verification'].includes(login.status) &&
+      this.browser.loginOpen(login.id));
+    if (pending) return structuredClone(pending);
     this.assertProjectIdle(projectId);
     const record = connectionId ? this.connection(projectId, connectionId) : undefined;
     if (record && record.providerId !== 'tomato')
@@ -386,24 +393,17 @@ export class PlatformRuntime {
         connectionId,
         status: 'waiting',
         createdAt: now(),
-        expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
-        message: '请在独立浏览器内自行登录，不要在应用中输入密码或 Cookie。登录不代表账号验证已完成。',
+        expiresAt: '9999-12-31T23:59:59.999Z',
+        message: '请在独立浏览器内自行登录，不要在应用中输入密码或 Cookie。窗口保持打开直到手动关闭或服务停止；核验后每五分钟只读刷新登录态。',
       };
       this.loginLeases.set(login.id, release);
-      try { await this.browser.startLogin(login.id); }
+      try {
+        await this.browser.startLogin(login.id, record?.id);
+        if (record) this.stopResidentRefresh(record.id);
+      }
       catch (error) { await this.closeLoginLease(login.id); throw error; }
       this.logins.set(login.id, login);
-      const timer = setTimeout(() => {
-        const current = this.logins.get(login.id);
-        if (current && ['waiting', 'needs_verification'].includes(current.status)) {
-          current.status = 'closed';
-          current.message = '登录已超时，隔离浏览器已关闭；请重新开始。';
-          void this.closeLoginLease(login.id).catch(() => {});
-        }
-        this.loginTimers.delete(login.id);
-      }, 15 * 60_000);
-      timer.unref();
-      this.loginTimers.set(login.id, timer);
+      this.watchLoginWindow(login.id);
       return login;
     })();
     this.loginStarting = true;
@@ -416,6 +416,20 @@ export class PlatformRuntime {
       releaseLocal();
       this.loginStarting = false;
     }
+  }
+  private watchLoginWindow(loginId: string) {
+    const timer = setTimeout(() => {
+      this.loginTimers.delete(loginId);
+      const login = this.logins.get(loginId);
+      if (this.closing || !login || !['waiting', 'needs_verification'].includes(login.status)) return;
+      if (!this.browser.loginOpen(loginId)) {
+        login.status = 'closed';
+        login.message = '登录浏览器已关闭，请重新开始。';
+        void this.closeLoginLease(loginId).catch(() => {});
+      } else this.watchLoginWindow(loginId);
+    }, 5_000);
+    timer.unref();
+    this.loginTimers.set(loginId, timer);
   }
   login(projectId: string, loginId: string) {
     const login = this.logins.get(loginId);
@@ -503,13 +517,23 @@ export class PlatformRuntime {
         }
         if (previous) {
           // The old context contains the previous cookies; never reuse it after a successful relogin.
+          this.stopResidentRefresh(previous.id);
           await this.browser.closeConnection(previous.id);
           this.secrets.delete(previous.credentialRef);
         }
         this.logins.set(loginId, { ...login, status: 'completed', message: '账号身份已核验，会话已保存。' });
         clearTimeout(this.loginTimers.get(loginId));
         this.loginTimers.delete(loginId);
-        await this.browser.closeLogin(loginId);
+        if (this.browser.retainLogin && this.browser.refreshSession) {
+          try {
+            await this.browser.retainLogin(loginId, record.id);
+            this.scheduleResidentRefresh(record);
+          } catch {
+            // Saved credentials remain valid; failed adoption must not leak an unowned window.
+            await this.browser.closeLogin(loginId);
+            await this.browser.closeConnection(record.id);
+          }
+        } else await this.browser.closeLogin(loginId);
         await this.releaseLoginLease(loginId);
         return this.publicConnection(record);
       },
@@ -518,6 +542,47 @@ export class PlatformRuntime {
     this.loginOperations.set(loginId, operation);
     try { return await operation; }
     finally { this.loginOperations.delete(loginId); }
+  }
+  private stopResidentRefresh(connectionId: string) {
+    clearTimeout(this.residentTimers.get(connectionId));
+    this.residentTimers.delete(connectionId);
+  }
+  private scheduleResidentRefresh(record: ConnectionRecord) {
+    this.stopResidentRefresh(record.id);
+    if (this.closing) return;
+    const timer = setTimeout(() => {
+      this.residentTimers.delete(record.id);
+      // Account/project leases are acquired BEFORE navigation; busy work is skipped, never queued.
+      void this.refreshResidentSession(record.projectId, record.id).catch(() => {}).finally(() => {
+        const current = this.platformStore?.connection(record.projectId, record.id);
+        if (!this.closing && current && !current.needsReauth && current.credentialRef === record.credentialRef)
+          this.scheduleResidentRefresh(current);
+      });
+    }, 5 * 60_000);
+    timer.unref();
+    this.residentTimers.set(record.id, timer);
+  }
+  /** Internal read-only maintenance; no token or browser state is exposed over HTTP. */
+  async refreshResidentSession(projectId: string, connectionId: string) {
+    const record = this.connection(projectId, connectionId);
+    if (!this.browser.refreshSession || record.needsReauth) return;
+    return this.withLock(projectId, record, async () => {
+      try {
+        const account = await this.browser.refreshSession!(record.id, this.state(record));
+        if (!account.accountId || account.accountId !== record.accountId)
+          throw new PlatformError(409, 'PLATFORM_ACCOUNT_MISMATCH', '驻留浏览器身份变化，请以原账号重新登录。');
+        await this.persistBrowserSession(record);
+        this.platforms.putConnection({ ...record, lastCheckedAt: now() });
+      } catch (error) {
+        if (error instanceof PlatformError && ['PLATFORM_LOGIN_CLOSED', 'PLATFORM_REAUTH_REQUIRED',
+          'PLATFORM_ACCOUNT_MISMATCH', 'PLATFORM_DOM_VERIFICATION_REQUIRED', 'PLATFORM_LOGIN_ORIGIN_UNVERIFIED'].includes(error.code)) {
+          this.stopResidentRefresh(record.id);
+          this.platforms.putConnection({ ...record, needsReauth: true });
+          await this.browser.closeConnection(record.id);
+        }
+        throw error;
+      }
+    });
   }
   private async releaseLoginLease(loginId: string) {
     const release = this.loginLeases.get(loginId);
@@ -793,7 +858,7 @@ export class PlatformRuntime {
       }
       context.beforeMutation();
       if (!draftId) {
-        const result = await this.browser.createDraft(record.id, state, target.accountId, target.remoteWorkId, item.snapshot, context.identified, plan?.volumeId);
+        const result = await this.browser.createDraft(record.id, state, target.accountId, target.remoteWorkId, item.snapshot, context.identified, plan?.volumeId, { automaticVerification: preview.autoApprove === true });
         draftId = result.draftId;
       }
       context.identified(draftId);
@@ -1201,6 +1266,7 @@ export class PlatformRuntime {
         '此连接仍有未核对的操作，请先核对再删除，以免丢失恢复入口。',
       );
     await this.withLock(projectId, record, async () => {
+      this.stopResidentRefresh(record.id);
       await this.browser.closeConnection(record.id);
       this.platforms.deleteConnection(record.id);
       this.secrets.delete(record.credentialRef);
@@ -1228,6 +1294,7 @@ export class PlatformRuntime {
     const connections = this.platforms.connections(projectId);
     await this.withLock(projectId, undefined, async () => {
       for (const connection of connections) {
+        this.stopResidentRefresh(connection.id);
         await this.browser.closeConnection(connection.id);
         this.secrets.delete(connection.credentialRef);
       }
@@ -1245,6 +1312,8 @@ export class PlatformRuntime {
     for (const batch of this.publicationQueue?.list() ?? []) {
       if (['queued', 'running'].includes(batch.state)) this.publicationQueue!.pause(batch.id);
     }
+    for (const timer of this.residentTimers.values()) clearTimeout(timer);
+    this.residentTimers.clear();
     for (const timer of this.loginTimers.values()) clearTimeout(timer);
     this.loginTimers.clear();
     await this.waitForIdle();

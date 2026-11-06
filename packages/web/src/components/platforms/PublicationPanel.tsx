@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useHiddenPlatformRecords } from '../../hooks/platforms/useHiddenPlatformRecords';
 import { publicationChapterPages } from '../../hooks/platforms/publicationChapterPages';
+import { startLocalPlatformSync } from '../../hooks/platforms/localPlatformSync';
 import { useConfirm } from '../common/AppDialog';
 import { api } from '../../services/api';
 import type { PlatformChapterChoice, ProjectPlatformWorkLink } from '../../../../../shared/platforms';
@@ -44,6 +45,10 @@ const itemLabels: Record<PublicationItem['state'], string> = {
   failed: '失败，未自动重试',
   unknown: '结果未知，禁止重发',
 };
+export const publicationItemOutcome = (batch: PublicationBatch, item: PublicationItem) =>
+  batch.state === 'failed' && item.state === 'queued' && !item.mutationStarted
+    ? '未执行（批次已停止，不会自动继续）'
+    : itemLabels[item.state];
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : '操作失败，请先刷新本地队列核对状态。';
 const active = (batch: PublicationBatch) => batch.state === 'queued' || batch.state === 'running';
@@ -124,6 +129,9 @@ function ProjectPublicationPanel({
   const readVersion = useRef(0);
   const startKeys = useRef(new Map<string, string>());
   const hasActive = batches.some(active);
+  const localSync = useRef<ReturnType<typeof startLocalPlatformSync> | null>(null);
+  const syncState = useRef({ hasActive, disabled });
+  syncState.current = { hasActive, disabled };
   const hasUnknown = batches.some(uncertain);
   const selected = batches.find((batch) => batch.id === selectedId);
   const selectedLink = links.find((link) => link.id === linkId && link.projectId === projectId);
@@ -187,6 +195,7 @@ function ProjectPublicationPanel({
   useEffect(() => {
     if (!incomingBatch || incomingBatch.preview.target.projectId !== projectId) return;
     readVersion.current++;
+    localSync.current?.invalidate();
     setBatches((current) => [incomingBatch, ...current.filter((batch) => batch.id !== incomingBatch.id)]);
     setSelectedId(incomingBatch.id);
     setLoading(false);
@@ -196,21 +205,31 @@ function ProjectPublicationPanel({
     history.show(incomingBatch.id);
   }, [incomingBatch, projectId]);
 
-  // Timers only read the local queue. Starting/resuming always requires a button click.
+  // Keep an already-open page current even when a queue was started elsewhere.
+  // Only read local records; never prepare, resume, navigate the platform, or clear approvals.
   useEffect(() => {
-    if (!hasActive) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      await refresh(controller.signal);
-      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 1500);
-    };
-    timer = setTimeout(() => void poll(), 1500);
+    const sync = startLocalPlatformSync({
+      active: () => syncState.current.hasActive,
+      paused: () => pending.current || document.hidden || syncState.current.disabled,
+      read: async (signal, isCurrent) => {
+        const version = readVersion.current;
+        const next = await api<PublicationBatch[]>(base, { signal });
+        if (!isCurrent() || version !== readVersion.current) return;
+        setBatches(next);
+        // Background success does not erase explicit action errors/unknown recovery gates.
+      },
+    });
+    localSync.current = sync;
+    const wake = () => sync.refresh();
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', wake);
     return () => {
-      controller.abort();
-      if (timer) clearTimeout(timer);
+      sync.stop();
+      if (localSync.current === sync) localSync.current = null;
+      window.removeEventListener('focus', wake);
+      document.removeEventListener('visibilitychange', wake);
     };
-  }, [hasActive, refresh]);
+  }, [base]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -234,6 +253,7 @@ function ProjectPublicationPanel({
     const controller = lifetime.current;
     if (locked || pending.current || !controller || controller.signal.aborted) return;
     pending.current = true;
+    localSync.current?.invalidate();
     readVersion.current++;
     setBusy(true);
     setError('');
@@ -280,6 +300,8 @@ function ProjectPublicationPanel({
     } finally {
       if (!controller.signal.aborted) {
         pending.current = false;
+        localSync.current?.invalidate();
+        localSync.current?.refresh();
         setBusy(false);
       }
     }
@@ -386,7 +408,7 @@ function ProjectPublicationPanel({
           自动审批：后续操作跳过本地人工批准，准备后直接上传 / 送审
         </label>
         {autoApprove ? <p className="platform-notice">
-          已启用自动授权；仍会核验账号、目标卷、完整正文及重复操作。平台审核不受此开关影响。
+          已启用自动授权及番茄自动核验：等待编辑器与准确章节 ID；执行异常时仅对已记录 ID 自动只读全文核对一次，证实成功才继续。验证码、未知弹窗或结果不明仍暂停，不重发。平台审核不受此开关影响。
           <button type="button" className="button secondary" disabled={busy} onClick={() => { onAutoApproveChange(false); setApproval(''); }}>
             切换为手动预览与批准（不会上传）
           </button>
@@ -539,6 +561,7 @@ function ProjectPublicationPanel({
                 <p className="platform-notice">已请求暂停：当前一章结束后停止，不会撤销已开始的写入。</p>
               )}
               {batch.error && <p role="alert">{batch.error}</p>}
+              {batch.failureStage && <p className="platform-help">失败阶段：{{ acquire: '获取账号锁', validate: '只读校验', execute: '执行与回读' }[batch.failureStage]} · 错误码：{batch.errorCode || '未分类'}。未进入远端写入的失败需排查后重新预览批准；结果未知时只读核对，不重发。</p>}
               {uncertain(batch) && (
                 <p className="platform-notice">
                   存在未知结果。请到官方作者页只读核对，禁止盲目重试、重新建批补发或恢复。
@@ -549,8 +572,9 @@ function ProjectPublicationPanel({
                   .sort((a, b) => a.snapshot.number - b.snapshot.number)
                   .map((item) => (
                     <li key={item.id}>
-                      第 {item.snapshot.number} 章 · {item.snapshot.title}：{itemLabels[item.state]}
+                      第 {item.snapshot.number} 章 · {item.snapshot.title}：{publicationItemOutcome(batch, item)}
                       {item.remoteDraftId && <> · 远端草稿 ID：{item.remoteDraftId}</>}
+                      {item.reconciliation && <p className="platform-help">只读核验：{item.reconciliation.outcome === 'unproven' ? '未证实，保持未知且不重发' : item.reconciliation.outcome === 'submitted' ? '送审回执及全文匹配' : '草稿全文匹配'} · {new Date(item.reconciliation.checkedAt).toLocaleString('zh-CN')}</p>}
                       {item.error && <p role="alert">{item.error}</p>}
                     </li>
                   ))}

@@ -47,6 +47,18 @@ export interface PublicationItem {
   error?: string;
   reconciliation?: { checkedAt: string; outcome: 'draft_verified' | 'submitted' | 'unproven' };
 }
+/** Only these credential-free diagnostic identifiers may be persisted from hook failures. */
+export const publicationFailureCodes = [
+  'PLATFORM_BUSY', 'PLATFORM_LOCK_UNAVAILABLE', 'PLATFORM_REAUTH_REQUIRED', 'PLATFORM_LOGIN_CLOSED',
+  'PLATFORM_ACCOUNT_MISMATCH', 'PLATFORM_DOM_VERIFICATION_REQUIRED', 'PLATFORM_PAGE_LOAD_FAILED',
+  'PLATFORM_DOM_MISMATCH', 'PLATFORM_WORK_NOT_FOUND', 'PLATFORM_BINDING_CHANGED', 'PLATFORM_PREVIEW_CHANGED',
+  'PUBLICATION_REMOTE_CHANGED', 'PROJECT_RUNNING',
+  // Explicit queue invariants reachable during validation/execution; never accept arbitrary queue codes.
+  'DUPLICATE_CHAPTER', 'CONFLICTING_VERSION', 'INVALID_STATE', 'MUTATION_NOT_CHECKPOINTED',
+  'REMOTE_ID_CHANGED', 'INVALID_OUTCOME', 'INVALID_PREVIEW', 'SNAPSHOT_CHANGED',
+] as const;
+export type PublicationFailureCode = typeof publicationFailureCodes[number];
+export type PublicationFailureStage = 'acquire' | 'validate' | 'execute';
 export interface PublicationBatch {
   id: string;
   preview: PublicationPreview;
@@ -59,4 +71,7 @@ export interface PublicationBatch {
   createdAt: string;
   updatedAt: string;
   error?: string;
+  /** Exact allowlisted identifier only, never the original hook message or payload. */
+  errorCode?: PublicationFailureCode;
+  failureStage?: PublicationFailureStage;
 }

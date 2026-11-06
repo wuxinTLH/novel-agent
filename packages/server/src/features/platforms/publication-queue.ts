@@ -3,6 +3,7 @@ import path from 'node:path';
 import { documentStorage, readDocumentFile } from '../../infrastructure/storage/document-storage.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DraftSnapshot } from '../../../../../shared/platforms.js';
+import { publicationFailureCodes, type PublicationFailureCode, type PublicationFailureStage } from '../../../../../shared/publication.js';
 import type { PublicationAction, PublicationBatch, PublicationItem, PublicationPreview, PublicationTarget, PublicationChapterRemotePlan } from '../../../../../shared/publication.js';
 export type { PublicationAction, PublicationBatch, PublicationItem, PublicationPreview, PublicationTarget, PublicationChapterRemotePlan } from '../../../../../shared/publication.js';
 
@@ -32,6 +33,17 @@ export interface PublicationQueueOptions {
 }
 export class PublicationQueueError extends Error {
   constructor(public code: string, message: string) { super(message); this.name = 'PublicationQueueError'; }
+}
+const failureCodes = new Set<string>(publicationFailureCodes);
+function isFailureCode(code: unknown): code is PublicationFailureCode {
+  return typeof code === 'string' && failureCodes.has(code);
+}
+function safeFailureCode(error: unknown): PublicationFailureCode | undefined {
+  // Thrown values and even code getters are untrusted. Never stringify them or inspect messages/causes.
+  try {
+    const code: unknown = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+    return isFailureCode(code) ? code : undefined;
+  } catch { return undefined; }
 }
 function reject(code: string, message: string): never { throw new PublicationQueueError(code, message); }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
@@ -187,6 +199,9 @@ export class PublicationQueue {
     if ((batch.preview.autoApprove !== undefined && typeof batch.preview.autoApprove !== 'boolean') ||
       (batch.approval !== undefined && (!['manual', 'automatic'].includes(batch.approval.mode) || !['prepare', 'start'].includes(batch.approval.source) ||
         batch.approval.hash !== batch.approvalHash || !Number.isFinite(Date.parse(batch.approval.approvedAt))))) reject('INVALID_STORE', 'Invalid publication approval provenance');
+    if ((batch.errorCode !== undefined && !isFailureCode(batch.errorCode)) ||
+      (batch.failureStage !== undefined && !['acquire', 'validate', 'execute'].includes(batch.failureStage)))
+      reject('INVALID_STORE', 'Invalid publication failure diagnostics');
     if (canonical(targetSnapshot(batch.preview.target)) !== canonical(batch.preview.target)) reject('INVALID_STORE', 'Invalid publication target');
     for (const chapter of batch.preview.chapters) if (canonical(chapterSnapshot(chapter)) !== canonical(chapter)) reject('INVALID_STORE', 'Invalid chapter snapshot');
     validateRemotePlan(batch.preview);
@@ -266,7 +281,8 @@ export class PublicationQueue {
       }
       for (const prior of overlaps) {
         const existing = prior.item;
-        if (existing.state === 'failed' && !existing.mutationStarted) continue;
+        if (!existing.mutationStarted && (existing.state === 'failed' ||
+          (prior.batch.state === 'failed' && existing.state === 'queued'))) continue;
         if (!['draft_verified', 'submitted'].includes(existing.state)) {
           const same = canonical(item.snapshot) === canonical(existing.snapshot);
           reject(same ? 'DUPLICATE_CHAPTER' : 'CONFLICTING_VERSION', 'Unresolved approved operation requires reconciliation');
@@ -372,7 +388,7 @@ export class PublicationQueue {
           batch.state = batch.items.some(value => value.state === 'unknown') ? 'unknown' :
             batch.items.every(value => ['draft_verified', 'submitted'].includes(value.state)) ? 'completed' : 'paused';
           batch.pauseRequested = true; batch.updatedAt = this.now();
-          if (batch.state !== 'unknown') delete batch.error;
+          if (batch.state !== 'unknown') { delete batch.error; delete batch.errorCode; delete batch.failureStage; }
         });
       }
       return this.get(id);
@@ -387,14 +403,50 @@ export class PublicationQueue {
   async waitForIdle(id?: string): Promise<void> {
     if (id) await this.tasks.get(id); else await this.tail;
   }
+  /** One read under the run's existing lease; never discover an ID or replay a mutation. */
+  private async verifyExecutionFailure(id: string, itemId: string): Promise<boolean> {
+    const initial = this.get(id);
+    const item = initial.items.find(value => value.id === itemId)!;
+    if (initial.preview.autoApprove !== true || !item.mutationStarted || !this.hooks.reconcile) return false;
+    const plan = planFor(initial.preview, item.snapshot.chapterId);
+    const knownId = item.remoteDraftId ?? (plan && plan.mode !== 'create' ? plan.remoteDraftId : undefined);
+    if (!knownId || !knownId.trim()) return false;
+    // Commit uncertainty BEFORE reading. Any persistence exception escapes and stops this run.
+    this.change(() => {
+      const current = this.batch(id).items.find(value => value.id === itemId)!;
+      current.state = 'unknown'; current.error = 'Outcome unknown; read-only verification pending.';
+      this.batch(id).updatedAt = this.now();
+    });
+    let evidence: Awaited<ReturnType<NonNullable<PublicationQueueHooks['reconcile']>>>;
+    try {
+      const result = await this.hooks.reconcile(initial.preview, freeze({ ...clone(item), state: 'unknown', remoteDraftId: knownId }));
+      // Copy only validated primitives, not adapter objects/getters, into durable evidence.
+      if (result && result.remoteDraftId === knownId && typeof result.remoteFingerprint === 'string' && result.remoteFingerprint.trim() &&
+        result.state === (initial.preview.action === 'save_draft' ? 'draft_verified' : 'submitted'))
+        evidence = { state: result.state, remoteDraftId: knownId, remoteFingerprint: result.remoteFingerprint };
+    } catch { /* Read errors are unproven; never retry or retain browser error data. */ }
+    this.change(() => {
+      const batch = this.batch(id);
+      const current = batch.items.find(value => value.id === itemId)!;
+      current.reconciliation = { checkedAt: this.now(), outcome: evidence?.state ?? 'unproven' };
+      if (evidence) {
+        current.state = evidence.state; current.remoteDraftId = evidence.remoteDraftId;
+        current.remoteFingerprint = evidence.remoteFingerprint; delete current.error;
+      }
+      batch.updatedAt = this.now();
+    });
+    return !!evidence;
+  }
   private async run(id: string): Promise<void> {
     if (this.batch(id).pauseRequested || this.batch(id).state !== 'queued') return;
     let release: (() => void | Promise<void>) | undefined;
     let activeItemId: string | undefined;
+    let failureStage: PublicationFailureStage = 'acquire';
     try {
       const approved = this.get(id).preview;
       release = await this.hooks.acquire?.(approved);
       if (this.batch(id).pauseRequested) return;
+      failureStage = 'validate';
       this.checkConflicts(this.batch(id));
       await this.hooks.validate(approved, this.get(id).items);
       if (this.batch(id).pauseRequested) return;
@@ -406,17 +458,22 @@ export class PublicationQueue {
         if (item.state !== 'queued') continue;
         activeItemId = itemId;
         // Revalidate ALL snapshots before EACH chapter; validation is read-only.
+        failureStage = 'validate';
         await this.hooks.validate(this.get(id).preview, this.get(id).items);
         if (this.batch(id).pauseRequested) break;
         this.change(() => { this.batch(id).items.find(i => i.id === itemId)!.state = 'running'; });
+        let checkpointFailed = false;
+        const checkpoint = (work: () => void): void => {
+          try { this.change(work); } catch (error) { checkpointFailed = true; throw error; }
+        };
         const context: PublicationExecutionContext = {
-          beforeMutation: () => this.change(() => {
+          beforeMutation: () => checkpoint(() => {
             const current = this.batch(id).items.find(i => i.id === itemId)!;
             if (current.state !== 'running' || this.batch(id).state !== 'running')
               reject('INVALID_STATE', 'Mutation checkpoint only valid for the active item');
             current.mutationStarted = true;
           }),
-          identified: remoteDraftId => this.change(() => {
+          identified: remoteDraftId => checkpoint(() => {
             const current = this.batch(id).items.find(i => i.id === itemId)!;
             if (current.state !== 'running' || this.batch(id).state !== 'running')
               reject('INVALID_STATE', 'Identification only valid for the active item');
@@ -432,7 +489,18 @@ export class PublicationQueue {
             current.remoteDraftId = identified;
           }),
         };
-        const result = await this.hooks.execute(this.get(id).preview, freeze(clone(item)), context);
+        failureStage = 'execute';
+        let result: Awaited<ReturnType<PublicationQueueHooks['execute']>>;
+        try { result = await this.hooks.execute(this.get(id).preview, freeze(clone(item)), context); }
+        catch (error) {
+          if (!checkpointFailed && await this.verifyExecutionFailure(id, itemId)) {
+            activeItemId = undefined;
+            continue;
+          }
+          throw error;
+        }
+        // An adapter must not swallow a failed durable checkpoint and report success.
+        if (checkpointFailed) reject('INVALID_STATE', 'Execution checkpoint failed; stopped without continuation');
         if (!['draft_verified', 'submitted'].includes(result.state) ||
           (approved.action === 'submit_review' && result.state !== 'submitted') ||
           (approved.action === 'save_draft' && result.state !== 'draft_verified'))
@@ -463,13 +531,16 @@ export class PublicationQueue {
         batch.state = batch.items.every(i => ['draft_verified', 'submitted'].includes(i.state)) ? 'completed' : 'paused';
         batch.updatedAt = this.now();
       });
-    } catch {
+    } catch (error) {
+      const errorCode = safeFailureCode(error);
       this.change(() => {
         const batch = this.batch(id);
         const item = batch.items.find(i => i.id === activeItemId);
         if (item) { item.state = item.mutationStarted ? 'unknown' : 'failed'; item.error = item.mutationStarted ? 'Outcome unknown; manual reconciliation required.' : 'Validation or execution failed before mutation.'; }
         batch.state = item?.mutationStarted ? 'unknown' : 'failed';
-        // Do not persist arbitrary hook errors: they can contain credential/browser data.
+        // Persist only an exact allowlisted identifier and our own stage, never browser data/messages.
+        if (errorCode) batch.errorCode = errorCode; else delete batch.errorCode;
+        batch.failureStage = failureStage;
         batch.error = item?.mutationStarted ? 'Outcome unknown; stopped without retry.' : 'Read-only validation or execution failed; stopped.';
         batch.updatedAt = this.now();
       });

@@ -41,6 +41,10 @@ Already-English references remain canonical rather than duplicating identical En
 - [Storage admission benchmark](../../scripts/benchmark-storage-report.md): existing English **historical SIMULATED** measurements, original numbers retained. No real SQL/network/disk performance claim; live PostgreSQL v3 acceptance was skipped without credentials/opt-in.
 - [English unreleased changelog summary](../../CHANGELOG.md#english-unreleased-summary): current feature themes and explicit validation boundaries. Chinese historical release entries remain intact rather than being presented as newly verified results.
 
+## Current v0.0.4a release scope
+
+See the [user guide](user-guide.md#v004a-authoring-and-shell-updates) for world-stage grouping without generation-context filtering, 20/50/100 paging, explicit revision-pinned local chapter bulk deletion, relocated shell controls and family-matching workflow dialogs. The [platform guide](fanqie-integration.md) covers selected-account window reuse, local-only polling, independent works-list readiness and exact-ID automatic read-only verification without retrying writes. Current build/test/package evidence is recorded in [release validation](../release-validation-v0.0.4a.md); historical counts remain historical.
+
 ## Current delivery and navigation changes
 
 The [deployment guide](user-guide.md#separate-builds-and-same-origin-deployment) covers independent `build:web` / `build:server`, default integrated hosting, API-only `SERVE_WEB=false`, trusted `WEB_DIST_DIR`, and same-origin `/api` / `/uploads` reverse proxying without new business CORS or relaxed CSRF. Static hosts need their own SPA fallback and equivalent CSP/security headers. The [authoring guide](user-guide.md#knowledge-facts-and-node-picker-views) covers browser-local node-picker views, the independent `/assets/knowledge` page and discard confirmations; the [acceptance record](acceptance-checklist.md#separate-delivery-knowledge-page-and-http-hardening-increment) separates focused HTTP fixes from historical totals and still-open external/OS-isolation work.

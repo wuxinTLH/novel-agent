@@ -191,6 +191,16 @@ export function useChapterEditor(project: Project | null, active: boolean) {
     if (stored) persist(acknowledgeChapterSave(stored, submitted, chapter));
     update((current) => acknowledgeChapterSave(current, submitted, chapter));
   };
+  // Include drafts left on other chapters; deleting a saved manuscript must not orphan local edits.
+  const hasDirtyDrafts = (chapterIds: string[]) => chapterIds.some((chapterId) => {
+    const current = stateRef.current;
+    if (current.identity === identity && current.chapterId === chapterId && editorDirty(current)) return true;
+    const pending = pendingDrafts.current.get(JSON.stringify([identity, chapterId]));
+    if (pending && editorDirty(pending)) return true;
+    if (!actorRef.current || !project) return false;
+    const draft = draftStore.current.read(chapterDraftKey(actorRef.current, project.id, workflowIdOf(project), chapterId));
+    return !!draft && draft.identity === identity && editorDirty(draft);
+  });
   const currentChapter = project?.chapters.find((chapter) => chapter.id === state.chapterId);
   const conflict =
     state.chapterId !== '' && (!currentChapter || currentChapter.revision !== state.baseRevision);
@@ -207,6 +217,8 @@ export function useChapterEditor(project: Project | null, active: boolean) {
     changeEditor,
     acknowledgeSave,
     discardDraft,
+    hasDirtyDrafts,
+    draftIdentityReady: !!actor,
     draftWarning: draftStore.current.failed
       ? '浏览器草稿存储不可用，文字仍保留在本次会话中；离开前请保存或导出。'
       : !actor ? '正在确认草稿身份；请在离开前保存或导出。' : '',

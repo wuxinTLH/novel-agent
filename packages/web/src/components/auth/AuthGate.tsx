@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type R
 import { KeyRound, LogOut, Monitor, Settings2, ShieldCheck, UserRound } from 'lucide-react';
 import { api, resetApiSession } from '../../services/api';
 import './auth-toolbar.scss';
+import { ShellChromePortal } from './ShellChromePortal';
 import { createSessionRevalidator } from './session-revalidation';
 import { hasPermission, ROLES } from '../../../../../shared/permissions';
 import Administration from '../administration/Administration';
@@ -442,35 +443,34 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return (
       <>
         {localAdmin ? (
-          <div className="auth-toolbar auth-toolbar--local" role="region" aria-label={t('本机模式状态')}>
-            <div className="auth-toolbar__identity">
-              <span className="auth-toolbar__emblem" aria-hidden="true">
-                <Monitor size={18} />
-              </span>
-              <span className="auth-toolbar__copy">
-                <span className="auth-toolbar__pill">
-                  <span className="auth-toolbar__dot" />
-                  {t('本机模式')}
+          <ShellChromePortal target="shell-mode-status">
+            <div className="auth-toolbar auth-toolbar--local" role="region" aria-label={t('本机模式状态')}>
+              <div className="auth-toolbar__identity">
+                <span className="auth-toolbar__emblem" aria-hidden="true">
+                  <Monitor size={18} />
                 </span>
-                <span className="auth-toolbar__caption">{t('登录认证已关闭 · 仅供本机使用')}</span>
-              </span>
+                <span className="auth-toolbar__copy">
+                  <span className="auth-toolbar__pill">
+                    <span className="auth-toolbar__dot" />
+                    {t('本机模式')}
+                  </span>
+                  <span className="auth-toolbar__caption">{t('登录认证已关闭 · 仅供本机使用')}</span>
+                </span>
+              </div>
             </div>
-            <div className="auth-toolbar__actions">
-              <LanguageSwitcher />
-              <button
-                className="auth-toolbar__button auth-toolbar__button--primary"
-                type="button"
-                onClick={() => setAdmin(true)}
-              >
-                <Settings2 size={16} aria-hidden="true" />
-                <span>{t('管理控制台')}</span>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="auth-toolbar">
-            <LanguageSwitcher />
-          </div>
+          </ShellChromePortal>
+        ) : null}
+        {localAdmin && (
+          <ShellChromePortal target="shell-system-settings">
+            <button
+              className="auth-toolbar__button auth-toolbar__button--primary"
+              type="button"
+              onClick={() => setAdmin(true)}
+            >
+              <Settings2 size={16} aria-hidden="true" />
+              <span>{t('管理控制台')}</span>
+            </button>
+          </ShellChromePortal>
         )}
         {children}
         {localAdmin && admin && <Administration close={() => setAdmin(false)} mode="local" />}
@@ -492,57 +492,60 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   };
   return (
     <div key={user.id}>
-      <div className="auth-toolbar auth-toolbar--account" role="region" aria-label={t('账户状态与操作')}>
-        <div className="auth-toolbar__identity">
-          <span className="auth-toolbar__emblem" aria-hidden="true">
-            <UserRound size={18} />
-          </span>
-          <span className="auth-toolbar__copy">
-            <span className="auth-toolbar__username" title={user.username}>
-              {user.username}
+      <ShellChromePortal target="shell-mode-status">
+        <div className="auth-toolbar auth-toolbar--account" role="region" aria-label={t('账户状态与操作')}>
+          <div className="auth-toolbar__identity">
+            <span className="auth-toolbar__emblem" aria-hidden="true">
+              <UserRound size={18} />
             </span>
-            <span className="auth-toolbar__pill">
-              <span className="auth-toolbar__dot" />
-              {ROLES[user.role]?.label ?? '未知角色'}
+            <span className="auth-toolbar__copy">
+              <span className="auth-toolbar__username" title={user.username}>
+                {user.username}
+              </span>
+              <span className="auth-toolbar__pill">
+                <span className="auth-toolbar__dot" />
+                {ROLES[user.role]?.label ?? '未知角色'}
+              </span>
             </span>
-          </span>
-        </div>
-        <div className="auth-toolbar__actions">
-          <LanguageSwitcher />
-          {hasPermission(user.role, 'admin.access') && (
-            <button
-              className="auth-toolbar__button auth-toolbar__button--primary"
-              type="button"
-              onClick={() => setAdmin(true)}
-            >
-              <Settings2 size={16} aria-hidden="true" />
-              <span>{t('管理控制台')}</span>
+          </div>
+          <div className="auth-toolbar__actions">
+            {hasPermission(user.role, 'admin.access') && (
+              <ShellChromePortal target="shell-system-settings">
+                <button
+                  className="auth-toolbar__button auth-toolbar__button--primary"
+                  type="button"
+                  onClick={() => setAdmin(true)}
+                >
+                  <Settings2 size={16} aria-hidden="true" />
+                  <span>{t('管理控制台')}</span>
+                </button>
+              </ShellChromePortal>
+            )}
+            <button className="auth-toolbar__button" type="button" onClick={() => setAccount(true)}>
+              <KeyRound size={16} aria-hidden="true" />
+              <span>{t('邮箱与双重验证')}</span>
             </button>
+            <button className="auth-toolbar__button" type="button" onClick={() => setSecurity(true)}>
+              <ShieldCheck size={16} aria-hidden="true" />
+              <span>{t('账号安全')}</span>
+            </button>
+            <button
+              className="auth-toolbar__button auth-toolbar__button--logout"
+              type="button"
+              onClick={() => void logout()}
+              disabled={busy}
+            >
+              <LogOut size={16} aria-hidden="true" />
+              <span>{busy ? t('正在退出…') : t('退出登录')}</span>
+            </button>
+          </div>
+          {error && (
+            <span className="auth-toolbar__error" role="alert">
+              {error}
+            </span>
           )}
-          <button className="auth-toolbar__button" type="button" onClick={() => setAccount(true)}>
-            <KeyRound size={16} aria-hidden="true" />
-            <span>{t('邮箱与双重验证')}</span>
-          </button>
-          <button className="auth-toolbar__button" type="button" onClick={() => setSecurity(true)}>
-            <ShieldCheck size={16} aria-hidden="true" />
-            <span>{t('账号安全')}</span>
-          </button>
-          <button
-            className="auth-toolbar__button auth-toolbar__button--logout"
-            type="button"
-            onClick={() => void logout()}
-            disabled={busy}
-          >
-            <LogOut size={16} aria-hidden="true" />
-            <span>{busy ? t('正在退出…') : t('退出登录')}</span>
-          </button>
         </div>
-        {error && (
-          <span className="auth-toolbar__error" role="alert">
-            {error}
-          </span>
-        )}
-      </div>
+      </ShellChromePortal>
       {children}
       {admin && hasPermission(user.role, 'admin.access') && (
         <Administration close={() => setAdmin(false)} mode="authenticated" />

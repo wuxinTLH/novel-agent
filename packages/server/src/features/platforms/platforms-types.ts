@@ -61,10 +61,15 @@ export interface BrowserSessionState {
 export interface DraftBrowserAdapter {
   readonly readiness: PlatformReadiness;
   readonly reason: string;
-  startLogin(loginId: string): Promise<void>;
+  /** Reuse only the explicitly selected live verified window; otherwise start isolated manual login. */
+  startLogin(loginId: string, connectionId?: string): Promise<void>;
   loginOpen(loginId: string): boolean;
   completeLogin(loginId: string): Promise<{ account: VerifiedAccount; state: BrowserSessionState }>;
   closeLogin(loginId: string): Promise<void>;
+  /** Transfer an explicitly verified manual window to a resident connection without closing it. */
+  retainLogin?(loginId: string, connectionId: string): Promise<void>;
+  /** Read-only fresh identity check on a live resident context; never reopen a closed window. */
+  refreshSession?(connectionId: string, state: BrowserSessionState): Promise<VerifiedAccount>;
   verifyAccount(connectionId: string, state: BrowserSessionState): Promise<VerifiedAccount>;
   /** Capture an existing context only; no navigation, login, or remote refresh request. */
   sessionState?(connectionId: string): Promise<BrowserSessionState | undefined>;
@@ -85,6 +90,7 @@ export interface DraftBrowserAdapter {
     snapshot: DraftSnapshot,
     onIdentified: (draftId: string) => void,
     volumeId?: string,
+    options?: { automaticVerification?: boolean },
   ): Promise<{ draftId: string }>;
   /** Must reopen the exact known draft (not trust the editor just filled). Never mutate. */
   readDraft(

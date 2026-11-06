@@ -22,6 +22,10 @@ The locale store tolerates unavailable/denied browser storage, updates `document
 
 To migrate a component, call `useLocale()` at component level, replace visible phrases with `t('原中文')`, add that phrase to both dictionaries, and check that markup, pluralization and placeholders work in both languages. Status messages originating from servers may need separate handling; do not automatically translate opaque server text.
 
+## Shell placement
+
+In the authoring shell, `LanguageSwitcher` sits in the top bar immediately left of the theme control. Mode/account status is below the sidebar logo and permission-gated administration below the guide. Standalone authentication screens may render their own language selector. Placement does not change `novel-locale`, identity-cache preservation or partial translation coverage.
+
 ## Themed language menu
 
 `LanguageSwitcher` uses a custom trigger button and `role="menu"` with `menuitemradio` buttons, not a native `<select>`. It shows 中文 / English and the current choice, focuses the selected option when opened, supports Up/Down and Home/End navigation, closes on Escape (restoring trigger focus), outside pointer input or focus leaving the widget, and restores trigger focus after selection. The trigger exposes `aria-haspopup`, `aria-expanded` and the open menu relationship.

@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PublicationQueue, PublicationQueueError, publicationPreviewHash, type PublicationQueueHooks } from './publication-queue.js';
+import { PublicationQueue, PublicationQueueError, publicationPreviewHash, type PublicationQueueHooks, type PublicationQueueOptions } from './publication-queue.js';
 import type { DraftSnapshot } from '../../../../../shared/platforms.js';
-import type { PublicationTarget } from '../../../../../shared/publication.js';
+import { publicationFailureCodes, type PublicationTarget } from '../../../../../shared/publication.js';
 
 test('explicit staging clear backs up history and rejects active batches', async t => {
   const { queue, file } = fixture(t);
@@ -76,12 +76,12 @@ test('manual remote ID is only persisted after read-only proof and never reexecu
 
 const target: PublicationTarget = { projectId: 'project-a', connectionId: 'connection-a', providerId: 'tomato', accountId: 'account-a', accountName: 'Author', linkId: 'link-a', remoteWorkId: 'work-a', workTitle: 'Work', workRevision: '1' };
 function chapter(number = 1): DraftSnapshot { return { chapterId: `chapter-${number}`, number, revision: 1, title: `Chapter ${number}`, content: 'Full immutable text', paragraphs: ['Full immutable text'], contentHash: `hash-${number}` }; }
-function fixture(t: { after(fn: () => void): void }, hooks?: Partial<PublicationQueueHooks>) {
+function fixture(t: { after(fn: () => void): void }, hooks?: Partial<PublicationQueueHooks>, options?: PublicationQueueOptions) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'publication-queue-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'queue.json');
   const defaults: PublicationQueueHooks = { validate: async () => {}, execute: async (_p, _i, c) => { c.beforeMutation(); c.identified('remote-id'); return { state: 'draft_verified' }; } };
-  const queue = new PublicationQueue(file, { ...defaults, ...hooks });
+  const queue = new PublicationQueue(file, { ...defaults, ...hooks }, options);
   return { queue, file, hooks: { ...defaults, ...hooks } };
 }
 async function approved(queue: PublicationQueue, chapters = [chapter()]) {
@@ -161,6 +161,120 @@ test('pre-mutation failure is failed; post-mutation failure unknown; neither ret
     assert.equal(queue.get(batch.id).state, mutate ? 'unknown' : 'failed'); assert.equal(calls, 1);
     assert.throws(() => queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'retry' }), errorCode('INVALID_STATE'));
     assert.equal(fs.readFileSync(file, 'utf8').includes('TOKEN_SECRET'), false);
+  }
+});
+
+test('failure diagnostics retain only exact allowlisted codes at acquire, validation and execution stages', async t => {
+  for (const stage of ['acquire', 'validate', 'execute'] as const) {
+    for (const code of publicationFailureCodes) {
+      let fail = false; let executions = 0;
+      const failure = Object.assign(new Error('COOKIE_SECRET page text'), { code, browser: { token: 'BROWSER_SECRET' } });
+      const { queue, file, hooks } = fixture(t, {
+        acquire: async () => { if (fail && stage === 'acquire') throw failure; return () => {}; },
+        validate: async () => { if (fail && stage === 'validate') throw failure; },
+        execute: async () => { executions++; throw failure; },
+      });
+      const batch = await approved(queue, [chapter(), chapter(2)]); fail = true;
+      queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+      const result = new PublicationQueue(file, hooks).get(batch.id);
+      assert.equal(result.state, 'failed');
+      assert.equal(result.errorCode, code); assert.equal(result.failureStage, stage);
+      assert.equal(executions, stage === 'execute' ? 1 : 0);
+      assert.equal(result.items[1].state, 'queued');
+      assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /COOKIE_SECRET|BROWSER_SECRET|page text/);
+      assert.throws(() => queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'retry' }), errorCode('INVALID_STATE'));
+    }
+  }
+});
+
+test('untrusted failure codes and messages never persist, including after mutation; no retry on reopen', async t => {
+  const secret = 'COOKIE_SECRET';
+  const failures: unknown[] = [
+    Object.assign(new Error(secret), { code: `PLATFORM_BUSY ${secret}` }),
+    new PublicationQueueError(secret, secret),
+    { code: { toString: () => 'PLATFORM_BUSY', toJSON: () => secret }, message: secret },
+    { get code() { throw new Error(secret); } },
+    { code: 'platform_busy', message: secret },
+    { code: '__proto__', message: secret },
+    { code: 'PLATFORM_BUSY', message: secret, failureStage: secret },
+    secret, null,
+  ];
+  for (const mutate of [false, true]) for (const failure of failures) {
+    let executions = 0;
+    const { queue, file, hooks } = fixture(t, { execute: async (_p, _i, context) => {
+      executions++; if (mutate) context.beforeMutation(); throw failure;
+    } });
+    const batch = await approved(queue, [chapter(), chapter(2)]);
+    queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+    const reopened = new PublicationQueue(file, hooks); const result = reopened.get(batch.id);
+    assert.equal(result.state, mutate ? 'unknown' : 'failed');
+    assert.equal(result.items[0].state, mutate ? 'unknown' : 'failed');
+    assert.equal(result.errorCode, failure === failures[6] ? 'PLATFORM_BUSY' : undefined);
+    assert.equal(result.failureStage, 'execute');
+    assert.equal(result.items[1].state, 'queued'); assert.equal(executions, 1);
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /COOKIE_SECRET|platform_busy|__proto__/);
+    assert.throws(() => reopened.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'retry' }), errorCode('INVALID_STATE'));
+    assert.equal(executions, 1);
+  }
+});
+
+test('failed initial acquire/validation permits fresh approval only, not automatic replay', async t => {
+  for (const stage of ['acquire', 'validate'] as const) {
+    let fail = false; let executions = 0;
+    const { queue } = fixture(t, {
+      acquire: async () => { if (fail && stage === 'acquire') throw { code: 'PLATFORM_BUSY' }; return () => {}; },
+      validate: async () => { if (fail && stage === 'validate') throw { code: 'PLATFORM_PREVIEW_CHANGED' }; },
+      execute: async () => { executions++; return { state: 'draft_verified' }; },
+    });
+    const batch = await approved(queue); fail = true;
+    queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+    assert.equal(queue.get(batch.id).state, 'failed');
+    assert.equal(queue.get(batch.id).items[0].mutationStarted, false);
+    assert.throws(() => queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'retry' }), errorCode('INVALID_STATE'));
+    fail = false;
+    const fresh = await approved(queue);
+    assert.equal(fresh.state, 'queued'); assert.equal(executions, 0);
+    queue.start(fresh.id, { approvalHash: fresh.preview.hash, requestId: 'fresh' }); await queue.waitForIdle();
+    assert.equal(executions, 1); assert.equal(queue.get(batch.id).state, 'failed');
+  }
+});
+
+test('per-chapter revalidation reports validate rather than previous execute stage', async t => {
+  let validations = 0; let executions = 0;
+  const { queue } = fixture(t, {
+    validate: async () => { if (++validations === 4) throw { code: 'PROJECT_RUNNING' }; },
+    execute: async (_p, _i, context) => { executions++; context.beforeMutation(); return { state: 'draft_verified' }; },
+  });
+  const batch = await approved(queue, [chapter(), chapter(2)]);
+  queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+  const result = queue.get(batch.id);
+  assert.equal(result.errorCode, 'PROJECT_RUNNING'); assert.equal(result.failureStage, 'validate');
+  assert.equal(result.items[0].state, 'draft_verified'); assert.equal(result.items[1].state, 'failed');
+  assert.equal(result.state, 'failed'); assert.equal(executions, 1);
+});
+
+test('unproven reconciliation retains diagnostics; proven result clears obsolete failure', async t => {
+  let proven = false;
+  const { queue } = fixture(t, {
+    execute: async (_p, _i, context) => { context.beforeMutation(); context.identified('known-id'); throw { code: 'PLATFORM_PAGE_LOAD_FAILED' }; },
+    reconcile: async () => proven ? { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: 'proof' } : undefined,
+  });
+  const batch = await approved(queue);
+  queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+  assert.equal((await queue.reconcile(batch.id)).errorCode, 'PLATFORM_PAGE_LOAD_FAILED');
+  proven = true;
+  const result = await queue.reconcile(batch.id);
+  assert.equal(result.state, 'completed'); assert.equal(result.error, undefined);
+  assert.equal(result.errorCode, undefined); assert.equal(result.failureStage, undefined);
+});
+
+test('store loading rejects non-allowlisted diagnostic codes and stages while legacy records remain valid', async t => {
+  const { queue, file, hooks } = fixture(t); await approved(queue);
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.doesNotThrow(() => new PublicationQueue(file, hooks));
+  for (const diagnostics of [{ errorCode: 'SECRET' }, { failureStage: 'SECRET' }, { errorCode: { code: 'PLATFORM_BUSY' } }]) {
+    fs.writeFileSync(file, JSON.stringify({ ...data, batches: [{ ...data.batches[0], ...diagnostics }] }));
+    assert.throws(() => new PublicationQueue(file, hooks), errorCode('INVALID_STORE'));
   }
 });
 
@@ -319,6 +433,166 @@ test('new remote plans cannot return a replacement remote identity', async t => 
   queue.approve(batch.id, batch.preview.hash); queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'wrong-target' }); await queue.waitForIdle();
   assert.equal(queue.get(batch.id).state, 'unknown');
   assert.equal(queue.get(batch.id).items[0].remoteDraftId, undefined);
+});
+
+test('automatic execution failure verifies once under the same lock and durably continues both actions', async t => {
+  for (const action of ['save_draft', 'submit_review'] as const) for (const pinnedByPlan of [false, true]) {
+    const expected = action === 'save_draft' ? 'draft_verified' : 'submitted';
+    let locked = false; let acquisitions = 0; let executions = 0; let reads = 0;
+    const f = fixture(t, {
+      acquire: async () => { assert.equal(locked, false); locked = true; acquisitions++; return () => { locked = false; }; },
+      execute: async (_p, item, context) => {
+        assert.equal(locked, true); executions++; context.beforeMutation();
+        if (item.snapshot.number === 1) {
+          if (!pinnedByPlan) context.identified('known-id');
+          throw { code: 'PLATFORM_PAGE_LOAD_FAILED', message: 'COOKIE_SECRET' };
+        }
+        const persisted = JSON.parse(fs.readFileSync(f.file, 'utf8')).batches[0].items[0];
+        assert.equal(persisted.state, expected); assert.equal(persisted.remoteFingerprint, 'proof');
+        assert.equal(persisted.reconciliation.outcome, expected);
+        context.identified('second-id'); return { state: expected, remoteDraftId: 'second-id', remoteFingerprint: 'second-proof' };
+      },
+      reconcile: async (_p, item) => {
+        reads++; assert.equal(locked, true); assert.equal(acquisitions, 2);
+        assert.equal(item.remoteDraftId, 'known-id'); assert.equal(item.state, 'unknown');
+        assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).batches[0].items[0].state, 'unknown');
+        return { state: expected, remoteDraftId: 'known-id', remoteFingerprint: 'proof' };
+      },
+    });
+    const batch = await f.queue.preview({ target, action, autoApprove: true, chapters: [chapter(), chapter(2)],
+      ...(action === 'submit_review' ? { useAi: 1 as const } : {}),
+      ...(pinnedByPlan ? { remotePlan: [
+        { chapterId: 'chapter-1', mode: 'reuse' as const, volumeId: 'v', volumeName: 'V', remoteDraftId: 'known-id', expectedRemoteFingerprint: 'baseline' },
+        { chapterId: 'chapter-2', mode: 'create' as const, volumeId: 'v', volumeName: 'V' },
+      ] } : {}),
+    });
+    f.queue.approve(batch.id, batch.preview.hash);
+    f.queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await f.queue.waitForIdle();
+    assert.equal(executions, 2); assert.equal(reads, 1); assert.equal(locked, false);
+    assert.equal(f.queue.get(batch.id).state, 'completed');
+    assert.equal(new PublicationQueue(f.file, f.hooks).get(batch.id).state, 'completed');
+    assert.doesNotMatch(fs.readFileSync(f.file, 'utf8'), /COOKIE_SECRET/);
+  }
+});
+
+test('manual, unidentified, and pre-mutation failures never automatically read or retry', async t => {
+  for (const mode of ['manual', 'unidentified', 'beforeMutation', 'unavailable'] as const) {
+    let reads = 0; let executions = 0;
+    const { queue } = fixture(t, {
+      execute: async (_p, _i, context) => {
+        executions++;
+        if (mode !== 'beforeMutation') context.beforeMutation();
+        if (mode === 'manual' || mode === 'unavailable') context.identified('known-id');
+        throw new Error('uncertain');
+      },
+      reconcile: mode === 'unavailable' ? undefined : async () => { reads++; return undefined; },
+    });
+    const batch = await queue.preview({ target, action: 'save_draft', autoApprove: mode !== 'manual', chapters: [chapter(), chapter(2)] });
+    queue.approve(batch.id, batch.preview.hash);
+    queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+    assert.equal(reads, 0); assert.equal(executions, 1);
+    assert.equal(queue.get(batch.id).state, mode === 'beforeMutation' ? 'failed' : 'unknown');
+    assert.equal(queue.get(batch.id).items[1].state, 'queued');
+  }
+});
+
+test('automatic unproven, mismatched, invalid and errored reads remain unknown without retry', async t => {
+  const outcomes: unknown[] = [undefined, { state: 'draft_verified', remoteDraftId: 'other', remoteFingerprint: 'proof' },
+    { state: 'submitted', remoteDraftId: 'known-id', remoteFingerprint: 'proof' },
+    { state: 'published', remoteDraftId: 'known-id', remoteFingerprint: 'proof' },
+    { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: '' },
+    { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: '   ' },
+    { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: 42 }, null, 'throw'];
+  for (const outcome of outcomes) {
+    let executions = 0; let reads = 0;
+    const { queue, file, hooks } = fixture(t, {
+      execute: async (_p, _i, context) => { executions++; context.beforeMutation(); context.identified('known-id'); throw { code: 'PLATFORM_PAGE_LOAD_FAILED' }; },
+      reconcile: async () => { reads++; if (outcome === 'throw') throw new Error('COOKIE_SECRET'); return outcome as Awaited<ReturnType<NonNullable<PublicationQueueHooks['reconcile']>>>; },
+    });
+    const batch = await queue.preview({ target, action: 'save_draft', autoApprove: true, chapters: [chapter(), chapter(2)] });
+    queue.approve(batch.id, batch.preview.hash);
+    queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+    const result = new PublicationQueue(file, hooks).get(batch.id);
+    assert.equal(result.state, 'unknown'); assert.equal(result.items[0].reconciliation?.outcome, 'unproven');
+    assert.equal(result.errorCode, 'PLATFORM_PAGE_LOAD_FAILED'); assert.equal(result.items[1].state, 'queued');
+    assert.equal(executions, 1); assert.equal(reads, 1);
+    assert.throws(() => queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'retry' }), errorCode('INVALID_STATE'));
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /COOKIE_SECRET/);
+  }
+});
+
+test('pause during automatic verification preserves proven item but prevents subsequent execution', async t => {
+  const entered = deferred(); const finish = deferred(); let executions = 0;
+  const { queue } = fixture(t, {
+    execute: async (_p, _i, context) => { executions++; context.beforeMutation(); context.identified('known-id'); throw new Error('uncertain'); },
+    reconcile: async () => { entered.resolve(); await finish.promise; return { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: 'proof' }; },
+  });
+  const batch = await queue.preview({ target, action: 'save_draft', autoApprove: true, chapters: [chapter(), chapter(2)] });
+  queue.approve(batch.id, batch.preview.hash); queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' });
+  await entered.promise; queue.pause(batch.id); finish.resolve(); await queue.waitForIdle();
+  assert.equal(executions, 1); assert.equal(queue.get(batch.id).state, 'paused');
+  assert.equal(queue.get(batch.id).items[0].state, 'draft_verified'); assert.equal(queue.get(batch.id).items[1].state, 'queued');
+});
+
+test('automatic verification persistence failures stop before any subsequent item, even when transient', async t => {
+  for (const failAt of ['unknown', 'proof', 'identified', 'success'] as const) {
+    let executions = 0; let reads = 0; let failed = false;
+    const { queue, file, hooks } = fixture(t, {
+      execute: async (_p, _i, context) => {
+        executions++; context.beforeMutation(); context.identified('known-id');
+        if (failAt === 'success') return { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: 'proof' };
+        throw new Error('uncertain');
+      },
+      reconcile: async () => { reads++; return { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: 'proof' }; },
+    }, { persist: (destination, contents) => {
+      const item = JSON.parse(contents).batches[0]?.items[0];
+      if (!failed && ((failAt === 'unknown' && item?.state === 'unknown') ||
+        (failAt === 'proof' && item?.reconciliation?.outcome === 'draft_verified') ||
+        (failAt === 'identified' && item?.state === 'running' && item.remoteDraftId) ||
+        (failAt === 'success' && item?.state === 'draft_verified'))) {
+        failed = true; throw new Error('disk full');
+      }
+      fs.writeFileSync(destination, contents);
+    } });
+    const batch = await queue.preview({ target, action: 'save_draft', autoApprove: true, chapters: [chapter(), chapter(2)] });
+    queue.approve(batch.id, batch.preview.hash);
+    queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+    const result = new PublicationQueue(file, hooks).get(batch.id);
+    assert.equal(failed, true); assert.equal(executions, 1); assert.equal(reads, failAt === 'proof' ? 1 : 0);
+    assert.equal(result.state, 'unknown'); assert.equal(result.items[0].state, 'unknown'); assert.equal(result.items[1].state, 'queued');
+    assert.throws(() => queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'retry' }), errorCode('INVALID_STATE'));
+  }
+});
+
+test('invalid execution outcomes do not trigger automatic verification or retry', async t => {
+  let reads = 0; let executions = 0;
+  const { queue } = fixture(t, {
+    execute: async (_p, _i, context) => {
+      executions++; context.beforeMutation(); context.identified('known-id'); return { state: 'submitted' };
+    },
+    reconcile: async () => { reads++; return { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: 'proof' }; },
+  });
+  const batch = await queue.preview({ target, action: 'save_draft', autoApprove: true, chapters: [chapter(), chapter(2)] });
+  queue.approve(batch.id, batch.preview.hash);
+  queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+  assert.equal(queue.get(batch.id).state, 'unknown'); assert.equal(executions, 1); assert.equal(reads, 0);
+});
+
+test('persistent verification storage failure leaves last durable unknown checkpoint without continuation', async t => {
+  let broken = false; let executions = 0; let reads = 0;
+  const { queue, file, hooks } = fixture(t, {
+    execute: async (_p, _i, context) => { executions++; context.beforeMutation(); context.identified('known-id'); throw new Error('uncertain'); },
+    reconcile: async () => { reads++; broken = true; return { state: 'draft_verified', remoteDraftId: 'known-id', remoteFingerprint: 'proof' }; },
+  }, { persist: (destination, contents) => { if (broken) throw new Error('disk full'); fs.writeFileSync(destination, contents); } });
+  const batch = await queue.preview({ target, action: 'save_draft', autoApprove: true, chapters: [chapter(), chapter(2)] });
+  queue.approve(batch.id, batch.preview.hash);
+  queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }); await queue.waitForIdle();
+  assert.equal(executions, 1); assert.equal(reads, 1);
+  assert.equal(queue.get(batch.id).items[0].state, 'unknown');
+  assert.equal(queue.get(batch.id).items[1].state, 'queued');
+  assert.throws(() => queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'retry' }), errorCode('INVALID_STATE'));
+  const reopened = new PublicationQueue(file, hooks).get(batch.id);
+  assert.equal(reopened.state, 'unknown'); assert.equal(reopened.items[0].reconciliation, undefined);
 });
 
 test('tampered immutable preview is rejected on reopen', async t => {

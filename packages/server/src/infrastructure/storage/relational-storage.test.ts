@@ -338,6 +338,24 @@ test('entity reconstruction preserves unknown metadata, optional collection pres
   const snapshot = await f.storage.exportSnapshot();
   assert.deepEqual(JSON.parse(snapshot.owners[0].documents[0].content), JSON.parse(content));
 });
+for (const dialect of ['mysql', 'postgresql', 'sqlserver'] as const) {
+  test(`${dialect}: world stages and membership survive canonical projection, document and snapshot import`, async () => {
+    const f = fixture(dialect);
+    await f.storage.migrate();
+    const project = [{ id: 'project', worldStages: [{ id: 'stage', name: '起始阶段' }],
+      assets: [{ id: 'asset', category: 'world', worldStageId: 'stage', content: 'canonical text' }] }];
+    await f.storage.importDocuments('owner', 'b'.repeat(64), [{ key: 'projects.json', content: JSON.stringify(project) }]);
+    assert.deepEqual(JSON.parse((await f.storage.readDocument('owner', 'projects.json'))!.content), project);
+    assert.deepEqual(JSON.parse(String(f.state().novel_agent_v3_projects[0].body)).worldStages, project[0].worldStages);
+    assert.equal(JSON.parse(String(f.state().novel_agent_v3_assets[0].body)).worldStageId, 'stage');
+    const snapshot = await f.storage.exportSnapshot();
+    const destination = fixture(dialect);
+    await destination.storage.migrate();
+    await destination.storage.importSnapshot(snapshot);
+    assert.deepEqual(JSON.parse((await destination.storage.readDocument('owner', 'projects.json'))!.content), project);
+  });
+}
+
 test('typed profiles preserve SQL TLS validation and explicit tenant selection', () => {
   const parsed = storageConfigSchema.parse({
     version: 3,

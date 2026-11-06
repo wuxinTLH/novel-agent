@@ -77,11 +77,14 @@ import ErrorBanner, { errorMessage } from '../components/common/ErrorBanner';
 import ModelSettingsPanel from '../components/settings/ModelSettingsPanel';
 import ProjectSettingsPanel from '../components/projects/ProjectSettingsPanel';
 import ProjectsLibrary from '../components/projects/ProjectsLibrary';
+import WorldStagePanel from '../components/projects/WorldStagePanel';
 import KnowledgePanel from '../components/knowledge/KnowledgePanel';
 import '../styles/workspace-navigation.scss';
-import { useLocale } from '../locals';
+import { LanguageSwitcher, useLocale } from '../locals';
 import { useChapterEditor } from '../hooks/chapters/useChapterEditor';
 import ChapterHistory from '../components/chapters/ChapterHistory';
+import ChapterCatalog from '../components/chapters/ChapterCatalog';
+import { chapterDeletePayload, chapterSelectionStale, type ChapterSelection } from '../hooks/chapters/chapterCatalog';
 import {
   canApplyProject,
   filterAssets,
@@ -126,7 +129,7 @@ type Page =
   | 'project-settings'
   | 'character-workflow'
   | 'world-workflow';
-type WorkflowPreset = 'chapter' | 'blank';
+type WorkflowPreset = 'chapter' | 'blank' | 'character' | 'world';
 type PendingRunSubmission = { key: string; request: RunRequest; requestHash: string };
 const routePages: Page[] = [
   'projects',
@@ -141,7 +144,7 @@ const routePages: Page[] = [
   'world-workflow',
 ];
 function pageFromLocation(): Page | undefined {
-  const value = window.location.pathname.replace(/^\//, '') as Page;
+  const value = window.location.pathname.replace(/^\/|\/+$/g, '') as Page;
   if (platformFromPath(window.location.pathname)) return 'platforms';
   return routePages.includes(value) ? value : undefined;
 }
@@ -357,6 +360,10 @@ export default function App() {
     [category, setCategory] = useState<Category>('world'),
     [filter, setFilter] = useState<Category | 'all'>('all'),
     [search, setSearch] = useState('');
+  const [worldStageSelection, setWorldStageSelection] = useState({ projectId: '', id: 'all' });
+  const selectedWorldStage = worldStageSelection.projectId === project?.id &&
+    (worldStageSelection.id === 'all' || worldStageSelection.id === '' || project?.worldStages?.some((stage) => stage.id === worldStageSelection.id))
+    ? worldStageSelection.id : 'all';
   const [assetSelection, setAssetSelection] = useState<{ projectId: string; ids: string[] }>({
     projectId: '',
     ids: [],
@@ -542,8 +549,11 @@ export default function App() {
     const family = workflowFamilyForPage(page);
     const preset = family === 'character' ? 'character' : family === 'world' ? 'world' : 'chapter';
     const current = projectRef.current || project;
+    // Keep any active workflow in this page's family, not just the first one.
+    // Otherwise the route synchronizer immediately undoes an explicit selection.
+    const active = current.workflows?.find((item) => item.id === current.activeWorkflowId);
+    if (active && workflowFamily(active) === family) return;
     const existing = current.workflows?.find((item) => workflowFamily(item) === family);
-    if (existing && current.activeWorkflowId === existing.id) return;
     const requestKey = `${current.id}:${family}`;
     if (presetRouteInFlight.current === requestKey) return;
     presetRouteInFlight.current = requestKey;
@@ -912,6 +922,7 @@ export default function App() {
       }
       const form = new FormData();
       form.append('category', category);
+      if (category === 'world' && selectedWorldStage && selectedWorldStage !== 'all') form.append('worldStageId', selectedWorldStage);
       list.forEach((f) => form.append('files', f));
       acceptProject(
         await projectRequest(`/projects/${projectId}/assets/upload`, { method: 'POST', body: form }),
@@ -961,8 +972,12 @@ export default function App() {
       if (avatarRef.current) avatarRef.current.value = '';
     });
   const selectChapter = async (c: Chapter) => {
+    if (busy || running) return;
+    const epoch = identityEpoch.current;
     if (dirty && !(await confirmDialog('当前修改会保留为本地草稿，切换章节吗？'))) return;
-    chapterEditor.selectChapter(c);
+    if (epoch !== identityEpoch.current) return;
+    const latest = projectRef.current?.chapters.find((chapter) => chapter.id === c.id);
+    if (latest) chapterEditor.selectChapter(latest);
   };
   const retryFailedChapter = (number: number, mode: 'create' | 'regenerate') => {
     if (dirty) {
@@ -973,34 +988,60 @@ export default function App() {
     setGenerationEntry({ number, mode });
     setPage('workflow');
   };
-  const deleteChapter = async (chapter: Chapter) => {
-    if (dirty && chapterId === chapter.id && !(await confirmDialog('当前章节有未保存的修改，确定删除吗？')))
-      return;
-    if (
-      !(await confirmDialog(`确定删除第 ${chapter.number} 章「${chapter.title}」吗？其他章节不会重新编号。`))
-    )
-      return;
-    const submitted = chapterEditor.stateRef.current;
-    void task(async () => {
-      const saved = await projectRequest(`/projects/${projectId}/chapters/${chapter.id}`, {
-        method: 'DELETE',
-        body: JSON.stringify({
-          expectedRevision: chapter.revision,
-          workflowId: project ? workflowIdOf(project) : undefined,
-        }),
+  const chapterDeletionPending = useRef(false);
+  const deleteSelectedChapters = async (selection: ChapterSelection): Promise<boolean> => {
+    if (!project || busy || running || taskInFlight.current || chapterDeletionPending.current || !selection.length || selection.length > 500) return false;
+    const epoch = identityEpoch.current;
+    const identity = projectIdentity(project);
+    const target = project.id;
+    const ids = selection.map((chapter) => chapter.id);
+    const protectDrafts = () => {
+      if (!chapterEditor.draftIdentityReady || chapterEditor.hasDirtyDrafts(ids)) {
+        setError('所选章节可能有未保存的本地草稿，请先保存或丢弃草稿，再删除章节。');
+        return true;
+      }
+      return false;
+    };
+    if (protectDrafts()) return false;
+    chapterDeletionPending.current = true;
+    try {
+      const confirmed = await confirmDialog(
+        `确定永久删除所选 ${selection.length} 章吗？此操作不可撤销，其他章节不会重新编号，章号不会复用。`,
+        { title: '删除章节', confirmText: `永久删除 ${selection.length} 章`, danger: true },
+      );
+      if (!confirmed || epoch !== identityEpoch.current || activeIdentity.current !== identity || taskInFlight.current || projectRef.current?.run?.status === 'running') return false;
+      if (protectDrafts()) return false;
+      if (chapterSelectionStale(selection, projectRef.current?.chapters || [])) {
+        setError('所选章节已变更或删除，请重新选择后再删除。');
+        return false;
+      }
+      const submitted = { ...chapterEditor.stateRef.current };
+      let deleted = false;
+      await task(async () => {
+        let saved: Project;
+        try {
+          saved = await projectRequest(`/projects/${target}/chapters/delete`, {
+            method: 'POST',
+            body: JSON.stringify({ chapters: chapterDeletePayload(selection), workflowId: workflowIdOf(project) }),
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409 && epoch === identityEpoch.current) {
+            try { acceptProject(await projectRequest(`/projects/${target}`)); } catch { /* Keep drafts and original conflict. */ }
+          }
+          throw error;
+        }
+        if (epoch !== identityEpoch.current || !acceptProject(saved)) return;
+        const current = chapterEditor.stateRef.current;
+        if (ids.includes(current.chapterId) && current.identity === submitted.identity &&
+          current.selectionVersion === submitted.selectionVersion && current.editVersion === submitted.editVersion)
+          chapterEditor.resetEditor(saved.chapters);
+        showToast(`已删除 ${selection.length} 章，其他章节章号不变`);
+        deleted = true;
       });
-      if (!acceptProject(saved)) return;
-      const current = chapterEditor.stateRef.current;
-      if (
-        current.chapterId === chapter.id &&
-        current.identity === submitted.identity &&
-        current.selectionVersion === submitted.selectionVersion &&
-        current.editVersion === submitted.editVersion
-      )
-        chapterEditor.resetEditor(saved.chapters);
-      showToast('章节已删除，章号不会复用');
-    });
+      return deleted;
+    } finally { chapterDeletionPending.current = false; }
   };
+  const deleteChapter = (chapter: Chapter) => { void deleteSelectedChapters([{ id: chapter.id, revision: chapter.revision }]); };
   const saveChapter = () => {
     const submitted = { ...chapterEditor.stateRef.current };
     void task(async () => {
@@ -1141,8 +1182,9 @@ export default function App() {
     [project, projectId, task, acceptProject, showToast, snapshotGraph],
   );
   const filteredAssets = useMemo(
-    () => filterAssets(project?.assets || [], filter, search),
-    [project?.assets, filter, search],
+    () => filterAssets(project?.assets || [], filter, search).filter((asset) =>
+      filter !== 'world' || selectedWorldStage === 'all' || (asset.worldStageId || '') === selectedWorldStage),
+    [project?.assets, filter, search, selectedWorldStage],
   );
   const selectedAssetIds =
     assetSelection.projectId === projectId
@@ -1224,6 +1266,7 @@ export default function App() {
             <small>{t('你的故事，正在发生')}</small>
           </span>
         </a>
+        <div id="shell-mode-status" />
         <div className="workspace-label">
           {t('创作空间')} <span>WORKSPACE</span>
         </div>
@@ -1414,6 +1457,7 @@ export default function App() {
             <CircleHelp size={18} /> {t('使用指南')}
             <ArrowRight size={14} className="push-right" />
           </button>
+          <div id="shell-system-settings" />
           <div className="local-user">
             <button
               className="user-avatar-button"
@@ -1432,7 +1476,7 @@ export default function App() {
                 <span className="green-dot" /> 数据保存在本机
               </small>
             </div>
-            <span className="version">v0.0.2a</span>
+            <span className="version">v0.0.4a</span>
           </div>
         </div>
       </aside>
@@ -1507,6 +1551,7 @@ export default function App() {
             )}
           </nav>
           <div className="topbar-right">
+            <LanguageSwitcher />
             <ThemeSwitcher />
             <button
               type="button"
@@ -1837,9 +1882,9 @@ export default function App() {
                       <button
                         className="button secondary compact"
                         disabled={running || busy}
-                        onClick={() => openWorkflowCreator('chapter')}
+                        onClick={() => openWorkflowCreator(workflowFamilyForPage(page))}
                       >
-                        <Plus size={14} /> 创建小说
+                        <Plus size={14} /> {t(workflowFamilyForPage(page) === 'character' ? '创建人物流' : workflowFamilyForPage(page) === 'world' ? '创建世界观流' : '创建小说流')}
                       </button>
                       <select
                         aria-label="整理节点"
@@ -2444,6 +2489,27 @@ export default function App() {
                   );
                 })}
               </section>
+              <WorldStagePanel
+                key={project.id}
+                stages={project.worldStages || []} assets={project.assets} selected={selectedWorldStage}
+                disabled={busy || running}
+                onSelect={(id) => { setWorldStageSelection({ projectId: project.id, id }); setFilter('world'); setCategory('world'); }}
+                onSave={async (name, id) => {
+                  const updated = await projectRequest(`/projects/${project.id}/world-stages${id ? `/${id}` : ''}`, {
+                    method: id ? 'PATCH' : 'POST', body: JSON.stringify({ name }),
+                  });
+                  if (acceptProject(updated)) {
+                    const stage = updated.worldStages?.find((entry) => entry.name === name);
+                    if (stage) setWorldStageSelection({ projectId: project.id, id: stage.id });
+                    setFilter('world'); setCategory('world'); showToast('阶段已保存');
+                  }
+                }}
+                onDelete={async (id) => {
+                  if (acceptProject(await projectRequest(`/projects/${project.id}/world-stages/${id}`, { method: 'DELETE' }))) {
+                    setWorldStageSelection({ projectId: project.id, id: 'all' }); showToast('空阶段已删除');
+                  }
+                }}
+              />
               <section
                 className="upload-zone"
                 onDragOver={(e) => e.preventDefault()}
@@ -2471,6 +2537,11 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+                {category === 'world' && <select aria-label="上传所属阶段" value={selectedWorldStage === 'all' ? '' : selectedWorldStage}
+                  onChange={(event) => { setWorldStageSelection({ projectId: project.id, id: event.target.value }); setFilter('world'); }}>
+                  <option value="">未分组</option>
+                  {(project.worldStages || []).map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                </select>}
                 <button
                   className="button primary"
                   disabled={busy || running}
@@ -2573,6 +2644,18 @@ export default function App() {
                       </button>
                       <span>
                         <span className={`category-pill ${a.category}`}>{categoryLabels[a.category]}</span>
+                        {a.category === 'world' && <select className="asset-stage-select" aria-label={`所属阶段 ${a.name}`}
+                          value={a.worldStageId || ''} disabled={busy || running} onChange={(event) => {
+                            const worldStageId = event.target.value || null;
+                            void task(async () => {
+                              if (acceptProject(await projectRequest(`/projects/${project.id}/assets/${a.id}`, {
+                                method: 'PATCH', body: JSON.stringify({ worldStageId, expectedRevision: a.revision || 1 }),
+                              }))) showToast('资料所属阶段已更新');
+                            });
+                          }}>
+                          <option value="">未分组</option>
+                          {(project.worldStages || []).map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                        </select>}
                       </span>
                       <span className="muted">
                         {a.size > 1024 ? `${(a.size / 1024).toFixed(1)} KB` : `${a.size} B`}
@@ -2699,13 +2782,14 @@ export default function App() {
                     <span>{project.chapters.length} 章 · 仅已保存</span>
                   </div>
                   <ChapterCatalog
+                    key={projectIdentity(project)}
                     chapters={chapters}
                     selectedId={chapterId}
                     disabled={running || busy}
                     onSelect={selectChapter}
                     onDelete={deleteChapter}
+                    onDeleteSelected={deleteSelectedChapters}
                   />
-                  {!project.chapters.length && <p className="muted chapter-list-empty">还没有章节</p>}
                 </aside>
                 <div className="chapter-editor">
                   {chapterId ? (
@@ -3177,7 +3261,7 @@ export default function App() {
                 acceptProject(
                   await projectRequest(`/projects/${project.id}/assets`, {
                     method: 'POST',
-                    body: JSON.stringify(Object.fromEntries(f)),
+                    body: JSON.stringify({ ...Object.fromEntries(f), worldStageId: f.get('worldStageId') || undefined }),
                   }),
                 );
                 setAddAsset(false);
@@ -3191,7 +3275,7 @@ export default function App() {
             </label>
             <label>
               设定分类
-              <select name="category" defaultValue={category}>
+              <select name="category" value={category} onChange={(event) => setCategory(event.target.value as Category)}>
                 {categories.map((c) => (
                   <option key={c} value={c}>
                     {categoryLabels[c]}
@@ -3199,6 +3283,12 @@ export default function App() {
                 ))}
               </select>
             </label>
+            {category === 'world' && <label>所属阶段
+              <select name="worldStageId" defaultValue={selectedWorldStage === 'all' ? '' : selectedWorldStage}>
+                <option value="">未分组</option>
+                {(project.worldStages || []).map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+              </select>
+            </label>}
             <label>
               设定内容
               <textarea
@@ -3234,7 +3324,7 @@ export default function App() {
                 acceptProject(
                   await projectRequest(`/projects/${project.id}/assets/${editAsset.id}`, {
                     method: 'PATCH',
-                    body: JSON.stringify({ ...Object.fromEntries(f), expectedRevision: editAsset.revision || 1 }),
+                    body: JSON.stringify({ ...Object.fromEntries(f), ...(f.get('category') !== 'world' && editAsset.worldStageId ? { worldStageId: null } : {}), expectedRevision: editAsset.revision || 1 }),
                   }),
                 );
                 setEditAsset(null);
@@ -3296,7 +3386,7 @@ export default function App() {
         />
       )}
       {workflowCreator && (
-        <Modal title="创建小说工作流" close={() => setWorkflowCreator(false)} busy={busy} error={error}>
+        <Modal title={`创建${workflowFamilyForPage(page) === 'character' ? '人物' : workflowFamilyForPage(page) === 'world' ? '世界观' : '小说'}流`} close={() => setWorkflowCreator(false)} busy={busy} error={error}>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -3317,7 +3407,7 @@ export default function App() {
                 if (!acceptProject(created))
                   throw new Error('工作流已创建，但当前作品状态已变化，请刷新后查看。');
                 setWorkflowCreator(false);
-                showToast('小说工作流已创建');
+                showToast('工作流已创建');
               });
             }}
           >
@@ -3327,11 +3417,17 @@ export default function App() {
                 name="name"
                 required
                 maxLength={80}
-                defaultValue={`小说 ${(project.workflows?.length || 0) + 1}`}
+                defaultValue={`${workflowFamilyForPage(page) === 'character' ? '人物' : workflowFamilyForPage(page) === 'world' ? '世界观' : '小说'}流 ${(project.workflows?.length || 0) + 1}`}
               />
             </label>
             <fieldset className="node-presets">
               <legend>工作流类型</legend>
+              {workflowFamilyForPage(page) !== 'chapter' ? (
+                <label className="workflow-choice">
+                  <input type="radio" name="preset" value={workflowFamilyForPage(page)} checked readOnly />{' '}
+                  {workflowFamilyForPage(page) === 'character' ? '人物编写模板' : '世界观编写模板'}
+                </label>
+              ) : <>
               <label className="workflow-choice">
                 <input
                   type="radio"
@@ -3352,6 +3448,7 @@ export default function App() {
                 />{' '}
                 空白小说工作流
               </label>
+              </>}
             </fieldset>
             <button className="button primary full" disabled={busy}>
               <Plus size={15} /> 创建
@@ -3554,62 +3651,6 @@ export default function App() {
     </div>
   );
 }
-function ChapterCatalog({
-  chapters,
-  selectedId,
-  disabled,
-  onSelect,
-  onDelete,
-}: {
-  chapters: Chapter[];
-  selectedId: string;
-  disabled: boolean;
-  onSelect: (chapter: Chapter) => void;
-  onDelete: (chapter: Chapter) => void;
-}) {
-  const [start, setStart] = useState(0);
-  const size = 80;
-  const selectedIndex = Math.max(
-    0,
-    chapters.findIndex((chapter) => chapter.id === selectedId),
-  );
-  const safeStart =
-    selectedIndex < start || selectedIndex >= start + size ? Math.max(0, selectedIndex - 10) : start;
-  const visible = chapters.slice(safeStart, safeStart + size);
-  return (
-    <div
-      onScroll={(event) => {
-        const node = event.currentTarget;
-        if (node.scrollTop < 40) setStart((value) => Math.max(0, value - size));
-        if (node.scrollTop + node.clientHeight > node.scrollHeight - 40)
-          setStart((value) => Math.min(value + size, Math.max(0, chapters.length - size)));
-      }}
-    >
-      {visible.map((c) => (
-        <div key={c.id} className={`chapter-row ${selectedId === c.id ? 'active' : ''}`}>
-          <button className={selectedId === c.id ? 'active' : ''} onClick={() => onSelect(c)}>
-            <span>{String(c.number).padStart(2, '0')}</span>
-            <div>
-              <strong>{c.title}</strong>
-              <small>
-                {c.content.length} 字符 · {c.mode === 'demo' ? '演示草稿' : 'AI 初稿'} · 本地 v{c.revision}
-              </small>
-            </div>
-            <ChevronRight size={14} />
-          </button>
-          <button
-            className="icon-button delete"
-            aria-label={`删除 ${c.title}`}
-            disabled={disabled}
-            onClick={() => onDelete(c)}
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
 function ChapterPicker({
   chapters,
   selectedId,
@@ -3631,15 +3672,23 @@ function ChapterPicker({
     return chapters.filter((chapter) => `${chapter.number} ${chapter.title}`.toLowerCase().includes(text));
   }, [chapters, query]);
   const pageSize = 40;
-  const visible = filtered.slice(windowStart, windowStart + pageSize);
+  const safeWindow = Math.min(windowStart, Math.max(0, Math.floor((filtered.length - 1) / pageSize) * pageSize));
+  const visible = filtered.slice(safeWindow, safeWindow + pageSize);
   return (
-    <div className="chapter-picker">
+    <div className="chapter-picker" onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}>
       <button
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (!open) {
+            setQuery('');
+            const index = chapters.findIndex((chapter) => chapter.id === selectedId);
+            setWindowStart(Math.max(0, Math.floor(index / pageSize) * pageSize));
+          }
+          setOpen((value) => !value);
+        }}
       >
         <span>{selected ? `第 ${selected.number} 章 · ${selected.title}` : '选择章节'}</span>
         <ChevronDown size={14} />
@@ -3655,15 +3704,7 @@ function ChapterPicker({
               setWindowStart(0);
             }}
           />
-          <div
-            onScroll={(event) => {
-              const node = event.currentTarget;
-              if (node.scrollTop + node.clientHeight > node.scrollHeight - 40)
-                setWindowStart((value) =>
-                  Math.min(value + pageSize, Math.max(0, filtered.length - pageSize)),
-                );
-            }}
-          >
+          <div>
             {visible.map((chapter) => (
               <button
                 key={chapter.id}
@@ -3681,6 +3722,11 @@ function ChapterPicker({
             ))}
             {!visible.length && <p>没有匹配章节</p>}
           </div>
+          {filtered.length > pageSize && <nav className="chapter-picker-pages" aria-label="章节选择器分页">
+            <button type="button" disabled={safeWindow === 0} onClick={() => setWindowStart(Math.max(0, safeWindow - pageSize))}>上一页</button>
+            <span>{Math.floor(safeWindow / pageSize) + 1} / {Math.ceil(filtered.length / pageSize)}</span>
+            <button type="button" disabled={safeWindow + pageSize >= filtered.length} onClick={() => setWindowStart(safeWindow + pageSize)}>下一页</button>
+          </nav>}
         </div>
       )}
     </div>

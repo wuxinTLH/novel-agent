@@ -1,4 +1,4 @@
-// Match the existing fixed sidebar widths; below 1000px it returns to document flow.
+// Auth controls keep their owner in AuthGate and render into the application shell.
 .auth-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -219,6 +219,95 @@
       margin-left: 46px;
     }
   }
+}
+
+// Sidebar status replaces the former extra full-width header row.
+.sidebar { overflow-y: auto; }
+.sidebar > #shell-mode-status { flex-shrink: 0; }
+#shell-mode-status {
+  min-width: 0;
+  &:empty {
+    display: none;
+  }
+
+  .auth-toolbar {
+    margin: 0 0 18px;
+    padding: 12px 8px;
+    min-height: 0;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    gap: 10px;
+  }
+  .auth-toolbar__identity {
+    flex: 1 1 100%;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .auth-toolbar__emblem {
+    flex-basis: 28px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+  .auth-toolbar__copy {
+    flex: 1;
+    width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+  }
+  .auth-toolbar__caption {
+    max-width: 100%;
+    font-size: 10px;
+    overflow-wrap: anywhere;
+  }
+  .auth-toolbar__username {
+    max-width: 115px;
+  }
+  .auth-toolbar__actions {
+    width: 100%;
+    margin: 0;
+    gap: 4px;
+  }
+  .auth-toolbar__button {
+    padding: 6px;
+    min-height: 34px;
+    white-space: normal;
+    text-align: left;
+  }
+}
+#shell-system-settings {
+  &:empty {
+    display: none;
+  }
+  > button {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+.topbar-right {
+  flex-wrap: wrap;
+}
+@media (max-width: 1000px) {
+  .app-shell .sidebar > #shell-mode-status { grid-column: 1 / -1; width: 100%; }
+  .app-shell .sidebar .sidebar-bottom { display: flex; flex-wrap: wrap; grid-column: 1 / -1; width: 100%; gap: 6px; }
+  .sidebar-bottom .local-user { display: none; }
+  .app-shell .sidebar nav { max-width: 100%; overflow-x: auto; }
+}
+@media (max-width: 680px) {
+  .app-shell .topbar-right { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .topbar-right .language-switcher > span { display: none; }
+  .app-shell .sidebar { display: flex; flex-direction: row; flex-wrap: wrap; min-width: 0; }
+  .sidebar #shell-mode-status { order: 1; flex: 0 0 100%; width: 100%; }
+  #shell-mode-status .auth-toolbar { margin: 0; }
+  .sidebar .workspace-library-link, .sidebar .new-project { order: 2; }
+  .app-shell .sidebar nav { order: 3; flex: 0 0 100%; width: 100%; min-width: 0; margin: 0; }
+  .app-shell .sidebar #shell-mode-status { order: 1; }
+  .app-shell .sidebar .project-select { width: 136px; margin-left: auto; }
+  .sidebar .sidebar-bottom { display: flex; flex-wrap: wrap; order: 4; width: 100%; gap: 6px; }
+  .sidebar-bottom .local-user { display: none; }
+  .sidebar-bottom > button, #shell-system-settings > button { padding: 8px; margin: 0; }
+  #shell-system-settings { flex-basis: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

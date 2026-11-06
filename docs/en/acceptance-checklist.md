@@ -6,6 +6,10 @@ This English counterpart separates implemented local behavior, historical test r
 
 Current deployment rules are in [CoreModel local/server modes](deployment-modes.md): native local is loopback-only; server requires auth/hardened/audit and a same-origin real HTTPS proxy. Gateway records below apply only to local. Historical test counts are unchanged.
 
+## v0.0.4a current change scope
+
+World-stage organization (no automatic generation filtering), revision-pinned atomic local chapter bulk deletion, 20/50/100 paging, relocated shell controls, family-matching workflow creation, window reuse, local-only idle synchronization, strict works-list readiness and exact-ID auto-verification are documented in the [user guide](user-guide.md). Current test/build/package outcomes belong to [release validation](../release-validation-v0.0.4a.md); historical totals below do not establish this release's acceptance. No real remote deletion or retry of an unknown write is added.
+
 ## P1 authoring protections
 
 | Feature | Implementation and limit |
@@ -63,7 +67,7 @@ Gateway aliases are explicitly enabled loopback entrances to one backend, not in
 - Two reproduced HTTP gaps are fixed: DNS names such as `10.attacker.example` no longer pass private-range prefix checks without literal IPv4 validation; `/API/...` now receives the same business-CSRF and `no-store` guards as Express's case-insensitive routes. The DNS issue requires controlled DNS/rebinding reachability, does not directly bypass an authenticated session, and remains subject to browser private-network restrictions.
 - Actual focused security command: `node --import tsx --test packages/server/src/core/trusted-origin.test.ts packages/server/src/core/services.test.ts packages/server/src/features/file-sandbox/upload-lease.test.ts packages/server/src/core/tenancy/tenant-application.test.ts` — **20/20 passed**, using local HTTP and temporary data. This is not a final full-tree result for all concurrent changes. Historical full-suite/build counts above are unchanged. No real external calls/publication/data mutation occurred; no all-vulnerability claim is made.
 
-### Current integrated validation (separate from historical records)
+### Historical integrated validation (separate from earlier records)
 
 The main integration run reported `npm test` **523/523 passed**, with at most two test-file processes (a test-resource limit, not application node concurrency). Web-hosting checks passed **8/8**. Final `npm run build` passed, retaining the approximately **861.71 kB** main-bundle warning and a zod annotation-placement warning. Enhanced isolated browser acceptance passed **12/12**, including dirty-knowledge return/back-navigation cancellation preserving input, confirmed leaving, node-dialog controls disabled while confirming and restored after cancellation. Official npm-registry production dependency audit (`--omit=dev`, 240 production dependencies) reported **zero vulnerabilities** at that time, not a development-dependency result or proof of no vulnerabilities. No real external-service, proxy or OS-sandbox acceptance follows from these local results.
 

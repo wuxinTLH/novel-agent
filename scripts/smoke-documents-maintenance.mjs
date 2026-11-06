@@ -182,7 +182,7 @@ try {
   }
   checks.push('real UI DOCX and EPUB downloads: MIME, ZIP structure, escaped Chinese canonical manuscript');
 
-  await page.getByLabel('打开 DOCX 或 PDF', { exact: true }).setInputFiles({
+  await page.getByLabel('打开 DOCX', { exact: true }).setInputFiles({
     name: '中文稿件.docx',
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     buffer: downloads.get('docx'),
@@ -218,21 +218,17 @@ try {
 
   const pdf = pdfFixture();
   await page
-    .getByLabel('打开 DOCX 或 PDF', { exact: true })
+    .getByLabel('打开 DOCX', { exact: true })
     .setInputFiles({ name: 'native-reader.pdf', mimeType: 'application/pdf', buffer: pdf });
-  const fallback = page.getByRole('link', { name: '用浏览器打开 PDF（内嵌阅读器不可用时）', exact: true });
-  await fallback.waitFor();
-  const resource = await fallback.getAttribute('href');
-  assert.ok(resource?.startsWith(`${documents}/`));
-  const pdfResponse = await fetch(`${base}${resource}`);
-  assert.equal(pdfResponse.status, 200);
-  assert.ok(pdfResponse.headers.get('content-type').startsWith('application/pdf'));
-  assert.equal(pdfResponse.headers.get('x-content-type-options'), 'nosniff');
-  assert.ok(Buffer.from(await pdfResponse.arrayBuffer()).equals(pdf));
-  assert.equal(await page.locator('iframe[title="PDF：native-reader.pdf"]').getAttribute('src'), resource);
-  checks.push(
-    'PDF iframe and native-reader fallback wired; exact protected PDF resource verified (not native PDF rendering)',
-  );
+  await page.getByRole('alert').filter({ hasText: /PDF/ }).waitFor();
+  assert.equal(await page.locator('iframe[title="PDF：native-reader.pdf"]').count(), 0);
+  assert.equal(await page.getByRole('link', { name: '用浏览器打开 PDF（内嵌阅读器不可用时）', exact: true }).count(), 0);
+  const pdfData = new FormData();
+  pdfData.append('file', new Blob([pdf], { type: 'application/pdf' }), 'native-reader.pdf');
+  const rejectedPdf = await fetch(`${base}${documents}`, { method: 'POST', headers: { 'X-Platform-CSRF': health.platform.csrfToken }, body: pdfData });
+  assert.equal(rejectedPdf.status, 415);
+  assert.equal((await rejectedPdf.json()).code, 'UPLOAD_PDF_DISARM_REQUIRED');
+  checks.push('original PDF upload fails closed in UI and API; no active PDF reader or resource is created');
 
   await page.getByRole('button', { name: '关闭弹窗', exact: true }).click();
   await page.getByRole('button', { name: '管理控制台', exact: true }).click();

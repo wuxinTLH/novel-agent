@@ -80,10 +80,14 @@ try {
   };
   await open();
   await authOff();
-  await page.getByText('尚未初始化认证', { exact: true }).waitFor();
-  assert.equal(await page.getByRole('button', { name: '创建账号', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('tab', { name: '工作台', exact: true }).getAttribute('aria-selected'), 'true');
+  await panel().getByText('尚未初始化，不影响本机使用', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: '用户', exact: true }).click();
+  await panel().getByText('完成 CLI 引导后，刷新状态即可管理用户。登录认证仍保持原有设置。', { exact: true }).waitFor();
+  assert.equal(await panel().getByRole('button', { name: '创建账号', exact: true }).count(), 0);
   await page.getByRole('tab', { name: '备份与维护' }).click();
-  await page.getByRole('heading', { name: '首次创建超级管理员', exact: true }).waitFor();
+  await panel().locator('summary').filter({ hasText: '高级运维：初始化、停服恢复与迁移命令' }).click();
+  await panel().getByRole('heading', { name: '首次创建超级管理员', exact: true }).waitFor();
   await stopServer();
   await runAdmin(
     parseAdminArguments(['bootstrap-admin', '--data-dir', data, '--confirm', '--username', 'smokeadmin']),
@@ -94,6 +98,8 @@ try {
   await startServer();
   await open();
   await authOff();
+  await panel().getByText('已完成管理员初始化', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: '用户', exact: true }).click();
   await panel().getByLabel('用户名', { exact: true }).fill('smokewriter');
   await panel()
     .getByLabel(/^初始密码/)
@@ -154,19 +160,18 @@ try {
   await panel().getByText('保持关闭', { exact: true }).waitFor();
   assert.equal(await panel().getByLabel('启用登录人机验证', { exact: true }).isChecked(), false);
   await page.getByRole('tab', { name: '备份与维护' }).click();
-  assert.equal(
-    await panel()
-      .getByRole('button', { name: /恢复|迁移/ })
-      .count(),
-    0,
-    'no online destructive action buttons',
-  );
+  const maintenance = panel().getByRole('region', { name: '在线维护任务', exact: true });
+  await maintenance.getByRole('button', { name: '创建全应用备份', exact: true }).waitFor();
+  const recoveryActions = await panel().getByRole('button', { name: /恢复|迁移/ }).allTextContents();
+  assert.deepEqual(recoveryActions.map((label) => label.trim()), ['生成离线恢复计划'],
+    'only offline restore planning is offered, never online restore or migration');
+  assert.equal(await maintenance.getByRole('button', { name: '生成离线恢复计划', exact: true }).isDisabled(), true);
   const commands = await (await fetch(`${base}/api/admin/maintenance`)).json();
   assert.ok(commands.commands.length > 0);
   assert.ok(!JSON.stringify(commands).includes(databasePassword));
   assert.ok(!JSON.stringify(commands).includes(password));
   await page.setViewportSize({ width: 360, height: 780 });
-  for (const name of ['用户', '数据库', '备份与维护', '系统与安全']) {
+  for (const name of ['工作台', '用户', '数据库', '备份与维护', '系统与安全']) {
     await page.getByRole('tab', { name, exact: name !== '用户' }).click();
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -178,7 +183,7 @@ try {
   await tab.focus();
   await page.keyboard.press('Home');
   await page
-    .getByRole('tab', { name: /用户/ })
+    .getByRole('tab', { name: '工作台', exact: true })
     .getAttribute('aria-selected')
     .then((selected) => assert.equal(selected, 'true'));
   await authOff();

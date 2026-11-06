@@ -1,0 +1,31 @@
+.world-stages {
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  min-width: 0;
+  .world-stages-heading, .world-stage-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .world-stages-heading > div { flex: 1; min-width: 180px; }
+  h3 { margin: 0 0 8px; }
+  p { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
+  .world-stage-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .world-stage-tabs button { border: 1px solid var(--border); background: transparent; color: inherit; padding: 8px 12px; border-radius: 8px; max-width: 100%; overflow-wrap: anywhere; }
+  .world-stage-tabs button.active { border-color: var(--accent); color: var(--accent); }
+  .world-stage-tabs span { opacity: .65; margin-left: 5px; }
+  .world-stage-actions { margin-top: 14px; font-size: 13px; }
+  .world-stage-actions > span { flex: 1; min-width: 130px; overflow-wrap: anywhere; }
+}
+.asset-stage-select { max-width: 100%; width: 150px; margin-top: 6px; font-size: 12px; }
+@media (max-width: 680px) {
+  .app-shell .asset-row > span:has(> .asset-stage-select) {
+    display: flex;
+    grid-column: 2 / -1;
+    grid-row: 2;
+    min-width: 0;
+    gap: 8px;
+    align-items: center;
+  }
+  .app-shell .asset-stage-select { min-width: 0; width: 100%; margin: 0; }
+  .app-shell .asset-row > .asset-actions { grid-column: 3; grid-row: 1; }
+}

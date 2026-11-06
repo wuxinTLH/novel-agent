@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PublicationBatch } from '../../../../../shared/publication';
-import { ensureAutoApprovedBatchStarted, publicationApprovalReady, publicationOutcome } from './PublicationPanel';
+import { ensureAutoApprovedBatchStarted, publicationApprovalReady, publicationOutcome, publicationItemOutcome } from './PublicationPanel';
 
 const fixture = (state: PublicationBatch['state'] = 'preview'): PublicationBatch => {
   const chapters = [1, 2, 3].map((number) => ({ chapterId: `chapter-${number}`, number, revision: 1,
@@ -64,6 +64,17 @@ test('manual snapshot must be explicitly approved even when auto toggle changes 
   batch.preview.autoApprove = true;
   assert.equal(publicationApprovalReady(batch, false, `${batch.id}:${batch.preview.hash}`), false);
   assert.equal(publicationApprovalReady(batch, true, ''), true);
+});
+
+test('stopped batches do not describe unstarted items as still waiting to execute', () => {
+  const batch = fixture('failed');
+  assert.match(publicationItemOutcome(batch, batch.items[0]), /未执行（批次已停止/);
+  batch.state = 'queued';
+  assert.equal(publicationItemOutcome(batch, batch.items[0]), '等待执行');
+  batch.state = 'unknown';
+  batch.items[0].state = 'unknown';
+  batch.items[0].mutationStarted = true;
+  assert.equal(publicationItemOutcome(batch, batch.items[0]), '结果未知，禁止重发');
 });
 
 test('completed means only processing completed; verified and submitted outcomes are counted separately', () => {

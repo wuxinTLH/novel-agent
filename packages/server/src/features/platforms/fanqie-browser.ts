@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Locator, Page } from 'playwright';
+import type { Browser, BrowserContext, Locator, Page, Response } from 'playwright';
 import type { DraftSnapshot } from '../../../../../shared/platforms.js';
 import {
   PlatformError,
@@ -97,6 +97,18 @@ function findWorks(value: unknown, seen = new Set<unknown>()): { id: string; tit
   }
   return Object.values(record).flatMap((item) => findWorks(item, seen));
 }
+// An authenticated shell is not proof that the asynchronous works list has loaded.
+// Only an explicitly present, fully parseable list can establish an empty result.
+function hasVerifiedWorkList(value: unknown, allowEmpty = false): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if ('code' in record && record.code !== 0) return false;
+  for (const key of WORK_LIST_KEYS) {
+    const list = record[key];
+    if (Array.isArray(list) && (list.length > 0 || allowEmpty) && list.every((item) => !!workFromRecord(item))) return true;
+  }
+  return Object.values(record).some((item) => hasVerifiedWorkList(item, allowEmpty));
+}
 function uniqueWorks(items: { id: string; title: string }[]) {
   return [...new Map(items.map((item) => [item.id, item])).values()];
 }
@@ -105,7 +117,7 @@ function parseEmbeddedPayload(payload: string) {
   const end = payload.lastIndexOf('}');
   if (start < 0 || end <= start) return;
   try {
-    return JSON.parse(payload.slice(start, end + 1)) as unknown;
+    return parseLosslessJson(payload.slice(start, end + 1));
   } catch {
     /* Embedded scripts can contain non-JSON; DOM evidence is handled separately. */
   }
@@ -274,6 +286,8 @@ async function readCurrentUser(page: Page) {
       return { status: 0, body: '' };
     }
   }, '/api/user/info/v2');
+  if (reply.status === 0 || reply.status >= 500 && reply.status <= 599)
+    throw new PlatformError(502, 'PLATFORM_PAGE_LOAD_FAILED', '番茄当前用户接口暂时不可用，请稍后重试身份核验。');
   const account = reply.status === 200 ? parseCurrentUser(reply.body) : undefined;
   // Only transport/status diagnostics leave this reader; never expose response bodies or credentials.
   let detail = `当前用户接口 HTTP ${reply.status || '请求失败'}`;
@@ -289,10 +303,12 @@ async function readCurrentUser(page: Page) {
   }
   return { account, detail };
 }
-async function readPageEvidence(page: Page, responsePayloads: Iterable<string> = []) {
+async function readPageEvidence(page: Page, responsePayloads: Iterable<string> = [], currentWorksOnly = false) {
   const identity = await readCurrentUser(page);
   const evidence = await page.evaluate(() => ({
     bodyText: (document.body.innerText || '').slice(0, 200_000),
+    jsonScripts: [...document.querySelectorAll('script[type="application/json"]')]
+      .map((node) => node.textContent || '').filter((item) => item.length < 2_000_000),
     scripts: [...document.querySelectorAll('script')]
       .map((node) => node.textContent || '')
       .filter((item) => item.length > 20 && item.length < 2_000_000),
@@ -319,16 +335,24 @@ async function readPageEvidence(page: Page, responsePayloads: Iterable<string> =
   }));
   const account = identity.account;
   let works: { id: string; title: string }[] = [];
-  for (const payload of [...evidence.scripts, ...evidence.globals, ...evidence.storage, ...responsePayloads]) {
+  let worksReady = false;
+  // Browser storage/globals may belong to an earlier page/account and already contain rounded IDs.
+  const payloads = currentWorksOnly
+    ? [...responsePayloads, ...(evidence.jsonScripts ?? [])]
+    : [...evidence.scripts, ...evidence.globals, ...evidence.storage, ...responsePayloads];
+  for (const payload of payloads) {
     const parsed = parseEmbeddedPayload(payload);
-    if (!parsed) continue;
+    const successfulResponse = currentWorksOnly && [...responsePayloads].includes(payload) &&
+      !!parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).code === 0;
+    if (!parsed || !hasVerifiedWorkList(parsed, successfulResponse)) continue;
+    worksReady = true;
     if (!works.length) works = findWorks(parsed);
   }
   if (!works.length)
     works = evidence.links.map((link) => routeWorkFromHref(link.href, link.text)).filter(
       (item): item is { id: string; title: string } => !!item,
     );
-  return { account, identityDetail: identity.detail, works: uniqueWorks(works), bodyText: evidence.bodyText };
+  return { account, identityDetail: identity.detail, works: uniqueWorks(works), worksReady: worksReady || works.length > 0, bodyText: evidence.bodyText };
 }
 async function waitForAccount(page: Page, attempts = 8, responsePayloads: string[] = []) {
   let evidence = await readPageEvidence(page, responsePayloads);
@@ -356,9 +380,11 @@ async function gotoPortal(page: Page, url: string) {
     throw new PlatformError(502, 'PLATFORM_PAGE_LOAD_FAILED', '番茄作者页加载失败，未执行平台操作。');
   }
 }
-async function visibleLocator(page: Page, selectors: string[]) {
+async function visibleLocator(page: Page, selectors: string[], unique = false) {
   for (const selector of selectors) {
-    const locator = page.locator(selector).first();
+    const matches = page.locator(selector);
+    if (unique && await matches.count() > 1) verificationRequired('编辑器定位不唯一，未填写或保存。');
+    const locator = matches.first();
     if (await locator.count() && await locator.isVisible().catch(() => false)) return locator;
   }
   return undefined;
@@ -435,7 +461,7 @@ async function openDraftList(page: Page, workId: string, workTitle = '') {
   }
   return [...entries.values()];
 }
-function editorTitle(page: Page) {
+function editorTitle(page: Page, unique = false) {
   return visibleLocator(page, [
     '.serial-editor-title.free .serial-editor-free-title textarea',
     '.serial-editor-title:not(.free) .serial-editor-title-right input.serial-editor-input-hint-area',
@@ -443,14 +469,14 @@ function editorTitle(page: Page) {
     '.serial-editor-title [contenteditable="true"]',
     'input.serial-editor-title',
     'input[class*="title"]',
-  ]);
+  ], unique);
 }
-async function editorBody(page: Page) {
+async function editorBody(page: Page, unique = false) {
   return visibleLocator(page, [
     '.syl-editor-container .ProseMirror[contenteditable="true"]',
     '.syl-editor .ProseMirror[contenteditable="true"]',
     '.ProseMirror[contenteditable="true"]',
-  ]);
+  ], unique);
 }
 async function readEditor(page: Page, workId: string, draftId: string): Promise<VerifiedDraft> {
   const title = await editorTitle(page);
@@ -502,15 +528,59 @@ async function readEditor(page: Page, workId: string, draftId: string): Promise<
     paragraphs: values[1].replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').trim().split('\n'),
   };
 }
-async function waitForDraftEditor(page: Page) {
+// Automated creation accepts only the exact editor path, never query IDs or title matches.
+function exactCreatedDraftId(href: string, workId: string): string | undefined {
+  if (!allowedFanqieNavigation(href)) return;
+  const url = new URL(href);
+  const prefix = new URL(editorPath(workId)).pathname;
+  if (!url.pathname.startsWith(prefix)) return;
+  const id = url.pathname.slice(prefix.length).replace(/\/$/, '');
+  if (/^[A-Za-z0-9_-]{2,160}$/.test(id)) return id;
+}
+async function assertAutomaticEditorUnblocked(page: Page) {
+  // Structural evidence only: chapter prose mentioning verification is not a challenge.
+  const blockers = page.locator([
+    '.arco-modal:visible', '[role="dialog"]:visible', '[aria-modal="true"]:visible', 'dialog[open]:visible',
+    'iframe[src*="captcha" i]:visible', 'iframe[src*="geetest" i]:visible',
+    '.geetest_panel:visible', '.geetest_panel_box:visible', '#captcha_container:visible',
+    '.captcha_verify_container:visible', '.secsdk-captcha-drag-wrapper:visible',
+  ].join(', '));
+  if (await blockers.count()) verificationRequired('编辑器存在未核验对话框或人机验证，需人工处理；未自动确认。');
+}
+async function waitForAutomaticCreatedDraft(page: Page, workId: string, accountId: string): Promise<string> {
+  try {
+    await page.waitForURL((url) => !!exactCreatedDraftId(url.href, workId), { timeout: 8000, waitUntil: 'domcontentloaded' });
+  } catch {
+    verificationRequired('新建编辑器未在限定时间内提供准确作品与草稿 ID；结果未知，未填写或保存。');
+  }
+  const draftId = exactCreatedDraftId(page.url(), workId);
+  if (!draftId) verificationRequired('新建编辑器缺少准确草稿身份，未填写或保存。');
+  // A second read after fresh identity excludes a transient client redirect.
+  await page.waitForTimeout(250);
+  if ((await readCurrentUser(page)).account?.accountId !== accountId)
+    verificationRequired('导航后作者与批准账号不一致，未填写或保存。');
+  if (exactCreatedDraftId(page.url(), workId) !== draftId)
+    verificationRequired('新建编辑器作品或草稿身份不稳定，未填写或保存。');
+  return draftId;
+}
+async function waitForAutomaticEditor(page: Page) {
+  await assertAutomaticEditorUnblocked(page);
+  await waitForDraftEditor(page, 8000);
+  const title = await editorTitle(page, true);
+  const body = await editorBody(page, true);
+  if (!title || !body || !await title.isEditable() || !await body.isEditable())
+    verificationRequired('新建编辑器标题或正文尚未就绪，未填写或保存。');
+  await assertAutomaticEditorUnblocked(page);
+}
+async function waitForDraftEditor(page: Page, timeout = 15_000) {
   const button = page.locator('button.auto-editor-save-btn').filter({ hasText: /^\s*存草稿\s*$/ });
   try {
-    await button.waitFor({ state: 'visible', timeout: 15_000 });
+    await button.waitFor({ state: 'visible', timeout });
     await page.waitForFunction(() => {
       const buttons = [...document.querySelectorAll<HTMLButtonElement>('button.auto-editor-save-btn')]
         .filter(item => item.textContent?.trim() === '存草稿');
       return buttons.length === 1 && !buttons[0].disabled && !buttons[0].classList.contains('arco-btn-loading');
-    }, undefined, { timeout: 15_000 });
+    }, undefined, { timeout });
   } catch {
     verificationRequired('草稿编辑器未就绪：存草稿按钮缺失、不可用或仍在加载。请先处理官方页面的缓存恢复或权限提示；未点击保存。');
   }
@@ -574,13 +644,33 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     string,
     { browser: Browser; context: BrowserContext; page: Page; pages?: Set<Page>; responsePayloads?: string[] }
   >();
+  // Retained connections must not silently restore headless after their user-owned window closes.
+  // Keep this marker even after closeConnection removes the live session; cold saved IDs remain restorable.
+  private retainedConnections = new Set<string>();
   private stopped = false;
 
-  async startLogin(loginId: string) {
+  async startLogin(loginId: string, connectionId?: string): Promise<void> {
     if (this.stopped) throw new PlatformError(503, 'PLATFORM_CLOSING', '平台服务正在关闭。');
     // Idle verified contexts are not manual login windows. Runtime locks exclude active operations.
     if ([...this.sessions.values()].some((session) => session.pages !== undefined))
       throw new PlatformError(409, 'PLATFORM_LOGIN_BUSY', '请先完成或关闭当前人工登录窗口。');
+    const existing = connectionId !== undefined ? this.sessions.get(connectionId) : undefined;
+    const reusable = existing && existing.browser.isConnected() && !existing.page.isClosed() ? existing : undefined;
+    if (this.sessions.has(loginId) && (loginId !== connectionId || !reusable))
+      throw new PlatformError(409, 'PLATFORM_BUSY', '目标登录已有浏览器会话，未替换登录窗口。');
+    if (reusable && connectionId !== undefined) {
+      const pages = new Set<Page>([reusable.page]);
+      try {
+        for (const page of reusable.context.pages()) if (!page.isClosed()) pages.add(page);
+      } catch { /* The selected live page alone is sufficient if page enumeration is unavailable. */ }
+      reusable.pages = pages;
+      this.sessions.delete(connectionId);
+      this.sessions.set(loginId, reusable);
+      // Reads on the old connection must never restore saved secrets after transfer.
+      this.retainedConnections.add(connectionId);
+      await reusable.page.bringToFront().catch(() => {});
+      return;
+    }
     let browser: Browser | undefined;
     try {
       const { chromium } = await import('playwright');
@@ -624,12 +714,13 @@ export class FanqieBrowser implements DraftBrowserAdapter {
           }
         }).catch(() => {});
       };
-      this.sessions.set(loginId, { browser, context, page, pages, responsePayloads });
+      const session = { browser, context, page, pages: pages as Set<Page> | undefined, responsePayloads };
+      this.sessions.set(loginId, session);
       page.on('response', captureResponse);
       context.on('page', (popup) => {
-        pages.add(popup);
+        session.pages?.add(popup);
         popup.on('response', captureResponse);
-        popup.on('close', () => pages.delete(popup));
+        popup.on('close', () => session.pages?.delete(popup));
         popup.on('dialog', (dialog) => {
           void dialog.dismiss().catch(() => {});
         });
@@ -674,7 +765,41 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     if (!account)
       verificationRequired(`已自动打开番茄作者后台首页，但未能读取稳定作者身份（${identityDetail || '当前用户接口不可用'}）。请确认该窗口已完成登录后再次核验；无需手动切换页面。`);
     const state = await session.context.storageState();
+    // Keep the page whose fresh identity was verified when the login window is retained.
+    session.page = verifiedPage;
     return { account, state: { cookies: state.cookies, origins: state.origins } };
+  }
+  async retainLogin(loginId: string, connectionId: string): Promise<void> {
+    const session = this.sessions.get(loginId);
+    if (!session || !this.loginOpen(loginId))
+      throw new PlatformError(410, 'PLATFORM_LOGIN_CLOSED', '登录窗口已关闭，请重新开始人工登录。');
+    if (loginId !== connectionId && this.sessions.has(connectionId))
+      throw new PlatformError(409, 'PLATFORM_BUSY', '目标连接已有浏览器会话，未替换登录窗口。');
+    this.sessions.delete(loginId);
+    session.pages = undefined;
+    this.sessions.set(connectionId, session);
+    this.retainedConnections.add(connectionId);
+  }
+  async refreshSession(connectionId: string, _state: BrowserSessionState): Promise<VerifiedAccount> {
+    const session = this.sessions.get(connectionId);
+    const isOpen = () => !!session && session.browser.isConnected() && !session.page.isClosed();
+    const closed = () => new PlatformError(410, 'PLATFORM_LOGIN_CLOSED', '登录窗口已关闭，请重新开始人工登录。');
+    if (!session || !isOpen()) throw closed();
+    // Never restore persisted state or launch a replacement browser for a resident refresh.
+    const responsePayloads = session.responsePayloads ?? [];
+    responsePayloads.length = 0;
+    try {
+      await gotoPortal(session.page, FANQIE_HOME);
+      const { account, identityDetail } = await waitForAccount(session.page, 3, responsePayloads);
+      if (!isOpen()) throw closed();
+      if (!allowedFanqieNavigation(session.page.url()))
+        throw new PlatformError(409, 'PLATFORM_LOGIN_ORIGIN_UNVERIFIED', '核验页面已离开番茄域名，未保存会话。');
+      if (!account) verificationRequired(`番茄作者页没有解析到稳定作者身份（${identityDetail || '当前用户接口不可用'}），请重新人工登录。`);
+      return account;
+    } catch (error) {
+      if (!isOpen()) throw closed();
+      throw error;
+    }
   }
   async closeLogin(loginId: string) {
     const session = this.sessions.get(loginId);
@@ -684,6 +809,8 @@ export class FanqieBrowser implements DraftBrowserAdapter {
   private async openVerified(connectionId: string, state: BrowserSessionState) {
     const existing = this.sessions.get(connectionId);
     if (existing && existing.browser.isConnected() && !existing.page.isClosed()) return existing.page;
+    if (this.retainedConnections.has(connectionId))
+      throw new PlatformError(410, 'PLATFORM_LOGIN_CLOSED', '登录窗口已关闭，请重新开始人工登录。');
     const { chromium } = await import('playwright');
     const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
@@ -730,9 +857,39 @@ export class FanqieBrowser implements DraftBrowserAdapter {
   }
   async listWorks(connectionId: string, state: BrowserSessionState) {
     const page = await this.openVerified(connectionId, state);
-    await gotoPortal(page, FANQIE_BOOKS);
-    const evidence = await waitForAccount(page);
-    if (!evidence.account) verificationRequired('作品页没有解析到稳定作者身份，请重新人工登录。');
+    // Scope captured evidence to this navigation, not the retained login/popup history.
+    // A local listener also covers cold restored sessions, which have no login capture hook.
+    const responsePayloads: string[] = [];
+    const startedAt = Date.now();
+    const capture = (response: Response) => {
+      const request = response.request();
+      // Observe only author book-list requests made by the current page; unrelated JSON
+      // (recommendations, home widgets, etc.) cannot prove that this author has no books.
+      try {
+        if (!allowedFanqieNavigation(response.url()) || !/^\/api\/author\/(?:[^/]*book[^/]*\/|books?\/)/i.test(new URL(response.url()).pathname) ||
+            request.method() !== 'GET' || request.frame() !== page.mainFrame() || request.timing().startTime < startedAt ||
+            !response.ok() || !/json/i.test(response.headers()['content-type'] || '')) return;
+      } catch { return; } // Detached frames/service workers are not current-page evidence.
+      void response.text().then((body) => {
+        if (body.length < 2_000_000 && responsePayloads.length < 32) responsePayloads.push(body);
+      }).catch(() => {});
+    };
+    page.on('response', capture);
+    let evidence: Awaited<ReturnType<typeof readPageEvidence>>;
+    try {
+      await gotoPortal(page, FANQIE_BOOKS);
+      evidence = await readPageEvidence(page, responsePayloads, true);
+      for (let attempt = 1; (!evidence.account || !evidence.worksReady) && attempt < 8; attempt++) {
+        await page.waitForTimeout(750);
+        evidence = await readPageEvidence(page, responsePayloads, true);
+      }
+      if (!allowedFanqieNavigation(page.url()))
+        throw new PlatformError(409, 'PLATFORM_LOGIN_ORIGIN_UNVERIFIED', '作品读取页面已离开番茄域名，未确认作品列表。');
+      if (!evidence.account) verificationRequired('作品页没有解析到稳定作者身份，请重新人工登录。');
+      if (!evidence.worksReady) verificationRequired('作品列表尚未就绪或读取失败，无法确认作品是否存在；未执行平台写入。');
+    } finally {
+      page.off('response', capture);
+    }
     return evidence.works.map((work) => ({
       id: work.id,
       providerId: 'tomato' as const,
@@ -832,6 +989,7 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     snapshot: DraftSnapshot,
     onIdentified: (draftId: string) => void,
     volumeId?: string,
+    options?: { automaticVerification?: boolean },
   ): Promise<{ draftId: string }> {
     fanqieSnapshotTitle(snapshot);
     const page = await this.openVerified(connectionId, state);
@@ -840,14 +998,30 @@ export class FanqieBrowser implements DraftBrowserAdapter {
     if ((await readCurrentUser(page)).account?.accountId !== accountId) verificationRequired('当前作者与批准账号不一致，未创建草稿。');
     // Entering the no-ID editor itself creates a remote article. Caller must checkpoint first.
     await gotoPortal(page, editorPath(workId, '', 'draft_manage_create'));
-    const createdId = /\/publish\/([^/?#]+)/.exec(new URL(page.url()).pathname)?.[1];
+    const automatic = options?.automaticVerification === true;
+    const createdId = automatic
+      ? await waitForAutomaticCreatedDraft(page, workId, accountId)
+      : /\/publish\/([^/?#]+)/.exec(new URL(page.url()).pathname)?.[1];
     if (createdId) {
       const identified = decodeURIComponent(createdId);
       assertEditorRoute(page, workId, identified);
-      onIdentified(identified);
+      // Durable callback failures must escape unchanged before any editor mutation.
+      await onIdentified(identified);
     }
+    const assertAutomaticIdentity = async () => {
+      if (!automatic) return;
+      if (exactCreatedDraftId(page.url(), workId) !== createdId ||
+          (await readCurrentUser(page)).account?.accountId !== accountId ||
+          exactCreatedDraftId(page.url(), workId) !== createdId)
+        verificationRequired('新建编辑器作品、草稿或作者发生变化，未继续写入。');
+      await assertAutomaticEditorUnblocked(page);
+    };
+    if (automatic) await waitForAutomaticEditor(page);
+    await assertAutomaticIdentity();
     if (volume) await selectVolume(page, volume);
+    await assertAutomaticIdentity();
     await fillEditor(page, snapshot);
+    await assertAutomaticIdentity();
     await clickSave(page);
     const idMatch = /\/publish\/([^/?#]+)/.exec(new URL(page.url()).pathname);
     let draftId = idMatch?.[1] ? decodeURIComponent(idMatch[1]) : '';

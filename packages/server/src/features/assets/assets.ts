@@ -1,3 +1,4 @@
+import { validWorldStageAssignment, worldStageIdSchema } from '../../../../../shared/world-stages.js';
 import { quarantinedUpload } from '../file-sandbox/upload.js';
 import { inspectUpload } from '../file-sandbox/sandbox.js';
 import { archiveAssetRevision } from '../../../../../shared/asset-history.js';
@@ -16,9 +17,12 @@ export const assetsService: FeatureService = {
   register(app, context) {
     const { dir, store } = context;
     const { persistProject, mutateProject } = createProjectOperations(store);
-    app.post('/api/projects/:projectId/assets/upload', quarantinedUpload('files', 10, IMAGE_ASSET_MAX_BYTES, 1), async (req, res) => {
+    app.post('/api/projects/:projectId/assets/upload', quarantinedUpload('files', 10, IMAGE_ASSET_MAX_BYTES, 2), async (req, res) => {
       try {
       const category = z.enum(categories).parse(req.body.category);
+      const worldStageId = worldStageIdSchema.optional().parse(req.body.worldStageId);
+      if (!validWorldStageAssignment(res.locals.project, category, worldStageId))
+        return res.status(400).json({ code: 'INVALID_WORLD_STAGE', error: '阶段必须属于本作品，且仅支持世界观资料。' });
       const files = req.files as Express.Multer.File[];
       if (!files?.length) return res.status(400).json({ error: '请选择上传文件。' });
       const allowed = new Map([
@@ -38,6 +42,9 @@ export const assetsService: FeatureService = {
       // Scan the entire batch before publishing any file or mutating project state.
       const checked = [];
       for (const file of files) checked.push(await inspectUpload(file, 'asset', undefined, res.locals.uploadLease.signal));
+      // Scanners yield: a concurrent request may have deleted an empty stage meanwhile.
+      if (!validWorldStageAssignment(p, category, worldStageId))
+        return res.status(400).json({ code: 'INVALID_WORLD_STAGE', error: '阶段必须属于本作品，且仅支持世界观资料。' });
       const createdPaths: string[] = [];
       const originalAssets = p.assets.slice();
       try {
@@ -53,6 +60,7 @@ export const assetsService: FeatureService = {
         p.assets.push({
           id,
           category,
+          ...(worldStageId === undefined ? {} : { worldStageId }),
           name: decoded.includes('\ufffd') ? f.name : decoded,
           content: isImage ? '' : f.text!,
           url: isImage ? `/uploads/${id}${ext}` : undefined,
@@ -106,6 +114,7 @@ export const assetsService: FeatureService = {
         .object({
           name: z.string().trim().min(1).max(120),
           category: z.enum(categories),
+          worldStageId: worldStageIdSchema.optional(),
           content: z
             .string()
             .trim()
@@ -113,7 +122,9 @@ export const assetsService: FeatureService = {
             .refine((value) => utf8ByteLength(value) <= TEXT_ASSET_MAX_BYTES, '文本资料不能超过 2 MiB。'),
         })
         .parse(req.body);
-      const p = res.locals.project;
+      const p = res.locals.project as Project;
+      if (!validWorldStageAssignment(p, v.category, v.worldStageId))
+        return res.status(400).json({ code: 'INVALID_WORLD_STAGE', error: '阶段必须属于本作品，且仅支持世界观资料。' });
       if (p.assets.length >= 100) return res.status(400).json({ error: '每个项目最多保存 100 份资料。' });
       p.assets.push({
         ...v,
@@ -136,6 +147,7 @@ export const assetsService: FeatureService = {
           expectedRevision: z.number().int().positive(),
           name: z.string().trim().min(1).max(120).optional(),
           category: z.enum(categories).optional(),
+          worldStageId: worldStageIdSchema.nullable().optional(),
           content: z
             .string()
             .refine((value) => utf8ByteLength(value) <= TEXT_ASSET_MAX_BYTES, '文本资料不能超过 2 MiB。')
@@ -149,11 +161,16 @@ export const assetsService: FeatureService = {
         return res.status(400).json({ error: '图片资料不能在线编辑，请替换文件。' });
       if ((asset.revision || 1) !== v.expectedRevision)
         return res.status(409).json({ code: 'REVISION_CONFLICT', error: '资料已被修改，请刷新后重试。' });
-      const { expectedRevision: _expected, ...changes } = v;
+      const worldStageId = v.worldStageId === null ? undefined : v.worldStageId ?? asset.worldStageId;
+      if (!validWorldStageAssignment(p, v.category ?? asset.category, worldStageId))
+        return res.status(400).json({ code: 'INVALID_WORLD_STAGE', error: '阶段必须属于本作品，且仅支持世界观资料。' });
+      const { expectedRevision: _expected, worldStageId: _stage, ...changes } = v;
       mutateProject(p, (draft) => {
         const target = draft.assets.find((item) => item.id === asset.id)!;
         archiveAssetRevision(target);
         Object.assign(target, changes);
+        if (worldStageId === undefined) delete target.worldStageId;
+        else target.worldStageId = worldStageId;
         if (v.content !== undefined) target.size = Buffer.byteLength(v.content);
         draft.steps.forEach((s) => (s.status = 'idle'));
       });

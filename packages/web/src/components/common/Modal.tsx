@@ -33,13 +33,55 @@ export default function Modal({
   const titleId = useId();
   const descriptionId = useId();
   const section = useRef<HTMLElement>(null);
+  const backdrop = useRef<HTMLDivElement>(null);
+  const closing = useRef(false);
+  const motion = useRef<Animation | null>(null);
   const props = useRef({ close, busy, dirty });
   props.current = { close, busy, dirty };
   const requestClose = async () => {
-    if (props.current.busy) return;
+    if (props.current.busy || closing.current) return;
     if (props.current.dirty && !(await confirmDialog('有未保存的修改，确定关闭并丢弃吗？'))) return;
+    if (props.current.busy || closing.current) return;
+    closing.current = true;
+    const panel = section.current;
+    if (panel && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      motion.current?.cancel();
+      motion.current = panel.animate(
+        [{ opacity: 1, transform: 'translateY(0) scale(1)' }, { opacity: 0, transform: 'translateY(8px) scale(.97)' }],
+        { duration: 160, easing: 'cubic-bezier(.4,0,1,1)', fill: 'forwards' },
+      );
+      backdrop.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' });
+      try { await motion.current.finished; } catch { return; }
+    }
     props.current.close();
   };
+  useEffect(() => {
+    const panel = section.current;
+    if (!panel) return;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (!reduced.matches) {
+      motion.current = panel.animate(
+        [{ opacity: 0, transform: 'translateY(12px) scale(.96)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }],
+        { duration: 220, easing: 'cubic-bezier(.22,1,.36,1)' },
+      );
+      backdrop.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180 });
+    }
+    let previous = { width: panel.offsetWidth, height: panel.offsetHeight };
+    const observer = new ResizeObserver(() => {
+      const next = { width: panel.offsetWidth, height: panel.offsetHeight };
+      if (!closing.current && !reduced.matches && next.width > 0 && next.height > 0 && previous.width > 0 && previous.height > 0 &&
+          (Math.abs(next.width - previous.width) > 1 || Math.abs(next.height - previous.height) > 1)) {
+        motion.current?.cancel();
+        motion.current = panel.animate(
+          [{ transform: `scale(${previous.width / next.width}, ${previous.height / next.height})` }, { transform: 'scale(1)' }],
+          { duration: 200, easing: 'cubic-bezier(.22,1,.36,1)' },
+        );
+      }
+      previous = next;
+    });
+    observer.observe(panel);
+    return () => { observer.disconnect(); motion.current?.cancel(); };
+  }, []);
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (scrollLocks++ === 0) {
@@ -99,6 +141,7 @@ export default function Modal({
   }, []);
   return (
     <div
+      ref={backdrop}
       className="modal-backdrop"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) requestClose();

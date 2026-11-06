@@ -2,6 +2,7 @@ import type { Project, WorkflowSettings } from '../../../../../shared/types';
 import { useHiddenPlatformRecords } from '../../hooks/platforms/useHiddenPlatformRecords';
 import { accessiblePlatformStep, platformStepAccess, type PlatformStep } from '../../hooks/platforms/platformSteps';
 import { platformWorkChoices } from '../../hooks/platforms/platformWorkChoices';
+import { startLocalPlatformSync } from '../../hooks/platforms/localPlatformSync';
 import PublicationPanel, { ensureAutoApprovedBatchStarted } from './PublicationPanel';
 import ExtensionPairingPanel from './ExtensionPairingPanel';
 import type { PublicationBatch } from '../../../../../shared/publication';
@@ -97,6 +98,9 @@ export default function PlatformPanel({
   const pending = useRef(false);
   const selectionVersion = useRef(0);
   const executeKeys = useRef(new Map<string, string>());
+  const localSync = useRef<ReturnType<typeof startLocalPlatformSync> | null>(null);
+  const mutationVersion = useRef(0);
+  const latestLocal = useRef({ active: false, login: null as PlatformLogin | null, loading });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -117,6 +121,13 @@ export default function PlatformPanel({
     setMockTitle('');
     setBusy(false);
     setNotice('');
+    setError('');
+    setConnections([]);
+    setLinks([]);
+    setChapters([]);
+    setOperations([]);
+    setReceipts([]);
+    selectionVersion.current++;
     executeKeys.current.clear();
     return () => controller.abort();
   }, [projectId]);
@@ -132,6 +143,8 @@ export default function PlatformPanel({
     selectionVersion.current++;
     setPreview(null);
     setApproved(false);
+    setError('');
+    setNotice('');
   }, [selectedPlatform]);
   useEffect(() => {
     setChapterId(selectedChapterId || '');
@@ -144,6 +157,7 @@ export default function PlatformPanel({
   useEffect(() => {
     const controller = new AbortController();
     const options = { signal: controller.signal };
+    const version = mutationVersion.current;
     setLoading(true);
     setError('');
     void (async () => {
@@ -166,7 +180,7 @@ export default function PlatformPanel({
           api<DraftOperation[]>(`${base}/platform-operations`, options),
           api<DraftReceipt[]>(`${base}/platform-draft-receipts`, options),
         ]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || version !== mutationVersion.current || pending.current) return;
         setConnections(nextConnections);
         setLinks(nextLinks);
         setChapters(nextChapters);
@@ -185,49 +199,44 @@ export default function PlatformPanel({
 
   const activeOperation = operations.some((operation) => ['queued', 'running'].includes(operation.state));
   const activeLogin = !!login && ['waiting', 'needs_verification'].includes(login.status);
-  // Poll local status only, never launch, read an account, or upload on a timer.
+  latestLocal.current = { active: activeOperation || activeLogin, login: activeLogin ? login : null, loading };
+  // These are local persisted records, not /platform-works or /sync (remote reads).
+  // Keep listening even when all records were terminal when this page opened.
   useEffect(() => {
-    if (!activeOperation && !activeLogin) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      try {
-        if (activeOperation) {
-          const next = await api<DraftOperation[]>(`${base}/platform-operations`, {
-            signal: controller.signal,
-          });
-          if (controller.signal.aborted) return;
-          setOperations(next);
-          if (!next.some((item) => ['queued', 'running'].includes(item.state))) {
-            const nextReceipts = await api<DraftReceipt[]>(`${base}/platform-draft-receipts`, {
-              signal: controller.signal,
-            });
-            if (!controller.signal.aborted) setReceipts(nextReceipts);
-          }
-        }
-        if (activeLogin && login) {
-          const next = await api<PlatformLogin>(`${base}/platform-login/${encodeURIComponent(login.id)}`, {
-            signal: controller.signal,
-          });
-          if (!controller.signal.aborted) setLogin(next);
-        }
-      } catch (failure) {
-        if (!controller.signal.aborted) setError(messageOf(failure));
-      } finally {
-        if (!controller.signal.aborted)
-          timer = setTimeout(() => {
-            void poll();
-          }, 1500);
-      }
-    };
-    timer = setTimeout(() => {
-      void poll();
-    }, 1000);
+    const sync = startLocalPlatformSync({
+      active: () => latestLocal.current.active,
+      paused: () => pending.current || latestLocal.current.loading || document.hidden,
+      read: async (signal, isCurrent) => {
+        const options = { signal };
+        const currentLogin = latestLocal.current.login;
+        const [nextConnections, nextLinks, nextOperations, nextReceipts, nextLogin] = await Promise.all([
+          api<PlatformConnection[]>(`${base}/platform-connections`, options),
+          api<ProjectPlatformWorkLink[]>(`${base}/platform-links`, options),
+          api<DraftOperation[]>(`${base}/platform-operations`, options),
+          api<DraftReceipt[]>(`${base}/platform-draft-receipts`, options),
+          currentLogin ? api<PlatformLogin>(`${base}/platform-login/${encodeURIComponent(currentLogin.id)}`, options) : null,
+        ]);
+        if (!isCurrent()) return;
+        setConnections(nextConnections);
+        setLinks(nextLinks);
+        setOperations(nextOperations);
+        setReceipts(nextReceipts);
+        if (nextLogin && latestLocal.current.login?.id === nextLogin.id) setLogin(nextLogin);
+        // Never reset account/work choices, previews, approvals, step, or action messages here.
+        // Missing/changed targets fail the derived capability checks and server validation.
+      },
+    });
+    localSync.current = sync;
+    const refreshVisible = () => { if (!document.hidden) sync.refresh(); };
+    window.addEventListener('focus', refreshVisible);
+    document.addEventListener('visibilitychange', refreshVisible);
     return () => {
-      controller.abort();
-      if (timer) clearTimeout(timer);
+      sync.stop();
+      if (localSync.current === sync) localSync.current = null;
+      window.removeEventListener('focus', refreshVisible);
+      document.removeEventListener('visibilitychange', refreshVisible);
     };
-  }, [base, activeOperation, activeLogin, login?.id]);
+  }, [base]);
 
   const disabled = loading || busy || running || !session?.available;
   const mutateDisabled = disabled || activeOperation || activeLogin;
@@ -254,7 +263,11 @@ export default function PlatformPanel({
   ) => {
     const controller = lifetime.current;
     if (disabled || pending.current || !controller || controller.signal.aborted || !session) return;
+    const version = selectionVersion.current;
+    const isCurrent = () => !controller.signal.aborted && version === selectionVersion.current;
     pending.current = true;
+    mutationVersion.current++;
+    localSync.current?.invalidate();
     setBusy(true);
     setError('');
     setNotice('');
@@ -269,15 +282,20 @@ export default function PlatformPanel({
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
-      if (controller.signal.aborted) return;
-      await accept(value);
-      if (controller.signal.aborted) return;
+      if (!isCurrent()) return;
+      const accepted = accept(value);
+      const acceptedVersion = selectionVersion.current;
+      await accepted;
+      if (controller.signal.aborted || acceptedVersion !== selectionVersion.current) return;
       setNotice(typeof success === 'function' ? success(value) : success);
     } catch (failure) {
-      if (!controller.signal.aborted) setError(messageOf(failure));
+      if (isCurrent()) setError(messageOf(failure));
     } finally {
       if (!controller.signal.aborted) {
         pending.current = false;
+        mutationVersion.current++;
+        localSync.current?.invalidate();
+        localSync.current?.refresh();
         setBusy(false);
       }
     }
@@ -295,7 +313,7 @@ export default function PlatformPanel({
       'POST',
       id ? { connectionId: id } : {},
       setLogin,
-      '独立浏览器已打开。请人工操作登录；本工具不会读取密码、验证码或自动上传。',
+      '登录窗口已就绪：原连接窗口仍在时将复用。请人工核验；本工具不会读取密码、验证码或自动上传。',
     );
   const refreshLocal = () => {
     resetPreview();
@@ -335,7 +353,7 @@ export default function PlatformPanel({
               body: JSON.stringify({ approvalHash: prepared.preview.hash, autoApprove: true }),
             },
           ));
-          if (!controller.signal.aborted) {
+          if (!controller.signal.aborted && version === selectionVersion.current) {
             setIncomingBatch(next);
             setPreview(null);
             setApproved(false);
@@ -507,8 +525,8 @@ export default function PlatformPanel({
       )}
       {selectedProvider?.readinessReason && <p className="platform-help">{selectedProvider.readinessReason}</p>}
       {selectedPlatform === 'tomato' && (
-        <button className="button primary" disabled={mutateDisabled || !selectedProvider?.capabilities.manualLogin} onClick={() => startLogin()}>
-          <Link2 size={14} />打开独立浏览器人工登录
+        <button className="button primary" disabled={mutateDisabled || !selectedProvider?.capabilities.manualLogin} onClick={() => startLogin(connection?.id)}>
+          <Link2 size={14} />{connection ? '继续当前账号登录 / 核验' : '打开独立浏览器人工登录'}
         </button>
       )}
       {selectedPlatform === 'mock' && (
@@ -616,7 +634,7 @@ export default function PlatformPanel({
                     disabled={mutateDisabled}
                     onClick={() => startLogin(item.id)}
                   >
-                    重新人工登录
+                    继续登录 / 重新核验
                   </button>
                 )}
                 <button
@@ -683,6 +701,8 @@ export default function PlatformPanel({
                 setWorks([]);
                 setLinkId('');
                 setPendingWorkId('');
+                setError('');
+                setNotice('');
                 resetPreview();
               }}
             >
