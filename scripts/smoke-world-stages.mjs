@@ -154,9 +154,9 @@ try {
   }, project.id);
   const stages = page.getByRole('region', { name: '世界观阶段', exact: true });
   const stageButton = (name) => {
-    // Stage and ungrouped tabs include a live asset count in their accessible name.
+    // Ungrouped joins its count directly; named stages retain a separating space.
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return stages.getByRole('button', { name: new RegExp(`^${escaped}(?:\\s+\\d+)?$`) });
+    return stages.getByRole('button', { name: new RegExp(`^${escaped}(?:\\s*\\d+)?$`) });
   };
   const row = (name) => page.getByRole('combobox', { name: `所属阶段 ${name}`, exact: true });
   const expectRows = async (present, absent = []) => {

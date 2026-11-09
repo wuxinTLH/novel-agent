@@ -1,5 +1,7 @@
 import React, { Component, type ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
+import { useLocale } from './locals/useLocale';
+import { runtimeT } from './locals/runtimeTranslate';
 import App from './app/App';
 import AuthGate from './components/auth/AuthGate';
 import { DialogProvider } from './components/common/AppDialog';
@@ -16,14 +18,15 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: bool
     if (!this.state.failed) return this.props.children;
     return (
       <section className="route-fallback">
-        <h1>页面发生异常</h1>
-        <p>已拦截错误，避免停留在空白页。</p>
-        <a href="/workflow">返回首页</a>
+        <h1>{runtimeT('页面发生异常')}</h1>
+        <p>{runtimeT('已拦截错误，避免停留在空白页。')}</p>
+        <a href="/workflow">{runtimeT('返回首页')}</a>
       </section>
     );
   }
 }
 function UnknownRoute() {
+  useLocale();
   const [seconds, setSeconds] = React.useState(5);
   React.useEffect(() => {
     const timer = window.setInterval(() => setSeconds((value) => value - 1), 1000);
@@ -39,7 +42,7 @@ function UnknownRoute() {
   return (
     <section className="route-fallback">
       <h1>404</h1>
-      <p>页面不存在，{Math.max(seconds, 0)} 秒后返回上一页。</p>
+      <p>{runtimeT('页面不存在，{x0} 秒后返回上一页。', { x0: Math.max(seconds, 0) })}</p>
     </section>
   );
 }

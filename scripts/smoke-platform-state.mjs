@@ -59,6 +59,16 @@ try {
     else if (endpoint === 'platform-operations') body = operations;
     else if (endpoint === 'platform-draft-receipts') body = receipts;
     else if (endpoint === 'platform-publication-batches') body = batches;
+    // Local diagnostic added to results refresh: exact fixture paths, still GET-only
+    // above, and fulfilled here rather than falling through to any platform/server.
+    else if (/^\/api\/projects\/(fixture|second)\/platform-deletion-blockers$/.test(url.pathname)) body = {
+      removable: false, busy: false,
+      batches: batches.map(batch => ({ id: batch.id, state: batch.state,
+        approvalHash: batch.preview.hash, canCancel: false,
+        items: batch.items.map(item => ({ number: item.snapshot.number, state: item.state,
+          mutationStarted: item.mutationStarted, hasRemoteDraftId: Boolean(item.remoteDraftId) })) })),
+      legacyOperations: [],
+    };
     else if (endpoint === 'platform-extension-pairings' || endpoint === 'volumes') body = [];
     else if (endpoint === 'platform-works') {
       await new Promise(resolve => { failWork = resolve; });

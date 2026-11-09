@@ -11,27 +11,53 @@ import { chromium } from 'playwright';
 
 // Isolated production UI acceptance. Never accesses existing user data or live platforms.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const data = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-projects-ui-'));
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-projects-ui-'));
+const data = path.join(temporary, 'data');
 const screenshots = path.join(root, '.tmp-build', 'projects-ui');
 let server;
 let browser;
 try {
+  // The server discovers .env from its app root; DATA_DIR/cwd alone are insufficient.
+  fs.writeFileSync(
+    path.join(temporary, 'package.json'),
+    JSON.stringify({
+      name: 'novel-agent',
+      type: 'module',
+      workspaces: ['packages/web', 'packages/server'],
+    }),
+  );
+  fs.cpSync(path.join(root, 'build'), path.join(temporary, 'build'), { recursive: true });
+  fs.cpSync(path.join(root, 'dist'), path.join(temporary, 'dist'), { recursive: true });
+  fs.symlinkSync(
+    path.join(root, 'node_modules'),
+    path.join(temporary, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  fs.mkdirSync(data);
   const probe = createServer();
   probe.listen(0, '127.0.0.1');
   await once(probe, 'listening');
   const port = probe.address().port;
   await new Promise((resolve) => probe.close(resolve));
   const base = `http://127.0.0.1:${port}`;
-  server = spawn(process.execPath, [path.join(root, 'build/packages/server/src/index.js')], {
-    cwd: os.tmpdir(),
-    env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: data,
-      MODEL_API_KEY: '',
-      MODEL_SECRETS_KEY: '',
-      PLATFORM_SECRETS_KEY: '',
-    },
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) =>
+      ['PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'].includes(
+        key.toUpperCase(),
+      ),
+    ),
+  );
+  Object.assign(env, {
+    PORT: String(port),
+    DATA_DIR: data,
+    NODE_ENV: 'production',
+    MODEL_API_KEY: '',
+    MODEL_SECRETS_KEY: '',
+    PLATFORM_SECRETS_KEY: '',
+  });
+  server = spawn(process.execPath, [path.join(temporary, 'build/packages/server/src/index.js')], {
+    cwd: temporary,
+    env,
     stdio: 'ignore',
   });
   let ready = false;
@@ -72,9 +98,25 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
   page.setDefaultTimeout(20000);
   const errors = [];
+  const deleteRequests = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.route('https://fonts.googleapis.com/**', (route) => route.abort());
-  await page.route('https://fonts.gstatic.com/**', (route) => route.abort());
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE' && new URL(request.url()).pathname.startsWith('/api/projects/')) {
+      deleteRequests.push(new URL(request.url()).pathname);
+    }
+  });
+  await page.route('**/*', (route) => {
+    const url = route.request().url();
+    if (url.startsWith(`${base}/`) || url.startsWith('data:') || url.startsWith('blob:'))
+      return route.continue();
+    if (/^https:\/\/fonts\.(googleapis|gstatic)\.com\//.test(url)) {
+      return route.fulfill({ status: 200, contentType: 'text/css', body: '' });
+    }
+    return route.abort();
+  });
   await page.addInitScript((id) => {
     localStorage.setItem('novel-project', id);
     localStorage.setItem('novel-theme', 'mtf');
@@ -113,6 +155,76 @@ try {
   await page.reload();
   await page.getByRole('heading', { name: /^全部作品/ }).waitFor();
   assert.equal(await page.locator('.projects-library__card').count(), total + 1);
+  // Exercise the real parent confirmation/mutation flow, only against copied-root fixtures.
+  const listProjects = async () => {
+    const response = await fetch(`${base}/api/projects`);
+    assert.ok(response.ok);
+    return response.json();
+  };
+  const currentBeforeDelete = await page.evaluate(() => localStorage.getItem('novel-project'));
+  const deleteNoncurrent = page.getByRole('button', { name: '删除作品：长安夜行记', exact: true });
+  await deleteNoncurrent.click();
+  const confirmation = page.getByRole('alertdialog');
+  await confirmation.waitFor();
+  assert.ok(
+    (await confirmation.textContent()).includes(second.title),
+    'confirm names target, not active project',
+  );
+  await confirmation.getByRole('button', { name: /^(取消|Cancel)$/, exact: true }).click();
+  assert.equal(deleteRequests.length, 0, 'cancel sends no DELETE request');
+  assert.ok(
+    (await listProjects()).some((project) => project.id === second.id),
+    'cancel retains noncurrent fixture',
+  );
+  assert.equal(await page.evaluate(() => localStorage.getItem('novel-project')), currentBeforeDelete);
+  await deleteNoncurrent.click();
+  await confirmation.getByRole('button', { name: /^(确定|确认|删除|Confirm|Delete)$/, exact: true }).click();
+  await deleteNoncurrent.waitFor({ state: 'detached' });
+  assert.deepEqual(
+    deleteRequests,
+    [`/api/projects/${second.id}`],
+    'delete targets noncurrent fixture exactly once',
+  );
+  assert.ok(!(await listProjects()).some((project) => project.id === second.id));
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('novel-project')),
+    currentBeforeDelete,
+    'noncurrent delete preserves selection',
+  );
+  await page.waitForURL(`${base}/projects`);
+
+  const currentProject = (await listProjects()).find((project) => project.id === currentBeforeDelete);
+  assert.ok(currentProject);
+  const deleteCurrent = page.getByRole('button', { name: `删除作品：${currentProject.title}`, exact: true });
+  await deleteCurrent.click();
+  await confirmation.getByRole('button', { name: /^(取消|Cancel)$/, exact: true }).click();
+  assert.equal(deleteRequests.length, 1, 'cancel current deletion sends no request');
+  assert.equal(await page.evaluate(() => localStorage.getItem('novel-project')), currentBeforeDelete);
+  await deleteCurrent.click();
+  await confirmation.getByRole('button', { name: /^(确定|确认|删除|Confirm|Delete)$/, exact: true }).click();
+  await page.waitForFunction((id) => localStorage.getItem('novel-project') !== id, currentBeforeDelete);
+  const afterDelete = await listProjects();
+  const activeAfterDelete = await page.evaluate(() => localStorage.getItem('novel-project'));
+  assert.ok(!afterDelete.some((project) => project.id === currentBeforeDelete));
+  assert.ok(
+    afterDelete.some((project) => project.id === activeAfterDelete),
+    'current deletion selects a surviving fixture',
+  );
+  assert.deepEqual(deleteRequests, [`/api/projects/${second.id}`, `/api/projects/${currentBeforeDelete}`]);
+  await page.goto(`${base}/projects`);
+  await page.getByRole('heading', { name: /^全部作品/ }).waitFor();
+  await page.getByRole('button', { name: /^(语言|Language): / }).click();
+  await page.getByRole('menuitemradio', { name: 'English', exact: true }).click();
+  await page.getByRole('heading', { name: /^All projects/ }).waitFor();
+  await page.getByRole('searchbox', { name: 'Search titles, genres or descriptions', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: /^Delete project: / }).count(), afterDelete.length);
+  assert.ok(
+    (await page.locator('.projects-library').innerText()).includes(afterDelete[0].title),
+    'locale change preserves user titles',
+  );
+  await page.getByRole('searchbox').fill('no-matching-smoke-title');
+  await page.getByRole('heading', { name: 'No matching projects', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Clear filters', exact: true }).first().click();
   fs.mkdirSync(screenshots, { recursive: true });
   await page.screenshot({ path: path.join(screenshots, 'desktop.png'), fullPage: true });
   for (const width of [1100, 768, 390]) {
@@ -124,9 +236,23 @@ try {
     );
     await page.screenshot({ path: path.join(screenshots, `width-${width}.png`), fullPage: true });
   }
-  assert.deepEqual(errors, [], 'no browser runtime errors');
+  // Remove every remaining noncurrent fixture (including any fresh-install seed).
+  for (const fixture of afterDelete.filter((project) => project.id !== activeAfterDelete)) {
+    const deleteFixture = page.getByRole('button', { name: `Delete project: ${fixture.title}`, exact: true });
+    await deleteFixture.click();
+    await confirmation.getByRole('button', { name: /^(确定|确认|删除|Confirm|Delete)$/, exact: true }).click();
+    await deleteFixture.waitFor({ state: 'detached' });
+  }
+  await page.waitForFunction(() => document.querySelectorAll('.projects-library__card').length === 1);
+  const lastDelete = page.getByRole('button', { name: /^Delete project: / });
+  assert.equal(await lastDelete.isDisabled(), true, 'last project cannot be deleted');
+  assert.equal(await lastDelete.getAttribute('title'), 'Keep at least one project');
+  assert.equal((await listProjects()).length, 1);
+  const optionalFontWarnings = errors.filter((message) => message.includes('https://fonts.googleapis.com/css2?') && message.includes('Content Security Policy') && message.includes('stylesheet'));
+  console.log('Known optional-font CSP warnings:', optionalFontWarnings.length);
+  assert.deepEqual(errors.filter((message) => !optionalFontWarnings.includes(message)), [], 'no other browser runtime or console errors');
   console.log(
-    'PASS: local account toolbar, direct/reloaded gallery route, search/empty/filter, selection and edit route, creation, sidebar and breadcrumb entry, responsive widths 1440/1100/768/390, no runtime errors.',
+    'PASS: local account toolbar, direct/reloaded gallery route, search/empty/filter, selection and edit route, creation, cancel/confirm noncurrent/current deletion, last-project guard, English library and unchanged user titles, sidebar and breadcrumb entry, responsive widths 1440/1100/768/390, no runtime errors.',
   );
   console.log(`Screenshots: ${screenshots}`);
 } finally {
@@ -137,5 +263,5 @@ try {
     await exited;
   }
   // This directory was created by this exact invocation under the OS temp directory.
-  fs.rmSync(data, { recursive: true, force: true });
+  fs.rmSync(temporary, { recursive: true, force: true });
 }

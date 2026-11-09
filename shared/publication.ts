@@ -40,7 +40,7 @@ export interface PublicationPreview {
 export interface PublicationItem {
   id: string;
   snapshot: DraftSnapshot;
-  state: 'queued' | 'running' | 'draft_verified' | 'submitted' | 'failed' | 'unknown';
+  state: 'queued' | 'running' | 'draft_verified' | 'submitted' | 'failed' | 'unknown' | 'cancelled';
   mutationStarted: boolean;
   remoteDraftId?: string;
   remoteFingerprint?: string;
@@ -52,17 +52,37 @@ export const publicationFailureCodes = [
   'PLATFORM_BUSY', 'PLATFORM_LOCK_UNAVAILABLE', 'PLATFORM_REAUTH_REQUIRED', 'PLATFORM_LOGIN_CLOSED',
   'PLATFORM_ACCOUNT_MISMATCH', 'PLATFORM_DOM_VERIFICATION_REQUIRED', 'PLATFORM_PAGE_LOAD_FAILED',
   'PLATFORM_DOM_MISMATCH', 'PLATFORM_WORK_NOT_FOUND', 'PLATFORM_BINDING_CHANGED', 'PLATFORM_PREVIEW_CHANGED',
-  'PUBLICATION_REMOTE_CHANGED', 'PROJECT_RUNNING',
+  'PUBLICATION_REMOTE_CHANGED', 'PROJECT_RUNNING', 'PLATFORM_ORPHAN_UNKNOWN',
   // Explicit queue invariants reachable during validation/execution; never accept arbitrary queue codes.
   'DUPLICATE_CHAPTER', 'CONFLICTING_VERSION', 'INVALID_STATE', 'MUTATION_NOT_CHECKPOINTED',
   'REMOTE_ID_CHANGED', 'INVALID_OUTCOME', 'INVALID_PREVIEW', 'SNAPSHOT_CHANGED',
 ] as const;
 export type PublicationFailureCode = typeof publicationFailureCodes[number];
 export type PublicationFailureStage = 'acquire' | 'validate' | 'execute';
+/** Local diagnostic metadata only: no chapter content, credentials or remote requests. */
+export interface PublicationDeletionBlockers {
+  removable: boolean;
+  /** Explicit local deletion may retain all platform evidence, including unknown outcomes. */
+  canDeletePreservingRecords?: boolean;
+  busy: boolean;
+  batches: {
+    id: string;
+    state: PublicationBatch['state'];
+    /** Exact immutable preview hash required by the cancellation request. */
+    approvalHash: string;
+    canCancel: boolean;
+    errorCode?: PublicationFailureCode;
+    failureStage?: PublicationFailureStage;
+    items: { number: number; state: PublicationItem['state']; mutationStarted: boolean; hasRemoteDraftId: boolean }[];
+  }[];
+  legacyOperations: { id: string; state: string }[];
+}
 export interface PublicationBatch {
   id: string;
   preview: PublicationPreview;
-  state: 'preview' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'unknown';
+  state: 'preview' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'unknown' | 'cancelled';
+  /** Local-only cancellation, allowed only when no item could have mutated remotely. */
+  cancelledAt?: string;
   items: PublicationItem[];
   approvalHash?: string;
   approval?: { mode: 'manual' | 'automatic'; source: 'prepare' | 'start'; approvedAt: string; hash: string };

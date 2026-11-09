@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
   ArrowRight,
   CheckCircle2,
@@ -12,6 +12,7 @@ import {
   Terminal,
   Users,
 } from 'lucide-react';
+import { formatDateTime } from '../../lib/dateTime';
 import { api } from '../../services/api';
 import Modal from '../common/Modal';
 import OnlineMaintenance from './OnlineMaintenance';
@@ -32,10 +33,13 @@ import {
   type Permission,
 } from '../../../../../shared/permissions';
 import '../../styles/administration.scss';
-import { useLocale } from '../../locals';
+import { createTranslator, getLocale, translate, type Translator, useLocale } from '../../locals';
+
+const TokenUsagePanel = lazy(() => import('./TokenUsagePanel'));
 
 const accountAdminRequest = <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
-  if (!path.startsWith('/api/admin/')) return Promise.reject(new Error('无效管理员请求路径'));
+  const t = createTranslator(getLocale());
+  if (!path.startsWith('/api/admin/')) return Promise.reject(new Error(t("无效管理员请求路径")));
   return api<T>(path.slice(4), { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 };
 
@@ -78,9 +82,11 @@ type Maintenance = {
 };
 type BusyCallback = (busy: boolean) => void;
 const ports: Record<Driver, number> = { mysql: 3306, postgresql: 5432, sqlserver: 1433 };
-const roleLabel = (role: AuthRole) => `${ROLES[role].label}（权重 ${ROLES[role].weight}）`;
+const roleNames = { superadmin: '超级管理员', admin: '管理员', operations: '运维管理员', writer: '作家' } as const;
+const roleLabel = (role: AuthRole, t: Translator) => t('{role}（权重 {weight}）', { role: t(roleNames[role]), weight: ROLES[role].weight });
 const tabPermissions: Record<Tab, Permission> = {
   overview: 'admin.status.read',
+  usage: 'usage.read',
   users: 'users.read',
   database: 'storage.read',
   backup: 'maintenance.read',
@@ -88,19 +94,17 @@ const tabPermissions: Record<Tab, Permission> = {
 };
 const tabs = [
   { id: 'overview', label: '工作台', icon: LayoutDashboard },
+  { id: 'usage', label: 'Token 使用统计', icon: LayoutDashboard },
   { id: 'users', label: '用户', icon: Users },
   { id: 'database', label: '数据库', icon: Database },
   { id: 'backup', label: '备份与维护', icon: HardDrive },
   { id: 'system', label: '系统与安全', icon: ShieldCheck },
 ] as const;
 type Tab = (typeof tabs)[number]['id'];
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : '请求失败，请重试。');
-const date = (value: string) => {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? '未知时间' : parsed.toLocaleString();
-};
+const errorMessage = (error: unknown, t: Translator) => (error instanceof Error ? error.message : t("请求失败，请重试。"));
 
 function useResource<T>(path: string | undefined) {
+  const { t } = useLocale();
   const [value, setValue] = useState<T>();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -120,7 +124,7 @@ function useResource<T>(path: string | undefined) {
         if (!controller.signal.aborted) setValue(result);
       })
       .catch((reason: unknown) => {
-        if (!controller.signal.aborted) setError(errorMessage(reason));
+        if (!controller.signal.aborted) setError(errorMessage(reason, t));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -131,6 +135,7 @@ function useResource<T>(path: string | undefined) {
 }
 
 function useOperation(onBusy: BusyCallback) {
+  const { t } = useLocale();
   const gate = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -147,7 +152,7 @@ function useOperation(onBusy: BusyCallback) {
       setNotice(success);
       return true;
     } catch (reason) {
-      setError(errorMessage(reason));
+      setError(errorMessage(reason, t));
       return false;
     } finally {
       gate.current = false;
@@ -175,19 +180,16 @@ function Feedback({ error, notice }: { error?: string; notice?: string }) {
   );
 }
 function LoadState({ loading, error, retry }: { loading: boolean; error: string; retry: () => void }) {
+  const { t } = useLocale();
   return (
     <>
       {loading && (
-        <p role="status" className="administration-empty">
-          正在读取服务端状态…
-        </p>
+        <p role="status" className="administration-empty">{t("正在读取服务端状态…")}</p>
       )}
       {error && (
         <div className="administration-feedback is-error" role="alert">
           <p>{error}</p>
-          <button type="button" onClick={retry}>
-            重新加载
-          </button>
+          <button type="button" onClick={retry}>{t("重新加载")}</button>
         </div>
       )}
     </>
@@ -205,6 +207,7 @@ function UsersPanel({
   onBusy: BusyCallback;
   changed: () => void;
 }) {
+  const { t } = useLocale();
   const manage = hasPermission(actor, 'users.manage');
   const assignRoles = hasPermission(actor, 'roles.manage');
   const creationRoles = ROLE_IDS.filter((candidate) => assignRoles || canManageUser(actor, candidate));
@@ -223,14 +226,14 @@ function UsersPanel({
   const mutate = async (user: AuthUser, patch: { role?: AuthRole; disabled?: boolean }) => {
     if (!manageable(user) || (patch.role && !assignRoles)) return;
     const action = patch.role
-      ? `将角色更改为「${roleLabel(patch.role)}」`
+      ? t('将角色更改为「{role}」', { role: roleLabel(patch.role, t) })
       : patch.disabled
-        ? '停用账号并撤销其会话'
-        : '重新启用账号';
+        ? t("停用账号并撤销其会话")
+        : t("重新启用账号");
     if (
-      !(await confirm(`确定为「${user.username}」${action}？服务端会阻止不安全的管理员变更。`, {
-        title: '确认账号变更',
-        confirmText: '确认变更',
+      !(await confirm(t('确定为「{username}」{action}？服务端会阻止不安全的管理员变更。', { username: user.username, action }), {
+        title: t('确认账号变更'),
+        confirmText: t('确认变更'),
         danger: !!patch.disabled || !!patch.role,
       }))
     )
@@ -242,15 +245,15 @@ function UsersPanel({
       });
       resource.reload();
       changed();
-    }, '账号状态已更新。');
+    }, t("账号状态已更新。"));
   };
   const create = async (event: FormEvent) => {
     event.preventDefault();
     if (!manage || !creationRoles.includes(role)) return;
     if (
-      !(await confirm(`创建「${username.trim()}」（${roleLabel(role)}）？新用户将使用独立数据空间。`, {
-        title: '创建账号',
-        confirmText: '确认创建',
+      !(await confirm(t('创建「{username}」（{role}）？新用户将使用独立数据空间。', { username: username.trim(), role: roleLabel(role, t) }), {
+        title: t('创建账号'),
+        confirmText: t('确认创建'),
         danger: role === 'superadmin',
       }))
     )
@@ -264,7 +267,7 @@ function UsersPanel({
         setUsername('');
         resource.reload();
         changed();
-      }, '账号已创建；登录认证状态没有改变。');
+      }, t("账号已创建；登录认证状态没有改变。"));
     } finally {
       setPassword('');
     }
@@ -274,9 +277,9 @@ function UsersPanel({
     if (
       !selected ||
       !manageable(selected) ||
-      !(await confirm(`重置「${selected.username}」的密码？该用户现有会话将被撤销，需要重新登录。`, {
-        title: '重置密码',
-        confirmText: '确认重置',
+      !(await confirm(t('重置「{username}」的密码？该用户现有会话将被撤销，需要重新登录。', { username: selected.username }), {
+        title: t('重置密码'),
+        confirmText: t('确认重置'),
         danger: true,
       }))
     )
@@ -289,7 +292,7 @@ function UsersPanel({
         });
         setSelected(undefined);
         setSessionUser(undefined);
-      }, '密码已重置，旧会话已撤销。');
+      }, t("密码已重置，旧会话已撤销。"));
     } finally {
       setNewPassword('');
       setCurrentPassword('');
@@ -299,26 +302,24 @@ function UsersPanel({
     <div className="administration-stack">
       <header className="administration-section-heading">
         <div>
-          <h3>用户与访问权限</h3>
-          <p>按账号隔离数据，敏感变更始终由服务端校验权限。</p>
+          <h3>{t("用户与访问权限")}</h3>
+          <p>{t("按账号隔离数据，敏感变更始终由服务端校验权限。")}</p>
         </div>
         <button type="button" disabled={operation.busy || resource.loading} onClick={resource.reload}>
-          <RefreshCw size={15} aria-hidden="true" />
-          刷新
-        </button>
+          <RefreshCw size={15} aria-hidden="true" />{t("刷新")}</button>
       </header>
       <Feedback error={operation.error} notice={operation.notice} />
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
       {!resource.loading && !resource.error && (
         <div className="administration-table-wrap">
           <table>
-            <caption className="administration-sr-only">用户账号与管理操作</caption>
+            <caption className="administration-sr-only">{t("用户账号与管理操作")}</caption>
             <thead>
               <tr>
-                <th scope="col">账号</th>
-                <th scope="col">角色</th>
-                <th scope="col">状态</th>
-                <th scope="col">操作</th>
+                <th scope="col">{t("账号")}</th>
+                <th scope="col">{t("角色")}</th>
+                <th scope="col">{t("状态")}</th>
+                <th scope="col">{t("操作")}</th>
               </tr>
             </thead>
             <tbody>
@@ -326,29 +327,29 @@ function UsersPanel({
                 <tr key={user.id}>
                   <th scope="row">
                     <strong>{user.username}</strong>
-                    <small>创建于 {date(user.createdAt)}</small>
+                    <small>{t('创建于 {time}', { time: formatDateTime(user.createdAt) })}</small>
                   </th>
                   <td>
                     {assignRoles ? (
                       <select
-                        aria-label={`${user.username} 的角色`}
+                        aria-label={t('{username} 的角色', { username: user.username })}
                         value={user.role}
                         disabled={operation.busy || !manageable(user)}
                         onChange={(event) => void mutate(user, { role: event.target.value as AuthRole })}
                       >
                         {ROLE_IDS.map((candidate) => (
                           <option key={candidate} value={candidate}>
-                            {roleLabel(candidate)}
+                            {roleLabel(candidate, t)}
                           </option>
                         ))}
                       </select>
                     ) : (
-                      <span>{roleLabel(user.role)}</span>
+                      <span>{roleLabel(user.role, t)}</span>
                     )}
                   </td>
                   <td>
                     <span className={`administration-badge ${user.disabled ? 'is-muted' : ''}`}>
-                      {user.disabled ? '已停用' : '正常'}
+                      {user.disabled ? t("已停用") : t("正常")}
                     </span>
                   </td>
                   <td>
@@ -358,7 +359,7 @@ function UsersPanel({
                         disabled={operation.busy || !manageable(user)}
                         onClick={() => void mutate(user, { disabled: !user.disabled })}
                       >
-                        {user.disabled ? '启用' : '停用'}
+                        {user.disabled ? t("启用") : t("停用")}
                       </button>
                       <button
                         type="button"
@@ -368,34 +369,28 @@ function UsersPanel({
                           setNewPassword('');
                           setCurrentPassword('');
                         }}
-                      >
-                        重置密码
-                      </button>
+                      >{t("重置密码")}</button>
                       <button
                         type="button"
                         disabled={operation.busy || !manageable(user)}
                         onClick={() => setSessionUser(user)}
-                      >
-                        会话
-                      </button>
+                      >{t("会话")}</button>
                     </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {users.length === 0 && <p className="administration-empty">暂无账号。</p>}
+          {users.length === 0 && <p className="administration-empty">{t("暂无账号。")}</p>}
         </div>
       )}
       {selected && manageable(selected) && (
         <form className="administration-card" onSubmit={(event) => void reset(event)}>
-          <h4>重置密码 · {selected.username}</h4>
-          <p>重置后撤销该账号的全部会话；重置当前账号可能使本页面退出。</p>
+          <h4>{t('重置密码 · {username}', { username: selected.username })}</h4>
+          <p>{t("重置后撤销该账号的全部会话；重置当前账号可能使本页面退出。")}</p>
           <fieldset disabled={operation.busy} className="administration-fields">
             {mode === 'authenticated' && (
-              <label>
-                当前管理员密码
-                <input
+              <label>{t("当前管理员密码")}<input
                   type="password"
                   autoComplete="current-password"
                   value={currentPassword}
@@ -404,9 +399,7 @@ function UsersPanel({
                 />
               </label>
             )}
-            <label>
-              新密码
-              <input
+            <label>{t("新密码")}<input
                 type="password"
                 autoComplete="new-password"
                 value={newPassword}
@@ -415,12 +408,10 @@ function UsersPanel({
                 required
                 onChange={(event) => setNewPassword(event.target.value)}
               />
-              <small>至少 12 个字符，最终密码策略以服务端为准。</small>
+              <small>{t("至少 12 个字符，最终密码策略以服务端为准。")}</small>
             </label>
             <div className="administration-actions">
-              <button className="is-primary" type="submit">
-                确认重置密码
-              </button>
+              <button className="is-primary" type="submit">{t("确认重置密码")}</button>
               <button
                 type="button"
                 onClick={() => {
@@ -428,9 +419,7 @@ function UsersPanel({
                   setNewPassword('');
                   setCurrentPassword('');
                 }}
-              >
-                取消
-              </button>
+              >{t("取消")}</button>
             </div>
           </fieldset>
         </form>
@@ -444,12 +433,10 @@ function UsersPanel({
         />
       )}
       <form className="administration-card" onSubmit={(event) => void create(event)}>
-        <h4>创建新账号</h4>
-        <p>不会自动启用登录认证。建议为每位使用者分配独立账号，按需授予管理员权限。</p>
+        <h4>{t("创建新账号")}</h4>
+        <p>{t("不会自动启用登录认证。建议为每位使用者分配独立账号，按需授予管理员权限。")}</p>
         <fieldset className="administration-fields" disabled={operation.busy || !manage}>
-          <label>
-            用户名
-            <input
+          <label>{t("用户名")}<input
               value={username}
               autoComplete="off"
               maxLength={64}
@@ -457,9 +444,7 @@ function UsersPanel({
               onChange={(event) => setUsername(event.target.value)}
             />
           </label>
-          <label>
-            初始密码
-            <input
+          <label>{t("初始密码")}<input
               type="password"
               autoComplete="new-password"
               value={password}
@@ -468,22 +453,18 @@ function UsersPanel({
               required
               onChange={(event) => setPassword(event.target.value)}
             />
-            <small>至少 12 个字符；密码不会存入浏览器存储。</small>
+            <small>{t("至少 12 个字符；密码不会存入浏览器存储。")}</small>
           </label>
-          <label>
-            角色
-            <select value={role} onChange={(event) => setRole(event.target.value as AuthRole)}>
+          <label>{t("角色")}<select value={role} onChange={(event) => setRole(event.target.value as AuthRole)}>
               {creationRoles.map((candidate) => (
                 <option key={candidate} value={candidate}>
-                  {roleLabel(candidate)}
+                  {roleLabel(candidate, t)}
                 </option>
               ))}
             </select>
           </label>
           <div className="administration-actions">
-            <button className="is-primary" type="submit">
-              创建账号
-            </button>
+            <button className="is-primary" type="submit">{t("创建账号")}</button>
           </div>
         </fieldset>
       </form>
@@ -492,6 +473,7 @@ function UsersPanel({
 }
 
 function SessionsPanel({ user, onBusy, close }: { user: AuthUser; onBusy: BusyCallback; close: () => void }) {
+  const { t } = useLocale();
   const path = `/admin/users/${encodeURIComponent(user.id)}/sessions`;
   const resource = useResource<AuthSessionInfo[] | { sessions: AuthSessionInfo[] }>(path);
   const sessions = resource.value
@@ -502,28 +484,26 @@ function SessionsPanel({ user, onBusy, close }: { user: AuthUser; onBusy: BusyCa
   const operation = useOperation(onBusy);
   const confirm = useConfirm();
   return (
-    <section className="administration-card" aria-label={`${user.username} 的会话`}>
+    <section className="administration-card" aria-label={t('{username} 的会话', { username: user.username })}>
       <div className="administration-section-heading">
-        <h4>登录会话 · {user.username}</h4>
-        <button type="button" disabled={operation.busy} onClick={close}>
-          收起
-        </button>
+        <h4>{t('登录会话 · {username}', { username: user.username })}</h4>
+        <button type="button" disabled={operation.busy} onClick={close}>{t("收起")}</button>
       </div>
-      <p>只展示非凭据会话标识，不显示 Cookie 或令牌。撤销全部会话也会使当前会话失效。</p>
+      <p>{t("只展示非凭据会话标识，不显示 Cookie 或令牌。撤销全部会话也会使当前会话失效。")}</p>
       <Feedback error={operation.error} notice={operation.notice} />
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
       <ul className="administration-sessions">
         {sessions.map((session) => (
           <li key={session.id}>
             <span>
-              {session.current ? '当前会话' : '登录会话'}
-              <small>到期 {date(session.expiresAt)}</small>
+              {session.current ? t("当前会话") : t("登录会话")}
+              <small>{t('到期 {time}', { time: formatDateTime(session.expiresAt) })}</small>
             </span>
             <code title={session.id}>{session.id}</code>
           </li>
         ))}
       </ul>
-      {!resource.loading && !resource.error && sessions.length === 0 && <p>没有有效会话。</p>}
+      {!resource.loading && !resource.error && sessions.length === 0 && <p>{t("没有有效会话。")}</p>}
       <button
         type="button"
         disabled={operation.busy || resource.loading || !!resource.error || sessions.length === 0}
@@ -531,20 +511,18 @@ function SessionsPanel({ user, onBusy, close }: { user: AuthUser; onBusy: BusyCa
           void (async () => {
             if (
               !(await confirm(
-                `撤销「${user.username}」的全部登录会话？如果包含你当前的会话，需要重新登录。`,
-                { title: '撤销登录会话', danger: true, confirmText: '撤销全部' },
+                t('撤销「{username}」的全部登录会话？如果包含你当前的会话，需要重新登录。', { username: user.username }),
+                { title: t('撤销登录会话'), danger: true, confirmText: t('撤销全部') },
               ))
             )
               return;
             await operation.run(async () => {
               await api(path, { method: 'DELETE' });
               resource.reload();
-            }, '会话已撤销。');
+            }, t("会话已撤销。"));
           })()
         }
-      >
-        撤销全部会话
-      </button>
+      >{t("撤销全部会话")}</button>
     </section>
   );
 }
@@ -562,6 +540,7 @@ function DatabasePanel({
   changed: () => void;
   writable: boolean;
 }) {
+  const { t } = useLocale();
   const resource = useResource<StorageConfig>('/admin/storage');
   const [draft, setDraft] = useState<StorageConfig>();
   const [dirty, setDirty] = useState(false);
@@ -594,11 +573,11 @@ function DatabasePanel({
     if (!draft || locked) return;
     if (
       !(await confirm(
-        '保存数据库配置与租户映射？此操作不迁移任何数据。修改映射前必须离线备份并迁移相应租户数据，避免看见空数据空间。',
+        t("保存数据库配置与租户映射？此操作不迁移任何数据。修改映射前必须离线备份并迁移相应租户数据，避免看见空数据空间。"),
         {
-          title: '保存存储配置',
+          title: t('保存存储配置'),
           danger: true,
-          confirmText: '确认已完成离线准备',
+          confirmText: t('确认已完成离线准备'),
         },
       ))
     )
@@ -606,13 +585,13 @@ function DatabasePanel({
     await operation.run(async () => {
       const ids = new Set(draft.profiles.map((profile) => profile.id));
       if (ids.size !== draft.profiles.length || !ids.has(draft.defaultProfileId))
-        throw new Error('配置 ID 必须唯一，且默认配置必须存在。');
+        throw new Error(t("配置 ID 必须唯一，且默认配置必须存在。"));
       const owners = new Set(draft.ownerProfiles.map((binding) => binding.ownerId));
       if (
         owners.size !== draft.ownerProfiles.length ||
         draft.ownerProfiles.some((binding) => !binding.ownerId.trim() || !ids.has(binding.profileId))
       )
-        throw new Error('租户标识不可留空或重复，且映射必须引用现有配置。');
+        throw new Error(t("租户标识不可留空或重复，且映射必须引用现有配置。"));
       const profiles = draft.profiles.map((profile) => {
         const { hasPassword: _hasPassword, password, ...connection } = profile.connection;
         return { ...profile, connection: { ...connection, ...(password ? { password } : {}) } };
@@ -630,26 +609,26 @@ function DatabasePanel({
       onDirty(false);
       resource.reload();
       changed();
-    }, '配置已保存；未连接、初始化或迁移数据库，请按离线维护流程生效。');
+    }, t("配置已保存；未连接、初始化或迁移数据库，请按离线维护流程生效。"));
   };
   return (
     <div className="administration-stack">
       <header className="administration-section-heading">
         <div>
-          <h3>数据库配置与租户路由</h3>
-          <p>为不同数据空间分配 MySQL、PostgreSQL 或 SQL Server 配置。</p>
+          <h3>{t("数据库配置与租户路由")}</h3>
+          <p>{t("为不同数据空间分配 MySQL、PostgreSQL 或 SQL Server 配置。")}</p>
         </div>
       </header>
       <div className="administration-callout">
         <strong>
-          {!writable ? '当前角色 · 配置只读' : locked ? '运行中 · 配置只读' : '维护模式 · 可编辑配置'}
+          {!writable ? t("当前角色 · 配置只读") : locked ? t("运行中 · 配置只读") : t("维护模式 · 可编辑配置")}
         </strong>
         <p>
           {!writable
-            ? '当前角色仅可查看存储配置，不能修改数据库或租户映射，也不能初始化 SQL。'
+            ? t("当前角色仅可查看存储配置，不能修改数据库或租户映射，也不能初始化 SQL。")
             : locked
-              ? '存储正在使用中。为避免数据分流与损坏，需停止业务运行并进入服务端支持的维护模式后才能保存。'
-              : '仅可保存未被运行时使用的配置。服务端会再次校验状态；保存不会迁移数据。'}
+              ? t("存储正在使用中。为避免数据分流与损坏，需停止业务运行并进入服务端支持的维护模式后才能保存。")
+              : t("仅可保存未被运行时使用的配置。服务端会再次校验状态；保存不会迁移数据。")}
         </p>
       </div>
       <Feedback error={operation.error} notice={operation.notice} />
@@ -660,9 +639,7 @@ function DatabasePanel({
             disabled={operation.busy || locked || resource.loading || !!resource.error}
             className="administration-stack"
           >
-            <label>
-              默认数据库配置
-              <select
+            <label>{t("默认数据库配置")}<select
                 value={draft.defaultProfileId}
                 onChange={(event) => change({ ...draft, defaultProfileId: event.target.value })}
               >
@@ -672,13 +649,12 @@ function DatabasePanel({
                   </option>
                 ))}
               </select>
-              <small>未单独映射的租户使用此配置。</small>
+              <small>{t("未单独映射的租户使用此配置。")}</small>
             </label>
             {draft.profiles.map((profile, index) => (
-              <section className="administration-card" key={index} aria-label={`数据库配置 ${index + 1}`}>
+              <section className="administration-card" key={index} aria-label={t('数据库配置 {number}', { number: index + 1 })}>
                 <div className="administration-section-heading">
-                  <h4>
-                    配置 {index + 1} · {profile.label || profile.id}
+                  <h4>{t('配置 {number} · {name}', { number: index + 1, name: profile.label || profile.id })}
                   </h4>
                   <button
                     type="button"
@@ -690,22 +666,18 @@ function DatabasePanel({
                     onClick={() =>
                       void (async () => {
                         if (
-                          await confirm(`移除配置「${profile.label || profile.id}」？不会删除数据库。`, {
+                          await confirm(t('移除配置「{name}」？不会删除数据库。', { name: profile.label || profile.id }), {
                             danger: true,
-                            confirmText: '移除配置',
+                            confirmText: t('移除配置'),
                           })
                         )
                           change({ ...draft, profiles: draft.profiles.filter((_, item) => item !== index) });
                       })()
                     }
-                  >
-                    移除配置
-                  </button>
+                  >{t("移除配置")}</button>
                 </div>
                 <div className="administration-fields">
-                  <label>
-                    配置 ID
-                    <input
+                  <label>{t("配置 ID")}<input
                       required
                       maxLength={128}
                       value={profile.id}
@@ -724,19 +696,15 @@ function DatabasePanel({
                         });
                       }}
                     />
-                    <small>更改配置 ID、类型、服务器、端口、数据库或用户后，必须重新输入密码。</small>
+                    <small>{t("更改配置 ID、类型、服务器、端口、数据库或用户后，必须重新输入密码。")}</small>
                   </label>
-                  <label>
-                    显示名称
-                    <input
+                  <label>{t("显示名称")}<input
                       maxLength={200}
                       value={profile.label || ''}
                       onChange={(event) => profileChange(index, { label: event.target.value })}
                     />
                   </label>
-                  <label>
-                    数据库类型
-                    <select
+                  <label>{t("数据库类型")}<select
                       value={profile.connection.driver}
                       onChange={(event) => {
                         const driver = event.target.value as Driver;
@@ -750,9 +718,7 @@ function DatabasePanel({
                       <option value="sqlserver">SQL Server / MSSQL</option>
                     </select>
                   </label>
-                  <label>
-                    服务器
-                    <input
+                  <label>{t("服务器")}<input
                       required
                       maxLength={253}
                       value={profile.connection.host}
@@ -764,9 +730,7 @@ function DatabasePanel({
                       }
                     />
                   </label>
-                  <label>
-                    端口
-                    <input
+                  <label>{t("端口")}<input
                       type="number"
                       required
                       min={1}
@@ -780,9 +744,7 @@ function DatabasePanel({
                       }
                     />
                   </label>
-                  <label>
-                    数据库名称
-                    <input
+                  <label>{t("数据库名称")}<input
                       required
                       maxLength={63}
                       pattern="[a-zA-Z_][a-zA-Z0-9_]*"
@@ -794,9 +756,7 @@ function DatabasePanel({
                       }
                     />
                   </label>
-                  <label>
-                    数据库用户
-                    <input
+                  <label>{t("数据库用户")}<input
                       required
                       maxLength={128}
                       value={profile.connection.user}
@@ -808,15 +768,13 @@ function DatabasePanel({
                       }
                     />
                   </label>
-                  <label>
-                    数据库密码
-                    <input
+                  <label>{t("数据库密码")}<input
                       type="password"
                       maxLength={4096}
                       autoComplete="new-password"
                       value={profile.connection.password || ''}
                       placeholder={
-                        profile.connection.hasPassword ? '已配置；留空保留现有密码' : '留空表示不设置密码'
+                        profile.connection.hasPassword ? t("已配置；留空保留现有密码") : t("留空表示不设置密码")
                       }
                       onChange={(event) =>
                         profileChange(index, {
@@ -824,7 +782,7 @@ function DatabasePanel({
                         })
                       }
                     />
-                    <small>不回显现有密码，不写入浏览器存储。</small>
+                    <small>{t("不回显现有密码，不写入浏览器存储。")}</small>
                   </label>
                   <label>
                     TLS
@@ -836,13 +794,11 @@ function DatabasePanel({
                         })
                       }
                     >
-                      <option value="verify">启用并验证证书（推荐）</option>
-                      <option value="off">关闭（仅回环主机）</option>
+                      <option value="verify">{t("启用并验证证书（推荐）")}</option>
+                      <option value="off">{t("关闭（仅回环主机）")}</option>
                     </select>
                   </label>
-                  <label>
-                    连接超时（毫秒）
-                    <input
+                  <label>{t("连接超时（毫秒）")}<input
                       type="number"
                       min={1000}
                       max={30000}
@@ -886,22 +842,15 @@ function DatabasePanel({
                     ],
                   });
                 }}
-              >
-                添加数据库配置
-              </button>
+              >{t("添加数据库配置")}</button>
             </div>
             <section className="administration-card">
-              <h4>租户 → 数据库映射</h4>
-              <p>
-                租户标识是服务端的数据空间
-                ownerId，不一定等同于用户名；不要猜测标识。删除映射后该租户回退至默认配置，不会搬移数据。
-              </p>
+              <h4>{t("租户 → 数据库映射")}</h4>
+              <p>{t("租户标识是服务端的数据空间 ownerId，不一定等同于用户名；不要猜测标识。删除映射后该租户回退至默认配置，不会搬移数据。")}</p>
               <div className="administration-stack">
                 {draft.ownerProfiles.map((binding, index) => (
                   <div className="administration-mapping" key={index}>
-                    <label>
-                      租户标识
-                      <input
+                    <label>{t("租户标识")}<input
                         required
                         maxLength={128}
                         value={binding.ownerId}
@@ -915,9 +864,7 @@ function DatabasePanel({
                         }
                       />
                     </label>
-                    <label>
-                      数据库配置
-                      <select
+                    <label>{t("数据库配置")}<select
                         value={binding.profileId}
                         onChange={(event) =>
                           change({
@@ -937,21 +884,19 @@ function DatabasePanel({
                     </label>
                     <button
                       type="button"
-                      aria-label={`移除租户 ${binding.ownerId || index + 1} 的映射`}
+                      aria-label={t('移除租户 {owner} 的映射', { owner: binding.ownerId || index + 1 })}
                       onClick={() =>
                         change({
                           ...draft,
                           ownerProfiles: draft.ownerProfiles.filter((_, item) => item !== index),
                         })
                       }
-                    >
-                      移除映射
-                    </button>
+                    >{t("移除映射")}</button>
                   </div>
                 ))}
               </div>
               {draft.ownerProfiles.length === 0 && (
-                <p className="administration-empty">暂无单独映射，所有租户使用默认配置。</p>
+                <p className="administration-empty">{t("暂无单独映射，所有租户使用默认配置。")}</p>
               )}
               <button
                 type="button"
@@ -964,29 +909,25 @@ function DatabasePanel({
                     ],
                   })
                 }
-              >
-                添加租户映射
-              </button>
+              >{t("添加租户映射")}</button>
             </section>
             <div className="administration-actions">
               <button type="submit" className="is-primary" disabled={!dirty}>
-                {operation.busy ? '正在保存…' : '保存配置与映射'}
+                {operation.busy ? t("正在保存…") : t("保存配置与映射")}
               </button>
               <button
                 type="button"
                 disabled={!dirty}
                 onClick={() =>
                   void (async () => {
-                    if (await confirm('丢弃所有未保存的数据库配置？')) {
+                    if (await confirm(t("丢弃所有未保存的数据库配置？"))) {
                       setDraft(resource.value);
                       setDirty(false);
                       onDirty(false);
                     }
                   })()
                 }
-              >
-                放弃修改
-              </button>
+              >{t("放弃修改")}</button>
             </div>
           </fieldset>
         </form>
@@ -996,32 +937,32 @@ function DatabasePanel({
 }
 
 function MaintenancePanel() {
+  const { t, locale } = useLocale();
+  const commandLabel = (value: string) => translate(locale, value);
   const resource = useResource<Maintenance>('/admin/maintenance');
   const [notice, setNotice] = useState('');
   const [copyError, setCopyError] = useState('');
   return (
     <div className="administration-stack">
       <header>
-        <h3>高级运维 · 服务器命令</h3>
-        <p>日常备份请使用上方引导。仅初始化账号、恢复或迁移时需要服务器终端。</p>
+        <h3>{t("高级运维 · 服务器命令")}</h3>
+        <p>{t("日常备份请使用上方引导。仅初始化账号、恢复或迁移时需要服务器终端。")}</p>
       </header>
       <div className="administration-callout">
-        <strong>先停服务，再做维护</strong>
+        <strong>{t("先停服务，再做维护")}</strong>
         <ol>
-          <li>停止所有使用同一数据目录或数据库的服务进程。</li>
-          <li>在服务器终端核对数据目录、数据库配置和目标，创建并验证备份。</li>
-          <li>执行所需维护命令，验证数据后再启动服务。</li>
+          <li>{t("停止所有使用同一数据目录或数据库的服务进程。")}</li>
+          <li>{t("在服务器终端核对数据目录、数据库配置和目标，创建并验证备份。")}</li>
+          <li>{t("执行所需维护命令，验证数据后再启动服务。")}</li>
         </ol>
-        <p>
-          恢复与迁移可能改变数据；不要在运行中的数据库上操作。凭据仅通过服务器私有配置提供，不放入命令或剪贴板。
-        </p>
+        <p>{t("恢复与迁移可能改变数据；不要在运行中的数据库上操作。凭据仅通过服务器私有配置提供，不放入命令或剪贴板。")}</p>
       </div>
       <Feedback error={copyError} notice={notice} />
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
       {resource.value?.commands.map((command, index) => (
         <section className="administration-card" key={`${command.label}-${index}`}>
           <div className="administration-section-heading">
-            <h4>{command.label}</h4>
+            <h4>{commandLabel(command.label)}</h4>
             <button
               type="button"
               onClick={() =>
@@ -1030,27 +971,23 @@ function MaintenancePanel() {
                   setNotice('');
                   try {
                     await navigator.clipboard.writeText(command.command);
-                    setNotice(`已复制「${command.label}」命令；尚未执行。`);
+                    setNotice(t('已复制「{name}」命令；尚未执行。', { name: commandLabel(command.label) }));
                   } catch {
-                    setCopyError('无法访问剪贴板，请选择下方命令手动复制。');
+                    setCopyError(t("无法访问剪贴板，请选择下方命令手动复制。"));
                   }
                 })()
               }
             >
-              <Copy size={15} aria-hidden="true" />
-              复制命令
-            </button>
+              <Copy size={15} aria-hidden="true" />{t("复制命令")}</button>
           </div>
-          <p>{command.description}</p>
-          <pre tabIndex={0} aria-label={`${command.label}命令`}>
-            <code>{command.command}</code>
+          <p>{translate(locale, command.description)}</p>
+          <pre tabIndex={0} aria-label={t('{name}命令', { name: commandLabel(command.label) })}>
+            <code>{translate(locale, command.command)}</code>
           </pre>
         </section>
       ))}
       {resource.value?.commands.length === 0 && (
-        <p className="administration-empty">
-          服务端未提供维护命令。请查阅部署环境的 CLI 帮助，不要尝试在线恢复。
-        </p>
+        <p className="administration-empty">{t("服务端未提供维护命令。请查阅部署环境的 CLI 帮助，不要尝试在线恢复。")}</p>
       )}
     </div>
   );
@@ -1067,6 +1004,7 @@ function SystemPanel({
   onDirty: (dirty: boolean) => void;
   writable: boolean;
 }) {
+  const { t } = useLocale();
   const resource = useResource<TurnstileAdminSettings>('/admin/turnstile');
   const [config, setConfig] = useState<TurnstileAdminSettings>();
   const [secret, setSecret] = useState('');
@@ -1088,29 +1026,29 @@ function SystemPanel({
   return (
     <div className="administration-stack">
       <header>
-        <h3>系统状态与登录安全</h3>
-        <p>后台配置与认证开关分离；此页面不更改服务器启动时的认证模式。</p>
+        <h3>{t("系统状态与登录安全")}</h3>
+        <p>{t("后台配置与认证开关分离；此页面不更改服务器启动时的认证模式。")}</p>
       </header>
       <dl className="administration-stats">
         <div>
-          <dt>登录认证</dt>
-          <dd>{status.authenticationEnabled ? '已开启' : '保持关闭'}</dd>
+          <dt>{t("登录认证")}</dt>
+          <dd>{status.authenticationEnabled ? t("已开启") : t("保持关闭")}</dd>
         </div>
         <div>
-          <dt>管理访问</dt>
-          <dd>{status.mode === 'local' ? '本机管理' : '管理员会话'}</dd>
+          <dt>{t("管理访问")}</dt>
+          <dd>{status.mode === 'local' ? t("本机管理") : t("管理员会话")}</dd>
         </div>
         <div>
-          <dt>持久化后端</dt>
+          <dt>{t("持久化后端")}</dt>
           <dd>{status.storage.backend}</dd>
         </div>
         <div>
-          <dt>已加载租户</dt>
+          <dt>{t("已加载租户")}</dt>
           <dd>{status.runtime.tenantCount}</dd>
         </div>
       </dl>
       <div className="administration-card">
-        <h4>数据库运行概览</h4>
+        <h4>{t("数据库运行概览")}</h4>
         {status.storage.profiles.length ? (
           <ul className="administration-sessions">
             {status.storage.profiles.map((profile) => (
@@ -1121,24 +1059,21 @@ function SystemPanel({
                     {profile.driver} · {profile.database}
                   </small>
                 </span>
-                <span>{profile.ownerCount} 个租户</span>
+                <span>{t('{count} 个租户', { count: profile.ownerCount })}</span>
               </li>
             ))}
           </ul>
         ) : (
-          <p>暂无 SQL 存储配置。</p>
+          <p>{t("暂无 SQL 存储配置。")}</p>
         )}
-        <p>
-          运行时状态：{status.storage.active ? '存储已激活；配置只读' : '存储未激活'}
-          。恢复与迁移必须停服；日常备份可使用“备份与维护”中的在线任务。
-        </p>
+        <p>{t('运行时状态：{state}。恢复与迁移必须停服；日常备份可使用“备份与维护”中的在线任务。', { state: status.storage.active ? t('存储已激活；配置只读') : t('存储未激活') })}</p>
       </div>
       {writable && (
         <div className="administration-card">
           <AccountAdminSettings request={accountAdminRequest} />
         </div>
       )}
-      {!writable && <p className="administration-callout">当前角色仅可查看安全设置，不能修改。</p>}
+      {!writable && <p className="administration-callout">{t("当前角色仅可查看安全设置，不能修改。")}</p>}
       <Feedback error={operation.error} notice={operation.notice} />
       <LoadState loading={resource.loading} error={resource.error} retry={resource.reload} />
       {config && (
@@ -1150,8 +1085,8 @@ function SystemPanel({
             void (async () => {
               if (
                 !(await confirm(
-                  '保存 Cloudflare Turnstile 配置？请先确认合法域名、站点密钥和服务端密钥匹配；错误配置可能阻止用户登录。此操作不会开启登录认证。',
-                  { title: '更新登录验证', confirmText: '确认保存' },
+                  t("保存 Cloudflare Turnstile 配置？请先确认合法域名、站点密钥和服务端密钥匹配；错误配置可能阻止用户登录。此操作不会开启登录认证。"),
+                  { title: t('更新登录验证'), confirmText: t('确认保存') },
                 ))
               )
                 return;
@@ -1170,7 +1105,7 @@ function SystemPanel({
                   setDirty(false);
                   onDirty(false);
                   resource.reload();
-                }, '人机验证设置已保存，登录认证开关保持不变。');
+                }, t("人机验证设置已保存，登录认证开关保持不变。"));
               } finally {
                 setSecret('');
               }
@@ -1178,7 +1113,7 @@ function SystemPanel({
           }}
         >
           <h4>Cloudflare Turnstile</h4>
-          <p>仅作用于已启用的登录流程；本机模式下配置此项不会启用登录。</p>
+          <p>{t("仅作用于已启用的登录流程；本机模式下配置此项不会启用登录。")}</p>
           <fieldset
             disabled={!writable || operation.busy || resource.loading || !!resource.error}
             className="administration-fields"
@@ -1188,9 +1123,7 @@ function SystemPanel({
                 type="checkbox"
                 checked={config.enabled}
                 onChange={(event) => change({ enabled: event.target.checked })}
-              />
-              启用登录人机验证
-            </label>
+              />{t("启用登录人机验证")}</label>
             <label>
               Site Key
               <input
@@ -1207,34 +1140,28 @@ function SystemPanel({
                 autoComplete="new-password"
                 required={config.enabled && !config.hasSecret}
                 value={secret}
-                placeholder={config.hasSecret ? '已配置；留空保留现有密钥' : '未配置'}
+                placeholder={config.hasSecret ? t("已配置；留空保留现有密钥") : t("未配置")}
                 onChange={(event) => {
                   setSecret(event.target.value);
                   setDirty(true);
                   onDirty(true);
                 }}
               />
-              <small>密钥仅发送到服务端，不回显、不存入浏览器存储。</small>
+              <small>{t("密钥仅发送到服务端，不回显、不存入浏览器存储。")}</small>
             </label>
-            <label>
-              预期 Action
-              <input
+            <label>{t("预期 Action")}<input
                 value={config.action || ''}
                 onChange={(event) => change({ action: event.target.value })}
               />
             </label>
-            <label>
-              预期 Hostname
-              <input
+            <label>{t("预期 Hostname")}<input
                 value={config.hostname || ''}
-                placeholder="例如 novel.example.com"
+                placeholder={t("例如 novel.example.com")}
                 onChange={(event) => change({ hostname: event.target.value })}
               />
             </label>
             <div className="administration-actions administration-full">
-              <button type="submit" className="is-primary" disabled={!dirty}>
-                保存验证设置
-              </button>
+              <button type="submit" className="is-primary" disabled={!dirty}>{t("保存验证设置")}</button>
             </div>
           </fieldset>
         </form>
@@ -1252,40 +1179,41 @@ function OverviewPanel({
   navigate: (tab: Tab) => void;
   allowed: (permission: Permission) => boolean;
 }) {
+  const { t } = useLocale();
   return (
     <div className="administration-stack">
       <header className="administration-overview-hero">
         <span className="administration-eyebrow">ADMIN WORKSPACE</span>
-        <h3>让管理更有条理，让数据更安心。</h3>
-        <p>日常管理在这里完成，复杂运维按需展开。所有配置以服务端校验为准。</p>
+        <h3>{t("让管理更有条理，让数据更安心。")}</h3>
+        <p>{t("日常管理在这里完成，复杂运维按需展开。所有配置以服务端校验为准。")}</p>
         <button className="is-primary" type="button" onClick={() => navigate('backup')}>
-          <HardDrive size={16} aria-hidden="true" /> 备份与维护 <ArrowRight size={15} aria-hidden="true" />
+          <HardDrive size={16} aria-hidden="true" />{t("备份与维护")}<ArrowRight size={15} aria-hidden="true" />
         </button>
       </header>
       <dl className="administration-stats">
         <div>
-          <dt>登录认证</dt>
-          <dd>{status.authenticationEnabled ? '已开启' : '未开启'}</dd>
-          <small>不会因保存设置自动开启</small>
+          <dt>{t("登录认证")}</dt>
+          <dd>{status.authenticationEnabled ? t("已开启") : t("未开启")}</dd>
+          <small>{t("不会因保存设置自动开启")}</small>
         </div>
         <div>
-          <dt>用户账号</dt>
+          <dt>{t("用户账号")}</dt>
           <dd>{status.userCount ?? '—'}</dd>
-          <small>{status.configured ? '已完成管理员初始化' : '尚未初始化，不影响本机使用'}</small>
+          <small>{status.configured ? t("已完成管理员初始化") : t("尚未初始化，不影响本机使用")}</small>
         </div>
         <div>
-          <dt>数据存储</dt>
+          <dt>{t("数据存储")}</dt>
           <dd>{status.storage.backend}</dd>
-          <small>{status.storage.profiles.length} 个数据库配置</small>
+          <small>{t('{count} 个数据库配置', { count: status.storage.profiles.length })}</small>
         </div>
         <div>
-          <dt>租户运行时</dt>
+          <dt>{t("租户运行时")}</dt>
           <dd>{status.runtime.tenantCount}</dd>
-          <small>当前已加载数量，非在线人数</small>
+          <small>{t("当前已加载数量，非在线人数")}</small>
         </div>
       </dl>
       <div className="administration-quick-grid">
-        {[
+        {([
           {
             tab: 'backup' as const,
             icon: HardDrive,
@@ -1314,15 +1242,15 @@ function OverviewPanel({
             text: '配置账号功能和人机验证。',
             action: '管理安全策略',
           },
-        ]
+        ] as const)
           .filter(({ tab }) => allowed(tabPermissions[tab]))
           .map(({ tab, icon: Icon, title, text, action }) => (
             <section className="administration-card administration-quick-card" key={tab}>
               <Icon size={21} aria-hidden="true" />
-              <h4>{title}</h4>
-              <p>{text}</p>
+              <h4>{t(title)}</h4>
+              <p>{t(text)}</p>
               <button type="button" onClick={() => navigate(tab)}>
-                {action}
+                {t(action)}
                 <ArrowRight size={14} aria-hidden="true" />
               </button>
             </section>
@@ -1331,24 +1259,16 @@ function OverviewPanel({
       <div className="administration-callout administration-guidance">
         <CheckCircle2 size={19} aria-hidden="true" />
         <div>
-          <strong>推荐的轻量运维方式</strong>
-          <p>
-            重要变更前创建备份 → 选择备份校验完整性 → 需要恢复时生成离线计划。恢复和迁移始终在停服后执行。
-          </p>
+          <strong>{t("推荐的轻量运维方式")}</strong>
+          <p>{t("重要变更前创建备份 → 选择备份校验完整性 → 需要恢复时生成离线计划。恢复和迁移始终在停服后执行。")}</p>
         </div>
       </div>
       {!status.configured && allowed('maintenance.commands') && (
         <details className="administration-advanced">
           <summary>
-            <LockKeyhole size={16} aria-hidden="true" /> 可选：初始化超级管理员
-          </summary>
-          <p>
-            本机模式无需先创建账号。需要用户管理时，在服务器终端通过 CLI
-            初始化首位超级管理员；不能在网页绕过引导。初始化不会开启登录认证，启用认证需按部署说明配置并重启。
-          </p>
-          <button type="button" onClick={() => navigate('backup')}>
-            查看高级运维命令
-          </button>
+            <LockKeyhole size={16} aria-hidden="true" />{t("可选：初始化超级管理员")}</summary>
+          <p>{t("本机模式无需先创建账号。需要用户管理时，在服务器终端通过 CLI 初始化首位超级管理员；不能在网页绕过引导。初始化不会开启登录认证，启用认证需按部署说明配置并重启。")}</p>
+          <button type="button" onClick={() => navigate('backup')}>{t("查看高级运维命令")}</button>
         </details>
       )}
     </div>
@@ -1462,6 +1382,19 @@ export default function Administration({ close, mode }: { close: () => void; mod
               </section>
               <section
                 role="tabpanel"
+                id={`${id}-panel-usage`}
+                aria-labelledby={`${id}-tab-usage`}
+                hidden={tab !== 'usage'}
+                tabIndex={0}
+              >
+                {tab === 'usage' && allowed('usage.read') && (
+                  <Suspense fallback={<p role="status">{t('正在读取服务端状态…')}</p>}>
+                    <TokenUsagePanel />
+                  </Suspense>
+                )}
+              </section>
+              <section
+                role="tabpanel"
                 id={`${id}-panel-users`}
                 aria-labelledby={`${id}-tab-users`}
                 hidden={tab !== 'users'}
@@ -1471,9 +1404,7 @@ export default function Administration({ close, mode }: { close: () => void; mod
                   (status.configured ? (
                     <UsersPanel mode={mode} actor={actor} onBusy={setBusy} changed={resource.reload} />
                   ) : (
-                    <p className="administration-empty">
-                      完成 CLI 引导后，刷新状态即可管理用户。登录认证仍保持原有设置。
-                    </p>
+                    <p className="administration-empty">{t("完成 CLI 引导后，刷新状态即可管理用户。登录认证仍保持原有设置。")}</p>
                   ))}
               </section>
               <section
@@ -1506,8 +1437,7 @@ export default function Administration({ close, mode }: { close: () => void; mod
                 {allowed('maintenance.commands') && (
                   <details className="administration-advanced">
                     <summary>
-                      <Terminal size={16} aria-hidden="true" /> 高级运维：初始化、停服恢复与迁移命令
-                    </summary>
+                      <Terminal size={16} aria-hidden="true" />{t("高级运维：初始化、停服恢复与迁移命令")}</summary>
                     <MaintenancePanel />
                   </details>
                 )}

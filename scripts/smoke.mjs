@@ -224,12 +224,12 @@ try {
   await page.getByRole('button', { name: /小说设定库/ }).click();
   await page.getByRole('button', { name: '世界与地图' }).click();
   await page.getByLabel('选择当前列表全部资料').check();
-  assert.match(await page.locator('.asset-bulk-toolbar').innerText(), /已选择 3 \/ /);
+  assert.match(await page.locator('.asset-bulk-toolbar').innerText(), new RegExp(`已选择3 / ${originalAssetCount + 3} 份`));
   await page.getByLabel('选择当前列表全部资料').uncheck();
   await page.getByRole('button', { name: /全部资料/ }).click();
   await page.getByLabel('选择 烟雨城').check();
   await page.getByLabel('选择 巡夜人').check();
-  assert.match(await page.locator('.asset-bulk-toolbar').innerText(), new RegExp(`已选择 2 / ${originalAssetCount + 3} 份`));
+  assert.match(await page.locator('.asset-bulk-toolbar').innerText(), new RegExp(`已选择2 / ${originalAssetCount + 3} 份`));
   await page.getByRole('button', { name: '删除所选' }).click();
   await page.getByRole('alertdialog', { name: '请确认' }).getByText(/已选中的 2 份资料/).waitFor();
   await page.getByRole('alertdialog', { name: '请确认' }).getByRole('button', { name: '确定' }).click();

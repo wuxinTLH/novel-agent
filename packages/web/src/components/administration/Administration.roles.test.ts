@@ -9,7 +9,8 @@ const gate = readFileSync(new URL('../auth/AuthGate.tsx', import.meta.url), 'utf
 
 test('console navigation uses explicit admin.access rather than role weight or superadmin equality', () => {
   assert.match(gate, /hasPermission\(user\.role, 'admin\.access'\)/);
-  assert.match(gate, /ROLES\[user\.role\]/);
+  assert.match(gate, /superadmin: '超级管理员', admin: '管理员', operations: '运维管理员', writer: '作家'/);
+  assert.match(gate, /\[user\.role\] \?\? '未知角色'/);
   assert.doesNotMatch(gate, /user\.role === 'superadmin'/);
   assert.deepEqual(
     ROLE_IDS.filter((role) => hasPermission(role, 'admin.access')),
@@ -27,8 +28,10 @@ test('authenticated console fails closed before session authority resolves', () 
   assert.match(administration, /status && actor && allowed\('admin\.access'\)/);
 });
 
-test('operations cannot mount user, security or CLI resource panels and storage stays read-only', () => {
-  for (const permission of ['users.read', 'security.read', 'maintenance.commands', 'storage.manage'] as const)
+test('operations cannot mount usage, user, security or CLI resource panels and storage stays read-only', () => {
+  assert.match(administration, /usage: 'usage\.read'/);
+  assert.match(administration, /tab === 'usage' && allowed\('usage\.read'\) && \(\s*<Suspense[^>]*>[\s\S]*?<TokenUsagePanel/);
+  for (const permission of ['usage.read', 'users.read', 'security.read', 'maintenance.commands', 'storage.manage'] as const)
     assert.equal(hasPermission('operations', permission), false);
   assert.match(administration, /allowed\('users\.read'\) &&/);
   assert.match(administration, /allowed\('security\.read'\) &&/);
@@ -63,7 +66,9 @@ test('role selectors display all canonical labels with exact non-hierarchical we
     ROLE_IDS.map((role) => ROLES[role].weight),
     [1000, 99, 100, 10],
   );
-  assert.match(administration, /ROLES\[role\]\.label.*ROLES\[role\]\.weight/);
+  assert.match(administration, /const roleLabel = \(role: AuthRole, t: Translator\) => t\(/);
+  assert.match(administration, /role: t\(roleNames\[role\]\), weight: ROLES\[role\]\.weight/);
+  for (const role of ROLE_IDS) assert.ok(administration.includes(`${role}: '${ROLES[role].label}'`));
   assert.match(administration, /ROLE_IDS\.map\(\(candidate\)/);
   assert.match(administration, /creationRoles\.map\(\(candidate\)/);
 });

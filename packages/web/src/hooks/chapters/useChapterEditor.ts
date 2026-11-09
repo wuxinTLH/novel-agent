@@ -1,3 +1,4 @@
+import { runtimeT } from "../../locals/runtimeTranslate";
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Chapter, Project } from '../../../../../shared/types';
 import { projectIdentity, sortedChapters, workflowIdOf } from '../generation/generationState';
@@ -220,7 +221,7 @@ export function useChapterEditor(project: Project | null, active: boolean) {
     hasDirtyDrafts,
     draftIdentityReady: !!actor,
     draftWarning: draftStore.current.failed
-      ? '浏览器草稿存储不可用，文字仍保留在本次会话中；离开前请保存或导出。'
-      : !actor ? '正在确认草稿身份；请在离开前保存或导出。' : '',
+      ? runtimeT("浏览器草稿存储不可用，文字仍保留在本次会话中；离开前请保存或导出。")
+      : !actor ? runtimeT("正在确认草稿身份；请在离开前保存或导出。") : '',
   };
 }

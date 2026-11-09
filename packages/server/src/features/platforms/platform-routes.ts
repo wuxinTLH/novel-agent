@@ -49,6 +49,7 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
   for (const suffix of [
     'platform-extension-pairings',
     'platform-staging',
+    'platform-deletion-blockers',
     'platform-publication-batches',
     'platform-connections',
     'platform-login',
@@ -176,6 +177,7 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
   });
   router.get('/platforms/providers', (_req, res) => res.json(runtime.registry.providers()));
   router.get('/platforms/session', (_req, res) => res.json(runtime.status()));
+  router.get('/platforms/deleted-project-records', (_req, res) => res.json(runtime.deletedProjectRecords()));
   router.get(`${base}/platform-connections`, (req, res) =>
     res.json(runtime.platforms.connections(pid(req)).map((record) => runtime.publicConnection(record))),
   );
@@ -400,6 +402,7 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
     z.object({ confirmed: z.literal(true), acknowledgeDuplicateRisk: z.literal(true) }).strict().parse(req.body);
     res.json(runtime.clearStaging(pid(req)));
   });
+  router.get(`${base}/platform-deletion-blockers`, (req, res) => res.json(runtime.deletionBlockers(pid(req))));
   const batchBase = `${base}/platform-publication-batches`;
   const batchFor = (req: Request) => {
     const batch = runtime.publications.get(String(req.params.batchId));
@@ -428,6 +431,10 @@ export function createPlatformRouter(store: Store, runtime: PlatformRuntime) {
     const input = z.object({ candidates: z.record(identifier, z.string().regex(/^[A-Za-z0-9_-]{2,160}$/)).optional() }).strict().parse(req.body ?? {});
     runtime.assertProjectIdle(pid(req));
     res.json(await runtime.reconcilePublication(pid(req), batchFor(req).id, input.candidates));
+  });
+  router.post(`${batchBase}/:batchId/cancel`, (req, res) => {
+    const input = z.object({ confirmed: z.literal(true), approvalHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(req.body);
+    res.json(runtime.cancelPublication(pid(req), batchFor(req).id, input.approvalHash));
   });
   router.post(`${batchBase}/:batchId/pause`, (req, res) => {
     z.object({}).strict().parse(req.body);

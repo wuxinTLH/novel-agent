@@ -180,6 +180,22 @@ for (const dialect of ['postgresql', 'mysql', 'sqlserver'] as const) {
     await f.storage.close();
     assert.equal(f.counts().closed, true);
   });
+  test(`${dialect}: chapter analysis canonical passthrough survives owner-scoped SQL roundtrip`, async () => {
+    const f = fixture(dialect);
+    await f.storage.migrate();
+    const source = JSON.parse(projectDocument());
+    source[0].chapterAnalyses = [{ id: 'analysis', requestId: 'request', status: 'done', modelId: 'model', modelName: 'Model',
+      selection: { kind: 'recent', count: 1 }, createdAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:01Z',
+      sourceChapters: [{ id: 'chapter', number: 1, title: 'Chapter', revision: 1, hash: 'a'.repeat(64) }], report: '第1章观察与建议' }];
+    await f.storage.writeDocument('analysis-owner', 'projects.json', JSON.stringify(source), 0);
+    await f.storage.writeDocument('other-owner', 'projects.json', projectDocument(), 0);
+    assert.deepEqual(JSON.parse((await f.storage.readDocument('analysis-owner', 'projects.json'))!.content), source);
+    assert.equal(JSON.parse((await f.storage.readDocument('other-owner', 'projects.json'))!.content)[0].chapterAnalyses, undefined);
+    source[0].chapterAnalyses[0].report = 'Updated report';
+    await f.storage.writeDocument('analysis-owner', 'projects.json', JSON.stringify(source), 1);
+    assert.deepEqual(JSON.parse((await f.storage.readDocument('analysis-owner', 'projects.json'))!.content), source);
+    await f.storage.close();
+  });
   test(`${dialect}: incremental owner-scoped projections and transactional rollback`, async () => {
     const f = fixture(dialect);
     await f.storage.migrate();

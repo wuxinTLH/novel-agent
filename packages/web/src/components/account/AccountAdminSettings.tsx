@@ -85,7 +85,7 @@ export function AccountAdminSettings({
     }
   }
   if (!config)
-    return <p role={notice ? 'alert' : 'status'}>{t(notice ? '无法读取账户配置' : '正在读取账户配置…')}</p>;
+    return <p role={notice ? 'alert' : 'status'}>{t(notice ? "无法读取账户配置" : "正在读取账户配置…")}</p>;
   const toggle = (key: Flag) => setConfig({ ...config, [key]: !config[key] });
   const enabled = flags.filter(([key]) => config[key]).length + Number(config.oidc.enabled);
   return (
@@ -189,8 +189,8 @@ export function AccountAdminSettings({
                 <small>
                   {t(
                     config.oidc.hasClientSecret
-                      ? '已保存客户端密钥，服务端不会返回明文。'
-                      : '尚未保存客户端密钥。',
+                      ? "已保存客户端密钥，服务端不会返回明文。"
+                      : "尚未保存客户端密钥。",
                   )}
                 </small>
               </label>
@@ -214,12 +214,12 @@ export function AccountAdminSettings({
         </span>
         <button type="submit" className="is-primary" disabled={busy || !dirty}>
           <Save size={15} />
-          {t(busy ? '正在保存…' : '保存配置')}
+          {t(busy ? "正在保存…" : "保存配置")}
         </button>
       </footer>
       {notice && (
         <p className="account-admin__result" role={notice === 'saved' ? 'status' : 'alert'}>
-          {t(notice === 'saved' ? '配置已保存。启用的功能需要再进行实际邮件/提供商验收。' : '配置保存失败')}
+          {t(notice === 'saved' ? "配置已保存。启用的功能需要再进行实际邮件/提供商验收。" : "配置保存失败")}
           {notice === 'saveError' && detail ? ` ${detail}` : ''}
         </p>
       )}

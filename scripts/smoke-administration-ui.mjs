@@ -137,6 +137,7 @@ try {
     .click();
   const dialog = page.getByRole('dialog', { name: '管理控制台', exact: true });
   const overview = dialog.getByRole('tab', { name: '工作台', exact: true });
+  const usage = dialog.getByRole('tab', { name: 'Token 使用统计', exact: true });
   const users = dialog.getByRole('tab', { name: /^用户/ });
   const backup = dialog.getByRole('tab', { name: '备份与维护', exact: true });
   await overview.waitFor();
@@ -151,7 +152,7 @@ try {
 
   stage = 'keyboard tab accessibility and unconfigured users explanation';
   const tabs = dialog.getByRole('tab');
-  assert.equal(await tabs.count(), 5);
+  assert.equal(await tabs.count(), 6);
   const checkTab = async (tab) => {
     assert.equal(await tab.getAttribute('aria-selected'), 'true');
     assert.equal(await tab.getAttribute('tabindex'), '0');
@@ -169,6 +170,8 @@ try {
   };
   await overview.focus();
   await overview.press('ArrowDown');
+  await checkTab(usage);
+  await usage.press('ArrowDown');
   await checkTab(users);
   await dialog
     .getByText('完成 CLI 引导后，刷新状态即可管理用户。登录认证仍保持原有设置。', { exact: true })

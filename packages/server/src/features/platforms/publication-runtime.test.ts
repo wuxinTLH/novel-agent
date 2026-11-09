@@ -8,6 +8,9 @@ import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { Store } from '../projects/store.js';
+import { projectsService } from '../projects/projects.js';
+import { installHttpPolicy, installHttpFallbacks } from '../../core/http.js';
+import type { ServiceContext } from '../../core/context.js';
 import { PlatformRuntime } from './platform-runtime.js';
 import { createPlatformRouter } from './platform-routes.js';
 import { type BrowserSessionState, type DraftBrowserAdapter, type VerifiedDraft } from './platforms-types.js';
@@ -212,6 +215,79 @@ async function routerFixture(t: TestContext) {
   const input = { linkId: f.link.id, chapterIds: f.project.chapters.map((c) => c.id), action: 'save_draft' };
   return { ...f, root, request, input };
 }
+
+test('local deletion diagnostics and safe cancellation are scoped, strict and preserve unknown recovery', async t => {
+  const f = await routerFixture(t);
+  const batch = await f.prepare();
+  f.runtime.publications.approve(batch.id, batch.preview.hash);
+  const url = f.root.replace(/platform-publication-batches$/, 'platform-deletion-blockers');
+  const beforeReads = f.browser.reads.length;
+  const diagnostics = await (await fetch(url)).json();
+  assert.equal(diagnostics.removable, false); assert.equal(diagnostics.busy, false);
+  assert.equal(diagnostics.batches[0].canCancel, true);
+  assert.equal(diagnostics.batches[0].approvalHash, batch.preview.hash);
+  const text = JSON.stringify(diagnostics);
+  assert.ok(!text.includes('完整正文')); assert.ok(!text.includes('contentHash'));
+  assert.equal(f.browser.reads.length, beforeReads);
+  for (const body of [{ approvalHash: batch.preview.hash }, { confirmed: true, approvalHash: batch.preview.hash, extra: true }])
+    assert.equal((await f.request(`/${batch.id}/cancel`, 'POST', body)).status, 400);
+  assert.equal((await f.request(`/${batch.id}/cancel`, 'POST', { confirmed: true, approvalHash: batch.preview.hash }, { 'X-Platform-CSRF': '' })).status, 403);
+  assert.equal((await f.request(`/${batch.id}/cancel`, 'POST', { confirmed: true, approvalHash: '0'.repeat(64) })).status, 409);
+  const other = structuredClone(f.project); other.id = 'other-cancel-project'; f.store.projects.push(other);
+  const crossProject = await fetch(f.root.replace(f.project.id, other.id) + `/${batch.id}/cancel`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Platform-CSRF': f.runtime.csrfToken },
+    body: JSON.stringify({ confirmed: true, approvalHash: batch.preview.hash }),
+  });
+  assert.equal(crossProject.status, 404);
+  assert.equal(f.runtime.publications.get(batch.id).state, 'queued');
+  const response = await f.request(`/${batch.id}/cancel`, 'POST', { confirmed: true, approvalHash: batch.preview.hash });
+  assert.equal(response.status, 200); assert.equal((await response.json()).state, 'cancelled');
+  assert.equal(f.runtime.deletionBlockers(f.project.id).removable, true);
+  assert.equal(f.browser.created.length, 0);
+  const legacy = await f.runtime.prepare(f.project.id, f.link.id, batch.preview.chapters[0].chapterId);
+  // The cancelled queue does not block the legacy entry point, but an unknown outcome still does.
+  f.browser.failAfterSave = true;
+  f.runtime.execute(f.project.id, legacy.id, legacy.snapshot.contentHash, randomUUID());
+  await f.runtime.waitForIdle();
+  assert.equal(f.runtime.deletionBlockers(f.project.id).legacyOperations[0].state, 'unknown');
+  assert.equal(f.runtime.deletionBlockers(f.project.id).removable, false);
+});
+
+test('unknown batch cancellation is rejected and does not discard audit or deduplication', async t => {
+  const f = await routerFixture(t);
+  f.browser.failAfterSave = true;
+  const batch = await f.prepare(); f.start(batch); await f.runtime.waitForIdle();
+  const before = f.runtime.publications.get(batch.id);
+  const result = await f.request(`/${batch.id}/cancel`, 'POST', { confirmed: true, approvalHash: batch.preview.hash });
+  assert.equal(result.status, 409); assert.deepEqual(f.runtime.publications.get(batch.id), before);
+  const diagnostics = f.runtime.deletionBlockers(f.project.id);
+  assert.equal(diagnostics.batches[0].canCancel, false);
+  assert.equal(diagnostics.batches[0].items[0].mutationStarted, true);
+  assert.equal(diagnostics.batches[0].items[0].hasRemoteDraftId, false);
+  await assert.rejects(f.runtime.removeProject(f.project.id), hasCode('PUBLICATION_PENDING'));
+  assert.equal(f.browser.created.length, 1);
+});
+
+test('reconciliation in flight retains delete and clear protections until its exact read settles', async t => {
+  const f = await fixture(t);
+  f.browser.failAfterIdentified = true;
+  const batch = await f.prepare(); f.start(batch); await f.runtime.waitForIdle();
+  let releaseRead!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const original = f.browser.readDraft.bind(f.browser);
+  f.browser.readDraft = async (...args: Parameters<typeof original>) => { entered(); await gate; return original(...args); };
+  const read = f.runtime.reconcilePublication(f.project.id, batch.id);
+  await started;
+  assert.equal(f.runtime.deletionBlockers(f.project.id).busy, true);
+  assert.throws(() => f.runtime.clearStaging(f.project.id), hasCode('PLATFORM_BUSY'));
+  await assert.rejects(f.runtime.removeProject(f.project.id), hasCode('PUBLICATION_PENDING'));
+  assert.throws(() => f.runtime.cancelPublication(f.project.id, batch.id, batch.preview.hash), hasCode('PLATFORM_BUSY'));
+  releaseRead(); await read;
+  assert.equal(f.runtime.publications.isActive(batch.id), false);
+  assert.equal(f.browser.created.length, 1);
+});
 
 test('publication prepare and approval are read-only; explicit start preserves complete sorted snapshots and durable intent', async (t) => {
   const f = await fixture(t);
@@ -652,4 +728,76 @@ test('publication routes inherit localhost, origin, fetch-site and CSRF guards',
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.deepEqual(await response.json(), []);
   assert.equal(f.browser.created.length, 0);
+});
+
+test('explicit project deletion retains unknown evidence, rolls core back, blocks new identities and survives reopen', async t => {
+  const f = await fixture(t);
+  const other = structuredClone(f.project); other.id = 'retained-other-project';
+  other.chapters.forEach(chapter => { chapter.id = `new-${chapter.id}`; });
+  f.store.projects.push(other); f.store.save();
+  f.browser.failAfterSave = true;
+  const batch = await f.prepare(); f.start(batch); await f.runtime.waitForIdle();
+  assert.equal(f.runtime.publications.get(batch.id).state, 'unknown');
+  assert.equal(f.runtime.deletionBlockers(f.project.id).canDeletePreservingRecords, true);
+  const platformBefore = fs.readFileSync(path.join(f.dir, 'platform-connections.json'), 'utf8');
+  const queueBefore = fs.readFileSync(path.join(f.dir, 'publication-queue.json'), 'utf8');
+  const coreDelete = () => {
+    const original = f.store.projects;
+    f.store.projects = original.filter(project => project.id !== f.project.id);
+    try { f.store.save(); } catch (error) { f.store.projects = original; throw error; }
+  };
+  const save = f.store.save.bind(f.store);
+  f.store.save = () => { throw new Error('synthetic core save failure'); };
+  await assert.rejects(f.runtime.removeProjectPreservingRecords(f.project.id, coreDelete), /synthetic core save failure/);
+  assert.ok(f.store.get(f.project.id)); f.store.save = save;
+  assert.equal(f.runtime.isProjectBusy(f.project.id), false);
+  const app = express();
+  const context = { dir: f.dir, store: f.store, platformRuntime: f.runtime } as ServiceContext;
+  const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+  const previousPort = process.env.PORT; process.env.PORT = String(port);
+  installHttpPolicy(app, context, port);
+  app.use('/api', createPlatformRouter(f.store, f.runtime));
+  projectsService.register(app, context); installHttpFallbacks(app, f.dir, { serveWeb: false });
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    if (previousPort === undefined) delete process.env.PORT; else process.env.PORT = previousPort; });
+  const root = `http://127.0.0.1:${port}`;
+  const remove = (body?: unknown, token = f.runtime.csrfToken, id = f.project.id) => fetch(`${root}/api/projects/${id}`, {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json', 'X-Platform-CSRF': token },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const input = { confirmed: true, preservePlatformRecords: true };
+  assert.equal((await remove(input, '')).status, 403);
+  for (const body of [{}, { confirmed: true }, { ...input, extra: true }, { ...input, confirmed: false }])
+    assert.equal((await remove(body)).status, 400);
+  assert.equal((await remove(input, undefined, 'foreign-project')).status, 404);
+  assert.equal((await remove()).status, 409);
+  await f.runtime.withLock(f.project.id, undefined, async () => {
+    assert.equal(f.runtime.deletionBlockers(f.project.id).canDeletePreservingRecords, false);
+    assert.equal((await remove(input)).status, 409);
+  });
+  const response = await remove(input); assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).map((project: { id: string }) => project.id), [other.id]);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'platform-connections.json'), 'utf8'), platformBefore);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'publication-queue.json'), 'utf8'), queueBefore);
+  const metadata = await (await fetch(`${root}/api/platforms/deleted-project-records`)).json();
+  assert.equal(metadata[0].projectId, f.project.id); assert.equal(metadata[0].batches[0].state, 'unknown');
+  assert.ok(!JSON.stringify(metadata).includes('完整正文')); assert.ok(!JSON.stringify(metadata).includes('credentialRef'));
+  const retained = f.runtime.publications.get(batch.id);
+  const connection = { ...f.runtime.platforms.connections(f.project.id)[0], id: 'replacement-connection', projectId: other.id };
+  f.runtime.platforms.putConnection(connection);
+  const link = { ...f.link, id: 'replacement-link', connectionId: connection.id, projectId: other.id };
+  f.runtime.platforms.putLink(link);
+  await assert.rejects(f.runtime.preparePublication(other.id, link.id, other.chapters.map(chapter => chapter.id), 'save_draft'), hasCode('PLATFORM_ORPHAN_UNKNOWN'));
+  const legacyPreview = await f.runtime.prepare(other.id, link.id, other.chapters[0].id);
+  assert.throws(() => f.runtime.execute(other.id, legacyPreview.id, legacyPreview.snapshot.contentHash, randomUUID()), hasCode('PLATFORM_ORPHAN_UNKNOWN'));
+  assert.equal(f.browser.created.length, 1, 'no write through a new chapter or legacy entry point');
+  assert.throws(() => f.runtime.publications.start(batch.id, { approvalHash: retained.preview.hash, requestId: randomUUID() }), hasCode('PROJECT_NOT_FOUND'));
+  await f.runtime.close();
+  const reopened = new PlatformRuntime(new Store(f.dir), { browser: new PublicationFixtureBrowser() });
+  try {
+    assert.equal(reopened.deletedProjectRecords()[0].batches[0].state, 'unknown');
+    assert.throws(() => reopened.assertNoUnknownOrphan(retained.preview.target), hasCode('PLATFORM_ORPHAN_UNKNOWN'));
+    assert.deepEqual(reopened.publications.get(batch.id), retained);
+  } finally { await reopened.close(); }
 });

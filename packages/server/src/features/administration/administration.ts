@@ -1,4 +1,5 @@
 import express, { type Request } from 'express';
+import { tokenUsageLedger, usageRange } from './token-usage.js';
 import { hasPermission, type Permission } from '../../../../../shared/permissions.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AuthService } from '../auth/auth.js';
@@ -68,7 +69,8 @@ export function createAdministrationRouter(options: {
     // Classify every management endpoint explicitly; unknown routes never inherit access.
     const route = req.path.toLowerCase().replace(/\/$/, '') || '/';
     let permission: Permission | undefined;
-    if (route === '/status') permission = 'admin.status.read';
+    if (route === '/token-usage' && read) permission = 'usage.read';
+    else if (route === '/status') permission = 'admin.status.read';
     else if (route === '/storage') permission = read ? 'storage.read' : 'storage.manage';
     else if (route === '/maintenance') permission = 'maintenance.commands';
     else if (route === '/online-maintenance' || (read && /^\/online-maintenance\/tasks\/[^/]+$/.test(route)))
@@ -101,6 +103,12 @@ export function createAdministrationRouter(options: {
         authorize: (_req, _res, next) => next(),
       }),
     );
+  router.get('/token-usage', (req, res) => {
+    try { usageRange(req.query.from, req.query.to, req.query.model); }
+    catch { return res.status(400).json({ code: 'TOKEN_USAGE_RANGE_INVALID', error: '请提供有效 UTC 日期，范围最多包含 31 天。' }); }
+    try { return res.json(tokenUsageLedger(options.dir).query(req.query.from, req.query.to, req.query.model)); }
+    catch { return res.status(503).json({ code: 'TOKEN_USAGE_STORAGE_UNAVAILABLE', error: 'Token 统计存储不可用。' }); }
+  });
   const profiles = () => readStorageProfiles(options.dir);
   router.get('/status', (_req, res) => {
     const config = profiles();

@@ -604,8 +604,8 @@ p {
 .page-content:has(.chapter-workspace) {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 58px);
-  overflow: hidden;
+  height: auto;
+  overflow: visible;
 }
 .page-content:has(.chapter-workspace) > .page-heading {
   flex: 0 0 auto;
@@ -613,8 +613,8 @@ p {
 .page-content:has(.chapter-workspace) > .generation-progress,
 .page-content:has(.chapter-workspace) > .generation-candidates {
   flex: 0 0 auto;
-  max-height: 180px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
 }
 .page-heading {
   display: flex;
@@ -4468,6 +4468,7 @@ h1 {
     right: 14px;
     bottom: 14px;
     left: 14px;
+    transform: none;
     max-width: none;
     justify-content: center;
     min-height: 42px;
@@ -5689,8 +5690,21 @@ input[type='range'] {
   gap: 18px;
 }
 .page-content:has(.chapter-workspace) {
-  height: calc(100dvh - 64px);
-  min-height: 580px;
+  height: auto;
+  min-height: calc(100dvh - 64px);
+}
+.page-content:has(.chapter-workspace) > .chapter-workspace {
+  flex: none;
+  height: max(620px, calc(100dvh - 200px));
+}
+@media (max-width: 760px) {
+  .page-content:has(.chapter-workspace) > .chapter-workspace {
+    height: auto;
+    min-height: 760px;
+  }
+  .page-content:has(.chapter-workspace) .chapter-editor {
+    min-height: 550px;
+  }
 }
 .chapter-picker {
   min-width: 0;
@@ -6050,6 +6064,15 @@ input[type='range'] {
   .publication-selection-actions > div {
     flex-wrap: wrap;
     gap: 8px;
+  }
+  .platform-panel .button {
+    max-width: 100%;
+    min-width: 0;
+    height: auto;
+    min-height: 37px;
+    padding-block: 9px;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .platform-actions .button {
     flex: 1 1 auto;

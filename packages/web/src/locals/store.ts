@@ -1,4 +1,4 @@
-import { DEFAULT_LOCALE, normalizeLocale, type Locale } from './core';
+import { DEFAULT_LOCALE, normalizeLocale, translate, type Locale } from './core';
 
 export const LOCALE_STORAGE_KEY = 'novel-locale';
 type Listener = () => void;
@@ -19,7 +19,10 @@ export function createLocaleStore(
   let stopListening: (() => void) | undefined;
   const updateLanguage = () => {
     const browser = environment();
-    if (browser?.document?.documentElement) browser.document.documentElement.lang = locale;
+    if (browser?.document?.documentElement) {
+      browser.document.documentElement.lang = locale;
+      browser.document.title = translate(locale, 'Novel Agent · 让故事，自成宇宙');
+    }
   };
   const readStored = (): Locale | undefined => {
     try {

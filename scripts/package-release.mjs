@@ -12,6 +12,7 @@ fs.mkdirSync(output, { recursive: true });
 const stage = path.join(output, 'novel-agent');
 fs.mkdirSync(stage);
 const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+if (files.some(file => file === 'test.jpg' || file === 'token-usage.json' || file.startsWith('.mnemon/') || file === '.mnemon')) throw new Error('Private local artifacts must not enter release archives');
 if (execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' }).trim()) throw new Error('Tracked source must be clean before packaging');
 for (const file of files) {
   if (file !== '.env' && !file.startsWith('data/')) {

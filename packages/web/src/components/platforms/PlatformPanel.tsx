@@ -1,3 +1,6 @@
+import { formatDateTime } from '../../lib/dateTime';
+import { platformErrorText, platformSystemText } from '../../hooks/platforms/localizedPlatformText';
+import { useLocale } from '../../locals/useLocale';
 import type { Project, WorkflowSettings } from '../../../../../shared/types';
 import { useHiddenPlatformRecords } from '../../hooks/platforms/useHiddenPlatformRecords';
 import { accessiblePlatformStep, platformStepAccess, type PlatformStep } from '../../hooks/platforms/platformSteps';
@@ -24,19 +27,14 @@ import type {
   PlatformId,
 } from '../../../../../shared/platforms';
 
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : '操作失败，请稍后查询状态。');
-const dateLabel = (value?: string) => (value ? new Date(value).toLocaleString('zh-CN') : '尚未核验');
-const readinessLabel = (provider?: PlatformProvider) =>
-  provider?.readiness === 'ready' ? '可用' : provider?.readiness === 'mock' ? '本地测试'
-    : provider?.readiness === 'needs_verification' ? '待核验' : '暂未开放';
-const stateLabels: Record<DraftOperation['state'], string> = {
+const stateLabels = {
   queued: '已记录意图，等待执行',
   running: '正在执行',
   verified: '已重新打开核实保存',
   failed: '写入前失败',
   unknown: '结果未知，禁止重发',
   deleted: '远端草稿已删除',
-};
+} as const satisfies Record<DraftOperation['state'], string>;
 
 export default function PlatformPanel({
   projectId,
@@ -47,6 +45,7 @@ export default function PlatformPanel({
   selectedPlatform,
   onSelectPlatform,
   onBackToPlatforms,
+  initialStep,
 }: {
   projectId: string;
   running: boolean;
@@ -56,7 +55,14 @@ export default function PlatformPanel({
   selectedPlatform: PlatformId | null;
   onSelectPlatform: (platform: PlatformId) => void;
   onBackToPlatforms: () => void;
+  initialStep?: PlatformStep;
 }) {
+  const { t } = useLocale();
+  const messageOf = (error: unknown) => (platformErrorText(t, error, "操作失败，请稍后查询状态。"));
+  const dateLabel = formatDateTime;
+  const readinessLabel = (provider?: PlatformProvider) =>
+    provider?.readiness === 'ready' ? t("可用") : provider?.readiness === 'mock' ? t("本地测试")
+      : provider?.readiness === 'needs_verification' ? t("待核验") : t("暂未开放");
   const confirmDialog = useConfirm();
   const base = `/projects/${encodeURIComponent(projectId)}`;
   const [providers, setProviders] = useState<PlatformProvider[]>([]);
@@ -74,7 +80,7 @@ export default function PlatformPanel({
   const [login, setLogin] = useState<PlatformLogin | null>(null);
   const [preview, setPreview] = useState<DraftPreparation | null>(null);
   const [incomingBatch, setIncomingBatch] = useState<PublicationBatch>();
-  const [step, setStep] = useState<PlatformStep>('account');
+  const [step, setStep] = useState<PlatformStep>(initialStep ?? 'account');
   const [batchPreviewReady, setBatchPreviewReady] = useState(false);
   const [batchSelectionVersion, setBatchSelectionVersion] = useState(0);
   const history = useHiddenPlatformRecords(projectId, 'drafts');
@@ -107,7 +113,7 @@ export default function PlatformPanel({
     lifetime.current = controller;
     pending.current = false;
     setIncomingBatch(undefined);
-    setStep('account');
+    setStep(initialStep ?? 'account');
     setBatchPreviewReady(false);
     setBatchSelectionVersion((value) => value + 1);
     setConnectionId('');
@@ -137,7 +143,7 @@ export default function PlatformPanel({
     setPendingWorkId('');
     setWorks([]);
     setIncomingBatch(undefined);
-    setStep('account');
+    setStep(initialStep ?? 'account');
     setBatchPreviewReady(false);
     setBatchSelectionVersion((value) => value + 1);
     selectionVersion.current++;
@@ -170,7 +176,7 @@ export default function PlatformPanel({
         setSession(nextSession);
         setProviders(nextProviders);
         if (!nextSession.available) {
-          setError(nextSession.reason || '平台服务暂不可用。');
+          setError(nextSession.reason || t("平台服务暂不可用。"));
           return;
         }
         const [nextConnections, nextLinks, nextChapters, nextOperations, nextReceipts] = await Promise.all([
@@ -313,7 +319,7 @@ export default function PlatformPanel({
       'POST',
       id ? { connectionId: id } : {},
       setLogin,
-      '登录窗口已就绪：原连接窗口仍在时将复用。请人工核验；本工具不会读取密码、验证码或自动上传。',
+      t("登录窗口已就绪：原连接窗口仍在时将复用。请人工核验；本工具不会读取密码、验证码或自动上传。"),
     );
   const refreshLocal = () => {
     resetPreview();
@@ -332,7 +338,7 @@ export default function PlatformPanel({
           setPendingWorkId((id) => value.some((work) => work.id === id) ? id : '');
         }
       },
-      '已只读获取所选账号的作品；尚未打开编辑器。',
+      t("已只读获取所选账号的作品；尚未打开编辑器。"),
     );
   };
   const prepare = () => {
@@ -360,7 +366,7 @@ export default function PlatformPanel({
             setStep('results');
           }
         },
-        '已处理单章自动授权请求；这不是上传成功回执。请查看下方队列的实际执行状态及远端回读核实结果。',
+        t("已处理单章自动授权请求；这不是上传成功回执。请查看下方队列的实际执行状态及远端回读核实结果。"),
       );
       return;
     }
@@ -375,7 +381,7 @@ export default function PlatformPanel({
           setStep('review');
         }
       },
-      '仅已准备 1 章本地预览，未上传、未保存远端草稿、未提交审核。请在下方核对完整内容并点击“批准并保存这一章草稿”；多章上传请使用“远端上传 / 草稿送审队列”。',
+      t("仅已准备 1 章本地预览，未上传、未保存远端草稿、未提交审核。请在下方核对完整内容并点击“批准并保存这一章草稿”；多章上传请使用“远端上传 / 草稿送审队列”。"),
     );
   };
   const execute = () => {
@@ -396,10 +402,10 @@ export default function PlatformPanel({
         setApproved(false);
         setStep('results');
         if (!['queued', 'running'].includes(value.state)) {
-          setError(`该内容已有操作记录：${stateLabels[value.state]}。本次只返回原记录，没有重新上传；请在“草稿操作与核实回执”核对。`);
+          setError(t("该内容已有操作记录：{value1}。本次只返回原记录，没有重新上传；请在“草稿操作与核实回执”核对。", { value1: t(stateLabels[value.state]) }));
         }
       },
-      '已取得草稿操作记录，请以核实回执为准。关闭本页面不会撤回已到达平台的内容。',
+      t("已取得草稿操作记录，请以核实回执为准。关闭本页面不会撤回已到达平台的内容。"),
       key,
     );
   };
@@ -413,25 +419,25 @@ export default function PlatformPanel({
       'POST',
       { token },
       acceptConnection,
-      '已创建明确标记的本地 Mock 连接，不是真实账号。',
+      t("已创建明确标记的本地 Mock 连接，不是真实账号。"),
     );
   };
 
   if (!selectedPlatform) return (
     <div className="platform-panel" aria-busy={loading}>
       <div className="platform-section-heading">
-        <div><h2>选择平台</h2><p className="platform-help">进入平台后再管理账号、作品与章节上传；此页面不会访问远端或上传正文。</p></div>
-        <button className="button secondary" disabled={loading} onClick={refreshLocal}><RefreshCw size={14} />刷新本地状态</button>
+        <div><h2>{t("选择平台")}</h2><p className="platform-help">{t("进入平台后再管理账号、作品与章节上传；此页面不会访问远端或上传正文。")}</p></div>
+        <button className="button secondary" disabled={loading} onClick={refreshLocal}><RefreshCw size={14} />{t("刷新本地状态")}</button>
       </div>
       {error && <p className="platform-notice" role="alert">{error}</p>}
-      {loading && <p className="platform-loading" role="status"><LoaderCircle className="spin" size={16} />正在读取平台信息…</p>}
+      {loading && <p className="platform-loading" role="status"><LoaderCircle className="spin" size={16} />{t("正在读取平台信息…")}</p>}
       <div className="platform-provider-grid">
         {providers.map((item) => (
           <button type="button" className="platform-card platform-provider-entry" key={item.id} onClick={() => onSelectPlatform(item.id)}>
-            <span className="platform-section-heading"><strong>{item.name}</strong><span className="platform-badge">{readinessLabel(item)}</span></span>
-            <span className="platform-help">{item.description}</span>
-            <span className="platform-help">{connections.filter((connection) => connection.providerId === item.id).length} 个本地账号 · {links.filter((link) => link.providerId === item.id).length} 个已绑定作品</span>
-            <span className="platform-entry-next">进入平台 <ChevronRight size={16} /></span>
+            <span className="platform-section-heading"><strong>{platformSystemText(t, item.name)}</strong><span className="platform-badge">{readinessLabel(item)}</span></span>
+            <span className="platform-help">{platformSystemText(t, item.description)}</span>
+            <span className="platform-help">{t("{accounts} 个本地账号 · {works} 个已绑定作品", { accounts: connections.filter(connection => connection.providerId === item.id).length, works: links.filter(link => link.providerId === item.id).length })}</span>
+            <span className="platform-entry-next">{t("进入平台")}<ChevronRight size={16} /></span>
           </button>
         ))}
       </div>
@@ -441,7 +447,7 @@ export default function PlatformPanel({
   const selectedProvider = providers.find((item) => item.id === selectedPlatform);
   const platformConnections = connections.filter((item) => item.providerId === selectedPlatform);
   const platformLinks = links.filter((item) => item.providerId === selectedPlatform);
-  const workChoices = platformWorkChoices(connectionId, works, platformLinks);
+  const workChoices = platformWorkChoices(connectionId, works, platformLinks, (bound, title, id) => t(bound ? "已绑定 · {title} · {id}" : "未绑定 · {title} · {id}", { title, id }));
   const workSelection = selectedLink ? `link:${selectedLink.id}`
     : workChoices.some((choice) => choice.value === `work:${pendingWorkId}`) ? `work:${pendingWorkId}` : '';
   const supportsDrafts = selectedPlatform === 'tomato';
@@ -452,40 +458,37 @@ export default function PlatformPanel({
   });
   const visibleStep = accessiblePlatformStep(step, stepAccess);
   const steps: { id: PlatformStep; label: string; hint: string }[] = [
-    { id: 'account', label: '核验账号', hint: '人工登录，确认作者身份' },
-    { id: 'work', label: '绑定作品', hint: '选择账号，读取并绑定作品' },
-    { id: 'setup', label: '选择章节', hint: '确定目标、分卷和正文' },
-    { id: 'review', label: '预览并批准', hint: '逐章核对完整内容' },
-    { id: 'results', label: '核对结果', hint: '回读回执与异常处理' },
+    { id: 'account', label: t("核验账号"), hint: t("人工登录，确认作者身份") },
+    { id: 'work', label: t("绑定作品"), hint: t("选择账号，读取并绑定作品") },
+    { id: 'setup', label: t("选择章节"), hint: t("确定目标、分卷和正文") },
+    { id: 'review', label: t("预览并批准"), hint: t("逐章核对完整内容") },
+    { id: 'results', label: t("核对结果"), hint: t("回读回执与异常处理") },
   ];
   return (
     <div className="platform-panel" aria-busy={loading || busy}>
-      <button type="button" className="button secondary platform-back" onClick={onBackToPlatforms}>← 返回平台作品</button>
-      <div className="platform-section-heading"><h2>{selectedProvider?.name || selectedPlatform}</h2><span className="platform-badge">{readinessLabel(selectedProvider)}</span></div>
+      <button type="button" className="button secondary platform-back" onClick={onBackToPlatforms}>{t("← 返回平台作品")}</button>
+      <div className="platform-section-heading"><h2>{selectedProvider ? platformSystemText(t, selectedProvider.name) : selectedPlatform}</h2><span className="platform-badge">{readinessLabel(selectedProvider)}</span></div>
       <div className="platform-notice">
         <ShieldCheck size={18} />
         <p>
-          第三方本机辅助工具，不是番茄官方 API
-          或客户端。仅允许人工登录、完整预览并确认后保存或覆盖草稿及提交审核；支持回读核验，送审不等于已发布，不支持无人值守定时发布。
-        </p>
+          {t("第三方本机辅助工具，不是番茄官方 API 或客户端。仅允许人工登录、完整预览并确认后保存或覆盖草稿及提交审核；支持回读核验，送审不等于已发布，不支持无人值守定时发布。")}</p>
       </div>
       {session && (
         <p className="platform-help">
           {session.persistentCredentials
-            ? '会话通过本机 PLATFORM_SECRETS_KEY 加密保存；身份核验和读取成功后同步浏览器更新的 Cookie。网站真正撤销或过期的会话仍需人工登录，不会绕过验证码。'
-            : '未配置持久加密密钥，会话仅保存在进程内存；重启后须在原连接下重新人工登录，绑定仍保留。'}
+            ? t("会话通过本机 PLATFORM_SECRETS_KEY 加密保存；身份核验和读取成功后同步浏览器更新的 Cookie。网站真正撤销或过期的会话仍需人工登录，不会绕过验证码。")
+            : t("未配置持久加密密钥，会话仅保存在进程内存；重启后须在原连接下重新人工登录，绑定仍保留。")}
         </p>
       )}
       {session?.legacyArchived && (
         <p className="platform-notice">
-          旧“番茄本地发布”的模拟连接、作品、绑定和操作已隔离归档，不能当作真实草稿或远端 ID。
-        </p>
+          {t("旧“番茄本地发布”的模拟连接、作品、绑定和操作已隔离归档，不能当作真实草稿或远端 ID。")}</p>
       )}
-      {running && <p className="platform-notice">工作流运行中，平台操作暂时停用。</p>}
+      {running && <p className="platform-notice">{t("工作流运行中，平台操作暂时停用。")}</p>}
       {error && (
         <div className="error-banner" role="alert">
-          <span>{error} 请求中断时先查询操作记录，不要盲目重发。</span>
-          <button aria-label="关闭平台错误" onClick={() => setError('')}>
+          <span>{error} {t("请求中断时先查询操作记录，不要盲目重发。")}</span>
+          <button aria-label={t("关闭平台错误")} onClick={() => setError('')}>
             <X size={16} />
           </button>
         </div>
@@ -496,8 +499,8 @@ export default function PlatformPanel({
         </p>
       )}
       <div className="platform-step-layout">
-        <nav className="platform-step-nav" aria-label="平台操作步骤">
-          <p className="platform-help">{autoApprove ? '自动审批模式 · 请核对结果' : '手动操作 · 按步骤完成'}</p>
+        <nav className="platform-step-nav" aria-label={t("平台操作步骤")}>
+          <p className="platform-help">{autoApprove ? t("自动审批模式 · 请核对结果") : t("手动操作 · 按步骤完成")}</p>
           {steps.filter((item) => supportsDrafts || item.id === 'account' || item.id === 'work' || item.id === 'results').map((item, index) => (
             <button type="button" key={item.id} className={`platform-step-button ${visibleStep === item.id ? 'is-current' : ''}`}
               aria-current={visibleStep === item.id ? 'step' : undefined} disabled={!stepAccess[item.id]}
@@ -506,49 +509,46 @@ export default function PlatformPanel({
               <span><strong>{item.label}</strong><small>{item.hint}</small></span>
             </button>
           ))}
-          <p className="platform-help">查看步骤不会自动登录、读取作品或上传。结果与异常可随时查看。</p>
+          <p className="platform-help">{t("查看步骤不会自动登录、读取作品或上传。结果与异常可随时查看。")}</p>
         </nav>
         <div className="platform-step-content">
       {visibleStep === 'account' && <>
       <div className="platform-section-heading">
-        <h2>平台连接与能力</h2>
+        <h2>{t("平台连接与能力")}</h2>
         <button className="button secondary" disabled={loading || busy} onClick={refreshLocal}>
           <RefreshCw size={14} />
-          刷新本地状态
-        </button>
+          {t("刷新本地状态")}</button>
       </div>
       {loading && (
         <p className="platform-loading">
           <LoaderCircle className="spin" size={16} />
-          读取本地连接与记录…
-        </p>
+          {t("读取本地连接与记录…")}</p>
       )}
-      {selectedProvider?.readinessReason && <p className="platform-help">{selectedProvider.readinessReason}</p>}
+      {selectedProvider?.readinessReason && <p className="platform-help">{platformSystemText(t, selectedProvider.readinessReason)}</p>}
       {selectedPlatform === 'tomato' && (
         <button className="button primary" disabled={mutateDisabled || !selectedProvider?.capabilities.manualLogin} onClick={() => startLogin(connection?.id)}>
-          <Link2 size={14} />{connection ? '继续当前账号登录 / 核验' : '打开独立浏览器人工登录'}
+          <Link2 size={14} />{connection ? t("继续当前账号登录 / 核验") : t("打开独立浏览器人工登录")}
         </button>
       )}
       {selectedPlatform === 'mock' && (
-        <details className="platform-advanced"><summary>创建本地 Mock 测试连接</summary>
+        <details className="platform-advanced"><summary>{t("创建本地 Mock 测试连接")}</summary>
           <form className="platform-form" onSubmit={connectMock} autoComplete="off">
-            <label>任意非空演示令牌<input type="password" autoComplete="new-password" value={mockToken} onChange={(event) => setMockToken(event.target.value)} disabled={mutateDisabled} /></label>
-            <button className="button secondary" disabled={mutateDisabled || !mockToken.trim()}>创建 Mock 连接</button>
+            <label>{t("任意非空演示令牌")}<input type="password" autoComplete="new-password" value={mockToken} onChange={(event) => setMockToken(event.target.value)} disabled={mutateDisabled} /></label>
+            <button className="button secondary" disabled={mutateDisabled || !mockToken.trim()}>{t("创建 Mock 连接")}</button>
           </form>
         </details>
       )}
-      {!selectedProvider?.available && <p className="platform-notice">该平台目前未开放连接或上传；可以返回选择其他平台。</p>}
+      {!selectedProvider?.available && <p className="platform-notice">{t("该平台目前未开放连接或上传；可以返回选择其他平台。")}</p>}
       {selectedPlatform === 'tomato' && login && (
         <section className="platform-card">
-          <h3>本次人工登录</h3>
-          <p>{login.message}</p>
+          <h3>{t("本次人工登录")}</h3>
+          <p>{platformSystemText(t, login.message)}</p>
           {activeLogin && (
             <p className="platform-help">
-              点击核验后，已打开的隔离浏览器会自动进入番茄作者后台首页并读取登录身份；无需粘贴 Cookie、session 或 token。
-            </p>
+              {t("点击核验后，已打开的隔离浏览器会自动进入番茄作者后台首页并读取登录身份；无需粘贴 Cookie、session 或 token。")}</p>
           )}
           <p className="platform-help">
-            登录状态：{login.status} · 有效至 {dateLabel(login.expiresAt)}
+            {t("登录状态：")}{{ waiting: t("等待登录"), needs_verification: t("待核验"), completed: t("已完成"), closed: t("已关闭") }[login.status]} {t("· 有效至")}{dateLabel(login.expiresAt)}
           </p>
           {activeLogin && (
             <div className="platform-actions">
@@ -565,15 +565,14 @@ export default function PlatformPanel({
                       setLogin({
                         ...login,
                         status: 'completed',
-                        message: '稳定作者身份核验通过，会话已保存。',
+                        message: t("稳定作者身份核验通过，会话已保存。"),
                       });
                     },
-                    '登录验证完成；请显式选择账号后读取作品。',
+                    t("登录验证完成；请显式选择账号后读取作品。"),
                   )
                 }
               >
-                我已登录，核验作者身份
-              </button>
+                {t("我已登录，核验作者身份")}</button>
               <button
                 className="button secondary"
                 disabled={disabled}
@@ -582,21 +581,20 @@ export default function PlatformPanel({
                     `/platform-login/${encodeURIComponent(login.id)}`,
                     'DELETE',
                     undefined,
-                    () => setLogin({ ...login, status: 'closed', message: '登录窗口已关闭，未上传章节。' }),
-                    '已关闭人工登录。',
+                    () => setLogin({ ...login, status: 'closed', message: t("登录窗口已关闭，未上传章节。") }),
+                    t("已关闭人工登录。"),
                   )
                 }
               >
-                关闭登录窗口
-              </button>
+                {t("关闭登录窗口")}</button>
             </div>
           )}
         </section>
       )}
       {selectedProvider?.available && <section className="platform-card">
-        <h3>当前项目连接</h3>
+        <h3>{t("当前项目连接")}</h3>
         {!platformConnections.length && (
-          <p className="platform-empty">当前平台尚无已验证连接。登录窗口打开不等于验证成功。</p>
+          <p className="platform-empty">{t("当前平台尚无已验证连接。登录窗口打开不等于验证成功。")}</p>
         )}
         <div className="platform-list">
           {platformConnections.map((item) => (
@@ -604,12 +602,12 @@ export default function PlatformPanel({
               <div className="platform-row-content">
                 <strong>{item.accountName}</strong>
                 <p className="platform-help">
-                  {item.providerId} · 稳定账号 ID：{item.accountId} ·{' '}
+                  {item.providerId} {t("· 稳定账号 ID：")}{item.accountId} ·{' '}
                   {item.status === 'connected'
-                    ? '本机有会话，远程操作前仍须核验'
+                    ? t("本机有会话，远程操作前仍须核验")
                     : item.status === 'needs_reauth'
-                      ? '需要重新授权'
-                      : '页面适配待验证'}{' '}
+                      ? t("需要重新授权")
+                      : t("页面适配待验证")}{' '}
                   · {dateLabel(item.lastCheckedAt)}
                 </p>
                 {item.providerId === 'mock' && (
@@ -621,7 +619,7 @@ export default function PlatformPanel({
                         'PUT',
                         { token },
                         acceptConnection,
-                        'Mock 连接已重新授权。',
+                        t("Mock 连接已重新授权。"),
                       )
                     }
                   />
@@ -634,8 +632,7 @@ export default function PlatformPanel({
                     disabled={mutateDisabled}
                     onClick={() => startLogin(item.id)}
                   >
-                    继续登录 / 重新核验
-                  </button>
+                    {t("继续登录 / 重新核验")}</button>
                 )}
                 <button
                   className="button secondary"
@@ -646,17 +643,16 @@ export default function PlatformPanel({
                       'POST',
                       {},
                       acceptConnection,
-                      '已核验当前账号。',
+                      t("已核验当前账号。"),
                     )
                   }
                 >
-                  只读核验账号
-                </button>
+                  {t("只读核验账号")}</button>
                 <button
                   className="button secondary"
                   disabled={mutateDisabled || links.some((link) => link.connectionId === item.id)}
                   onClick={async () => {
-                    if (!(await confirmDialog('只删除本机连接与会话，不删除远端作品或草稿。是否继续？')))
+                    if (!(await confirmDialog(t("只删除本机连接与会话，不删除远端作品或草稿。是否继续？"))))
                       return;
                     void action(
                       `/platform-connections/${encodeURIComponent(item.id)}`,
@@ -670,30 +666,27 @@ export default function PlatformPanel({
                           resetPreview();
                         }
                       },
-                      '本机连接已删除，远端内容未改动。',
+                      t("本机连接已删除，远端内容未改动。"),
                     );
                   }}
                 >
-                  删除本机连接
-                </button>
+                  {t("删除本机连接")}</button>
               </div>
             </article>
           ))}
         </div>
       </section>}
       {selectedPlatform === 'tomato' && <ExtensionPairingPanel key={projectId} projectId={projectId} disabled={mutateDisabled} />}
-      {stepAccess.work && <button type="button" className="button primary platform-next" onClick={() => setStep('work')}>下一步：绑定作品 <ChevronRight size={14} /></button>}
+      {stepAccess.work && <button type="button" className="button primary platform-next" onClick={() => setStep('work')}>{t("下一步：绑定作品")}<ChevronRight size={14} /></button>}
       </>}
       {visibleStep === 'work' && <>
       {selectedProvider?.available && <section className="platform-card">
-        <h2>明确选择账号与作品</h2>
+        <h2>{t("明确选择账号与作品")}</h2>
         <p className="platform-help">
-          选择账号不会自动访问远端；点击“只读读取作品”后才查询。真实番茄不提供创建或修改作品功能。
-        </p>
+          {t("选择账号不会自动访问远端；点击“只读读取作品”后才查询。真实番茄不提供创建或修改作品功能。")}</p>
         <div className="platform-form">
           <label>
-            账号
-            <select
+            {t("账号")}<select
               value={connectionId}
               disabled={mutateDisabled}
               onChange={(event) => {
@@ -706,7 +699,7 @@ export default function PlatformPanel({
                 resetPreview();
               }}
             >
-              <option value="">请选择准确账号</option>
+              <option value="">{t("请选择准确账号")}</option>
               {platformConnections.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.providerId} · {item.accountName} · {item.accountId}
@@ -716,13 +709,11 @@ export default function PlatformPanel({
           </label>
           <button className="button secondary" disabled={mutateDisabled || !canRead} onClick={readWorks}>
             <RefreshCw size={14} />
-            只读读取作品
-          </button>
+            {t("只读读取作品")}</button>
         </div>
         {connection && !canRead && (
           <p className="platform-notice">
-            会话缺失、过期或页面能力未核验。可使用上方重新登录入口，但未经验证不会开放草稿写入。
-          </p>
+            {t("会话缺失、过期或页面能力未核验。可使用上方重新登录入口，但未经验证不会开放草稿写入。")}</p>
         )}
         {connection?.providerId === 'mock' && (
           <form
@@ -737,13 +728,12 @@ export default function PlatformPanel({
                   setWorks((items) => [...items, work]);
                   setMockTitle('');
                 },
-                '已创建本地 Mock 作品。',
+                t("已创建本地 Mock 作品。"),
               );
             }}
           >
             <label>
-              本地 Mock 作品名
-              <input
+              {t("本地 Mock 作品名")}<input
                 value={mockTitle}
                 onChange={(event) => setMockTitle(event.target.value)}
                 disabled={mutateDisabled}
@@ -751,8 +741,7 @@ export default function PlatformPanel({
               />
             </label>
             <button className="button secondary" disabled={mutateDisabled || !canRead || !mockTitle.trim()}>
-              创建 Mock 作品
-            </button>
+              {t("创建 Mock 作品")}</button>
           </form>
         )}
         <div className="platform-list">
@@ -761,7 +750,7 @@ export default function PlatformPanel({
               <div className="platform-row-content">
                 <h3>{work.title}</h3>
                 <p className="platform-help">
-                  作品 ID：{work.id} · {work.description}
+                  {t("作品 ID：")}{work.id} · {work.description}
                 </p>
               </div>
               <button
@@ -781,25 +770,23 @@ export default function PlatformPanel({
                       setPendingWorkId('');
                       resetPreview();
                     },
-                    '已显式绑定所选作品；未上传章节。',
+                    t("已显式绑定所选作品；未上传章节。"),
                   )
                 }
               >
                 <Link2 size={14} />
-                绑定此作品
-              </button>
+                {t("绑定此作品")}</button>
             </article>
           ))}
         </div>
         <label className="platform-form">
-          本次操作的目标作品
-          <select value={workSelection} disabled={mutateDisabled} onChange={(event) => {
+          {t("本次操作的目标作品")}<select value={workSelection} disabled={mutateDisabled} onChange={(event) => {
             const value = event.target.value;
             setLinkId(value.startsWith('link:') ? value.slice(5) : '');
             setPendingWorkId(value.startsWith('work:') ? value.slice(5) : '');
             resetPreview();
           }}>
-            <option value="">请选择作品；未绑定的作品需先绑定才能进入章节步骤</option>
+            <option value="">{t("请选择作品；未绑定的作品需先绑定才能进入章节步骤")}</option>
             {workChoices.map((choice) => (
               <option value={choice.value} key={choice.value}>{choice.label}</option>
             ))}
@@ -815,10 +802,9 @@ export default function PlatformPanel({
                 setPendingWorkId('');
                 resetPreview();
               },
-              '已显式绑定所选作品；未上传章节。',
+              t("已显式绑定所选作品；未上传章节。"),
             )}>
-            <Link2 size={14} /> 绑定所选作品
-          </button>
+            <Link2 size={14} /> {t("绑定所选作品")}</button>
         )}
         <div className="platform-list">
           {platformLinks
@@ -826,9 +812,9 @@ export default function PlatformPanel({
             .map((link) => (
               <article className="platform-row" key={link.id}>
                 <div className="platform-row-content">
-                  <strong>已绑定：{link.title}</strong>
+                  <strong>{t("已绑定：")}{link.title}</strong>
                   <p className="platform-help">
-                    {link.remoteWorkId} · 最近只读同步 {dateLabel(link.lastSyncedAt)}
+                    {link.remoteWorkId} {t("· 最近只读同步")}{dateLabel(link.lastSyncedAt)}
                   </p>
                 </div>
                 <div className="platform-actions">
@@ -842,12 +828,11 @@ export default function PlatformPanel({
                         {},
                         (next) =>
                           setLinks((items) => items.map((item) => (item.id === next.id ? next : item))),
-                        '已只读刷新作品资料。',
+                        t("已只读刷新作品资料。"),
                       )
                     }
                   >
-                    只读刷新资料
-                  </button>
+                    {t("只读刷新资料")}</button>
                   <button
                     className="button secondary"
                     disabled={mutateDisabled}
@@ -863,29 +848,26 @@ export default function PlatformPanel({
                             resetPreview();
                           }
                         },
-                        '已解除本机绑定，远端作品与草稿仍保留。',
+                        t("已解除本机绑定，远端作品与草稿仍保留。"),
                       )
                     }
                   >
                     <Unlink size={14} />
-                    解绑
-                  </button>
+                    {t("解绑")}</button>
                 </div>
               </article>
             ))}
         </div>
       </section>}
-      {stepAccess.setup && <button type="button" className="button primary platform-next" onClick={() => setStep('setup')}>下一步：选择章节 <ChevronRight size={14} /></button>}
+      {stepAccess.setup && <button type="button" className="button primary platform-next" onClick={() => setStep('setup')}>{t("下一步：选择章节")}<ChevronRight size={14} /></button>}
       </>}
       {supportsDrafts && (visibleStep === 'setup' || (visibleStep === 'review' && !!preview)) && <section className="platform-card">
-        <h2>{visibleStep === 'setup' ? '单章草稿 · 选择正文' : '单章草稿 · 完整预览与批准'}</h2>
+        <h2>{visibleStep === 'setup' ? t("单章草稿 · 选择正文") : t("单章草稿 · 完整预览与批准")}</h2>
         <p className="platform-help">
-          只使用已保存的正式本地章节，不上传编辑器未保存内容或未采用候选。历史草稿正文变化后不自动覆盖，也不另建重复稿。
-        </p>
+          {t("只使用已保存的正式本地章节，不上传编辑器未保存内容或未采用候选。历史草稿正文变化后不自动覆盖，也不另建重复稿。")}</p>
         {visibleStep === 'setup' && <div className="platform-form">
           <label>
-            目标作品
-            <select
+            {t("目标作品")}<select
               value={linkId}
               disabled={mutateDisabled}
               onChange={(event) => {
@@ -893,7 +875,7 @@ export default function PlatformPanel({
                 resetPreview();
               }}
             >
-              <option value="">请选择该账号下的准确绑定作品</option>
+              <option value="">{t("请选择该账号下的准确绑定作品")}</option>
               {platformLinks
                 .filter((item) => item.connectionId === connectionId)
                 .map((item) => (
@@ -904,8 +886,7 @@ export default function PlatformPanel({
             </select>
           </label>
           <label>
-            已保存章节
-            <select
+            {t("已保存章节")}<select
               value={chapterId}
               disabled={mutateDisabled}
               onChange={(event) => {
@@ -913,10 +894,10 @@ export default function PlatformPanel({
                 resetPreview();
               }}
             >
-              <option value="">请选择一章</option>
+              <option value="">{t("请选择一章")}</option>
               {chapters.map((item) => (
                 <option key={item.id} value={item.id}>
-                  第 {item.number} 章 · {item.title} · 版本 {item.revision}
+                  {t("第 {number} 章 · {title} · 版本 {revision}", { number: item.number, title: item.title, revision: item.revision })}
                 </option>
               ))}
             </select>
@@ -932,34 +913,31 @@ export default function PlatformPanel({
             }
             onClick={prepare}
           >
-            {autoApprove ? '自动批准并上传单章草稿' : '准备完整预览（不会打开编辑器）'}
+            {autoApprove ? t("自动批准并上传单章草稿") : t("准备完整预览（不会打开编辑器）")}
           </button>
         </div>}
         {preview && visibleStep === 'setup' && (
-          <button className="button secondary" disabled={busy} onClick={resetPreview}>清除本地暂存预览（不删除正文）</button>
+          <button className="button secondary" disabled={busy} onClick={resetPreview}>{t("清除本地暂存预览（不删除正文）")}</button>
         )}
         {preview && visibleStep === 'review' && (
           <div className="platform-form">
-            <h3>确认目标与全部内容</h3>
+            <h3>{t("确认目标与全部内容")}</h3>
             <p>
-              账号：{preview.accountName}（{preview.accountId}）<br />
-              作品：{preview.workTitle}（{preview.remoteWorkId}）<br />第 {preview.snapshot.number} 章 · 版本{' '}
-              {preview.snapshot.revision}
+              {t("账号：")}{preview.accountName}（{preview.accountId}）<br />
+              {t("作品：")}{preview.workTitle}（{preview.remoteWorkId}）<br />{t("第 {number} 章 · 版本 {revision}", { number: preview.snapshot.number, revision: preview.snapshot.revision })}
             </p>
             <label>
-              完整标题
-              <input readOnly value={preview.snapshot.title} />
+              {t("完整标题")}<input readOnly value={preview.snapshot.title} />
             </label>
             <label>
-              完整正文
-              <textarea rows={18} readOnly value={preview.snapshot.content} />
+              {t("完整正文")}<textarea rows={18} readOnly value={preview.snapshot.content} />
             </label>
             <p className="platform-help" style={{ overflowWrap: 'anywhere' }}>
-              内容 SHA-256：{preview.snapshot.contentHash}
+              {t("内容 SHA-256：")}{preview.snapshot.contentHash}
               <br />
-              预览有效至 {dateLabel(preview.expiresAt)}
+              {t("预览有效至")}{dateLabel(preview.expiresAt)}
             </p>
-            <p className="platform-notice">{preview.warning}</p>
+            <p className="platform-notice">{platformSystemText(t, preview.warning)}</p>
             <label>
               <input
                 type="checkbox"
@@ -967,69 +945,65 @@ export default function PlatformPanel({
                 disabled={mutateDisabled}
                 onChange={(event) => setApproved(event.target.checked)}
               />
-              我已核对账号、作品、标题和完整正文，批准进入可能自动存稿的编辑器，仅保存本章草稿。
-            </label>
-            {error && <p className="platform-notice" role="alert">本次操作未完成：{error} 不会自动重发；原预览保留供核对。</p>}
+              {t("我已核对账号、作品、标题和完整正文，批准进入可能自动存稿的编辑器，仅保存本章草稿。")}</label>
+            {error && <p className="platform-notice" role="alert">{t("本次操作未完成：")}{error} {t("不会自动重发；原预览保留供核对。")}</p>}
             <p className="platform-help" role="status">
-              {loading ? '正在加载平台状态，请稍候。' : busy ? '正在处理平台请求，请等待完成。' : running ? '创作工作流仍在运行，请等待结束或先停止工作流，再批准上传。' : !session?.available ? '平台服务尚未就绪，请刷新本地状态。' : activeOperation ? '已有草稿操作排队或执行中，请先查询操作记录。' : activeLogin ? '人工登录尚未完成，请先核验作者身份。' : !approved ? '尚未批准：请勾选上方“我已核对账号、作品、标题和完整正文”后再保存。' : '已满足本地批准条件，可保存草稿；执行时仍会验证远端状态。'}
-              此入口仅保存草稿，不提交审核；送审请使用下方队列并选择“提交审核”。
-            </p>
+              {loading ? t("正在加载平台状态，请稍候。") : busy ? t("正在处理平台请求，请等待完成。") : running ? t("创作工作流仍在运行，请等待结束或先停止工作流，再批准上传。") : !session?.available ? t("平台服务尚未就绪，请刷新本地状态。") : activeOperation ? t("已有草稿操作排队或执行中，请先查询操作记录。") : activeLogin ? t("人工登录尚未完成，请先核验作者身份。") : !approved ? t("尚未批准：请勾选上方“我已核对账号、作品、标题和完整正文”后再保存。") : t("已满足本地批准条件，可保存草稿；执行时仍会验证远端状态。")}
+              {t("此入口仅保存草稿，不提交审核；送审请使用下方队列并选择“提交审核”。")}</p>
             <button className="button primary" disabled={mutateDisabled || !approved} onClick={execute}>
-              批准并保存这一章草稿（不发布）
-            </button>
+              {t("批准并保存这一章草稿（不发布）")}</button>
           </div>
         )}
-        {preview && visibleStep === 'setup' && <button type="button" className="button primary platform-next" onClick={() => setStep('review')}>下一步：核对完整预览 <ChevronRight size={14} /></button>}
+        {preview && visibleStep === 'setup' && <button type="button" className="button primary platform-next" onClick={() => setStep('review')}>{t("下一步：核对完整预览")}<ChevronRight size={14} /></button>}
       </section>}
       {supportsDrafts && visibleStep === 'results' && <section className="platform-card">
-        <h2>草稿操作与核实回执</h2>
+        <h2>{t("草稿操作与核实回执")}</h2>
         <button className="button secondary" disabled={mutateDisabled} onClick={async () => {
-          if (!(await confirmDialog('将备份并清空当前作品的本地平台预览、操作、回执与全部批次（包括隐藏记录），解除历史去重阻塞。不会删除本地章节、登录绑定或番茄正文。之后上传可能产生重复章节，请先核对官方后台。确认承担重复风险并清空？', { danger: true, confirmText: '确认备份并清空' }))) return;
+          if (!(await confirmDialog(t("将备份并清空当前作品的本地平台预览、操作、回执与全部批次（包括隐藏记录），解除历史去重阻塞。不会删除本地章节、登录绑定或番茄正文。之后上传可能产生重复章节，请先核对官方后台。确认承担重复风险并清空？"), { danger: true, confirmText: t("确认备份并清空") }))) return;
           void action('/platform-staging/clear', 'POST', { confirmed: true, acknowledgeDuplicateRisk: true }, () => {
             resetPreview(); setOperations([]); setReceipts([]); history.restore(); setRefresh(value => value + 1);
-          }, '已备份并清空本作品本地平台记录；未删除远端内容，未自动重传。');
-        }}>备份并清空本地暂存（解除历史阻塞）</button>
+          }, t("已备份并清空本作品本地平台记录；未删除远端内容，未自动重传。"));
+        }}>{t("备份并清空本地暂存（解除历史阻塞）")}</button>
         <p className="platform-help">
-          操作记录独立于本地正文和正式发布状态。保存后会回读核验；结果未知时仅允许只读核对。已核实草稿可在确认后从番茄作者页删除，删除后再次读取列表确认，不自动发布或批量补发。
-        </p>
-        {history.hiddenIds.length > 0 && <p className="platform-notice">已隐藏 {operations.filter(item => history.hiddenIds.includes(item.id)).length} 条本地记录；服务端审计和未知操作防重复限制仍保留。<button className="button secondary" onClick={history.restore}>恢复显示全部历史</button></p>}
-        {!operations.length && <p className="platform-empty">还没有草稿操作。</p>}
+          {t("操作记录独立于本地正文和正式发布状态。保存后会回读核验；结果未知时仅允许只读核对。已核实草稿可在确认后从番茄作者页删除，删除后再次读取列表确认，不自动发布或批量补发。")}</p>
+        {history.hiddenIds.length > 0 && <p className="platform-notice">{t("已隐藏 {count} 条本地记录；服务端审计和未知操作防重复限制仍保留。", { count: operations.filter(item => history.hiddenIds.includes(item.id)).length })}<button className="button secondary" onClick={history.restore}>{t("恢复显示全部历史")}</button></p>}
+        {!operations.length && <p className="platform-empty">{t("还没有草稿操作。")}</p>}
         <div className="platform-list">
           {[...operations].reverse().filter(operation => !history.hiddenIds.includes(operation.id)).map((operation) => (
             <article className="platform-row" key={operation.id}>
               <div className="platform-row-content">
                 <strong>
-                  第 {operation.chapterNumber} 章 · {operation.title}
+                  {t("第 {number} 章 · {title}", { number: operation.chapterNumber, title: operation.title })}
                 </strong>
                 <p className="platform-help">
-                  {stateLabels[operation.state]} · 版本 {operation.revision} · 作品 {operation.remoteWorkId} ·{' '}
+                  {t(stateLabels[operation.state])} {t("· 版本")}{operation.revision} {t("· 作品")}{operation.remoteWorkId} ·{' '}
                   {dateLabel(operation.verifiedAt || operation.updatedAt)}
                 </p>
-                {operation.error && <p role="alert">{operation.error}</p>}
+                {operation.error && <p role="alert">{platformSystemText(t, operation.error, operation.errorCode)}</p>}
                 {operation.remoteDraftId && (
-                  <p className="platform-help">远端草稿 ID：{operation.remoteDraftId}</p>
+                  <p className="platform-help">{t("远端草稿 ID：")}{operation.remoteDraftId}</p>
                 )}
                 {operation.state === 'deleted' && (
-                  <p className="platform-help">已在番茄作者页确认该草稿已删除；本地操作记录保留用于审计。</p>
+                  <p className="platform-help">{t("已在番茄作者页确认该草稿已删除；本地操作记录保留用于审计。")}</p>
                 )}
                 {receipts
                   .filter((item) => item.operationId === operation.id)
                   .map((receipt) => (
                     <p className="platform-success" key={receipt.id}>
-                      草稿已核实（非发布） · {dateLabel(receipt.verifiedAt)}
+                      {t("草稿已核实（非发布） ·")}{dateLabel(receipt.verifiedAt)}
                       {chapters.some(
                         (item) =>
                           item.id === receipt.chapterId &&
                           (item.revision !== receipt.revision || item.contentHash !== receipt.contentHash),
                       )
-                        ? ' · 本地有未同步修改；安全更新未开放'
+                        ? t(" · 本地有未同步修改；安全更新未开放")
                         : ''}
                     </p>
                   ))}
               </div>
               {!['queued', 'running'].includes(operation.state) && <button className="button secondary" onClick={async () => {
-                if (await confirmDialog('仅从当前浏览器隐藏此历史记录，不删除番茄草稿或本地正文，不解除未知操作防重复限制；可以恢复显示。是否继续？')) history.hide(operation.id);
-              }}>移出本地暂存列表</button>}
+                if (await confirmDialog(t("仅从当前浏览器隐藏此历史记录，不删除番茄草稿或本地正文，不解除未知操作防重复限制；可以恢复显示。是否继续？"))) history.hide(operation.id);
+              }}>{t("移出本地暂存列表")}</button>}
               {operation.state === 'verified' && operation.remoteDraftId && (
                 <button
                   className="button secondary"
@@ -1037,7 +1011,7 @@ export default function PlatformPanel({
                   onClick={async () => {
                     if (
                       !(await confirmDialog(
-                        `将从番茄作者页永久删除草稿“${operation.title}”（远端 ID：${operation.remoteDraftId}）。此操作不可撤销，是否继续？`,
+                        t("将从番茄作者页永久删除草稿“{value1}”（远端 ID：{value2}）。此操作不可撤销，是否继续？", { value1: operation.title, value2: operation.remoteDraftId ?? '' }),
                       ))
                     )
                       return;
@@ -1050,13 +1024,12 @@ export default function PlatformPanel({
                         setReceipts((items) => items.filter((item) => item.operationId !== next.id));
                         setRefresh((value) => value + 1);
                       },
-                      '已在番茄作者页删除并确认该草稿不再出现在草稿列表。',
+                      t("已在番茄作者页删除并确认该草稿不再出现在草稿列表。"),
                     );
                   }}
                 >
                   <Trash2 size={14} />
-                  删除远端草稿
-                </button>
+                  {t("删除远端草稿")}</button>
               )}
               {operation.state === 'unknown' && (
                 <button
@@ -1071,24 +1044,22 @@ export default function PlatformPanel({
                         setOperations((items) => items.map((item) => (item.id === next.id ? next : item)));
                         setRefresh((value) => value + 1);
                       },
-                      '已只读核对操作；没有重新发送正文。',
+                      t("已只读核对操作；没有重新发送正文。"),
                     )
                   }
                 >
-                  只读核对，不重发
-                </button>
+                  {t("只读核对，不重发")}</button>
               )}
             </article>
           ))}
         </div>
       </section>}
       {supportsDrafts && <PublicationPanel selectionVersion={batchSelectionVersion} incomingBatch={incomingBatch} targetLinkId={linkId} projectId={projectId} csrfToken={session?.csrfToken ?? ''} links={platformLinks} chapters={chapters} disabled={mutateDisabled} reviewAvailable={true} autoApprove={autoApprove} onAutoApproveChange={changeAutoApprove} workflow={workflow} onProjectChange={onProjectChange} step={visibleStep} onPreviewReady={() => { setBatchPreviewReady(true); setStep('review'); }} onShowResults={() => setStep('results')} />}
-      {visibleStep === 'review' && supportsDrafts && <button type="button" className="button secondary platform-next" onClick={() => setStep('results')}>查看队列与回执 <ChevronRight size={14} /></button>}
+      {visibleStep === 'review' && supportsDrafts && <button type="button" className="button secondary platform-next" onClick={() => setStep('results')}>{t("查看队列与回执")}<ChevronRight size={14} /></button>}
       {busy && (
         <p className="platform-loading" role="status">
           <LoaderCircle className="spin" size={16} />
-          正在处理明确请求…
-        </p>
+          {t("正在处理明确请求…")}</p>
       )}
         </div>
       </div>
@@ -1097,6 +1068,7 @@ export default function PlatformPanel({
 }
 
 function MockCredentialForm({ disabled, onSave }: { disabled: boolean; onSave: (token: string) => void }) {
+  const { t, locale } = useLocale();
   const [token, setToken] = useState('');
   return (
     <form
@@ -1112,19 +1084,17 @@ function MockCredentialForm({ disabled, onSave }: { disabled: boolean; onSave: (
       }}
     >
       <label>
-        重新授权 Mock 连接
-        <input
+        {t("重新授权 Mock 连接")}<input
           type="password"
           autoComplete="new-password"
           value={token}
           disabled={disabled}
           onChange={(event) => setToken(event.target.value)}
-          placeholder="任意非空测试令牌，不要输入真实密钥"
+          placeholder={t("任意非空测试令牌，不要输入真实密钥")}
         />
       </label>
       <button className="button secondary" disabled={disabled || !token.trim()}>
-        重新授权 Mock
-      </button>
+        {t("重新授权 Mock")}</button>
     </form>
   );
 }

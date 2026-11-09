@@ -2,9 +2,9 @@
 
 Language / 语言: [简体中文 (default)](README_zhCN.md) · [English](README_en.md) · [Root README](../README.md)
 
-A local-first novel-writing workbench, deployment-mode prerelease `v0.0.4a`. It supports multiple projects and workflows, worldbuilding, character generation, chapter editing and generation, reference assets, model profiles, themes, and persistent data. The default remains single-user access without login. Authentication and tenant isolation require explicit local administration. **This is not a production deployment solution for the public Internet.**
+A local-first novel-writing workbench, deployment-mode prerelease `v0.0.5a`. It supports multiple projects and workflows, worldbuilding, character generation, chapter editing and generation, reference assets, model profiles, themes, and persistent data. The default remains single-user access without login. Authentication and tenant isolation require explicit local administration. **This is not a production deployment solution for the public Internet.**
 
-Release tag: `v0.0.4a`; npm/package SemVer: `0.0.4-a`. See [bilingual release notes](../RELEASE_NOTES.md). Planned assets are a source archive and an archive with compiled output, published only after this release's build, isolated validation and asset checks complete. The final inventory and [release validation](../docs/release-validation-v0.0.4a.md) are authoritative; no build or external-service acceptance is preclaimed. Project Skills are described in the [agent capability guide](../docs/agent-capabilities.md); the optional Playwright MCP bundle is **not installed, not running and not an application dependency**.
+Target release tag: `v0.0.5a`; npm/package SemVer: `0.0.5-a`. See [bilingual release notes](../RELEASE_NOTES.md). Source and compiled-output archives require this release's build, isolated validation and asset checks before publication; no build or external-service acceptance is preclaimed. The [v0.0.4a validation report](../docs/release-validation-v0.0.4a.md) is historical evidence, not acceptance of this release. Project Skills are described in the [agent capability guide](../docs/agent-capabilities.md); the optional Playwright MCP bundle is **not installed, not running and not an application dependency**.
 
 ## Quick start
 
@@ -75,6 +75,15 @@ Use the [English documentation index](../docs/en/README.md) for all guides, pack
 - Workflow nodes can use the global model or an explicit model. Missing, disabled, or deleted explicit models require configuration repair rather than a silent fallback. Character nodes support templates and a count of 1–100.
 - Manual regeneration produces a candidate that must be adopted explicitly. Automatic mode may adopt the result only after review, hard validation, and original-version checks; failure stops the batch and preserves recovery material.
 
+### v0.0.5a current increment
+
+- **Chapter analysis:** explicitly choose a live model and request a chapter-number range or the latest N saved chapters. Reports persist independently for repeated reading, without changing manuscripts, history or candidates, or publishing anything. Reopening a report does not call the model. See [chapter analysis](../docs/en/chapter-analysis.md).
+- **Project deletion:** library cards delete the specified project without first activating it. Last-project, running-workflow and platform-busy safeguards remain. When the server permits it, a separately confirmed local-only deletion can preserve unknown platform records and duplicate-prevention evidence; it neither deletes remote content nor clears uncertainty or permits resending. See [platform guidance](../docs/en/fanqie-integration.md).
+- **Usage, review and continuity:** [Token statistics](../docs/en/token-usage.md) are admin/superadmin-only (strict local administration still applies without auth). The review workbench collapses and supports full-length reading. Editing/restoring a canonical chapter invalidates generation contexts for that chapter onward, requiring relevant upstream dependencies to be regenerated; later manuscripts are not automatically rewritten.
+- **Language and time:** fixed interface copy covers authoring, accounts, platforms and administration; user text, names, prompts, model output and unknown diagnostics remain unchanged. Timestamp display is fixed UTC+8 without changing API/storage timestamps. Application logs default to Asia/Shanghai; `LOG_TIME_ZONE` accepts a valid IANA zone. Usage date buckets remain UTC-based.
+
+This scope does not claim live-model, platform, database or other external-service acceptance.
+
 ### v0.0.4a authoring and shell updates
 
 - **World stages:** create, rename and filter groups for worldbuilding text, uploaded references and map images; move records between a stage and Ungrouped. Existing assets remain ungrouped. Grouping organizes the library only: it does not filter generation context, and an empty node asset selection still references all assets. Choose explicit node references to limit context. Only empty stages can be deleted.
@@ -113,7 +122,7 @@ Temporary DOCX reading accepts a single file up to 8 MiB; legacy `.doc` must be 
 
 The default locale is Simplified Chinese (`zh-CN`). Use the top-bar **LanguageSwitcher**, left of the theme control, to select English (`en`). The choice is stored in the current browser's localStorage under `novel-locale`, not synchronized as an account preference. Frontend translations live in `packages/web/src/locals/`.
 
-**English coverage is partial:** account feature configuration, the toolbar, and selected administration/navigation labels. Authoring, platform screens, and backend responses are not fully translated, so English mode can still contain Chinese. The existence of this English README does not imply complete English UI support.
+Fixed interface copy now spans authoring, chapters, platforms, accounts and administration. User-authored names, manuscripts, prompts, model output and unknown backend diagnostics remain unchanged; Chinese user content in English mode is not a translation failure. This is not a promise that every external message is localized. See the [localization boundaries](../packages/web/src/locals/README.md).
 
 In administration, open **System and security → Account feature configuration** (AccountAdminSettings). Registration, email verification, password recovery, and MFA appear as grouped switches with descriptions and an enabled count. The separate OIDC switch has expandable connection/secret details. Switch cards and OIDC fields use a responsive two-column grid on wide screens and one column on narrow screens. Changes require **Save configuration**; blank client-secret input preserves the stored secret, which is never returned in plaintext. These settings do not enable the independent authentication master switch.
 

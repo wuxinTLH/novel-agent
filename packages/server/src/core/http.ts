@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 import express from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
@@ -102,7 +103,7 @@ export function installHttpFallbacks(app: express.Express, root: string, options
         runId: detail.runId,
       });
     }
-    console.error('服务操作失败，请检查数据目录可用性与配置。');
+    logger.error('服务操作失败，请检查数据目录可用性与配置。');
     res.status(500).json({
       error: '服务操作未完成，请先查询当前状态，再检查服务日志。',
       code: 'INTERNAL_ERROR',

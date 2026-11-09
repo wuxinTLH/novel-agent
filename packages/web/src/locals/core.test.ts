@@ -50,7 +50,7 @@ test('locale store persists, notifies, syncs html.lang and survives storage deni
     },
   };
   const browser = {
-    document: { documentElement: html },
+    document: { documentElement: html, title: '' },
     localStorage: storage,
     addEventListener(name: string, handler: (event: { key: string | null; storageArea?: unknown }) => void) {
       handlers.set(name, handler);
@@ -66,6 +66,7 @@ test('locale store persists, notifies, syncs html.lang and survives storage deni
   store.setLocale('en-US');
   assert.equal(saved.get(LOCALE_STORAGE_KEY), 'en');
   assert.equal(html.lang, 'en');
+  assert.equal(browser.document.title, 'Novel Agent · Where stories become worlds');
   assert.equal(calls, 1);
   store.setLocale('en');
   assert.equal(calls, 1);

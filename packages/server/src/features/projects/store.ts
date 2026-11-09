@@ -1,3 +1,4 @@
+import { chapterAnalysisSchema } from '../../../../../shared/chapter-analysis.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -86,6 +87,7 @@ const projectSchema = z
         .passthrough(),
     ),
     chapters: z.array(chapterSchema),
+    chapterAnalyses: z.array(chapterAnalysisSchema).optional(),
     workflow: workflowSchema.optional(),
     workflows: z
       .array(
@@ -172,6 +174,16 @@ export function migrateProjects(value: unknown): Project[] {
       throw new Error('世界观资料阶段无效，原始数据未修改。');
     const current = (p.dataVersion || 0) >= 1;
     assertUnique(p.chapters, '章节');
+    assertUnique(p.chapterAnalyses || [], '章节解析');
+    if (new Set((p.chapterAnalyses || []).map(a => a.requestId)).size !== (p.chapterAnalyses || []).length)
+      throw new Error('章节解析请求ID重复，原始数据未修改。');
+    for (const analysis of p.chapterAnalyses || []) {
+      if (analysis.status === 'running') {
+        analysis.status = 'interrupted';
+        analysis.errorCode = 'ANALYSIS_INTERRUPTED';
+        analysis.completedAt = new Date().toISOString();
+      }
+    }
     assertUnique(p.candidates || [], '候选版本');
     const numbers = new Set<number>();
     for (const chapter of p.chapters) {

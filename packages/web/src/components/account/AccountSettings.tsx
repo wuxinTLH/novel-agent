@@ -1,3 +1,4 @@
+import { useLocale } from '../../locals';
 import { useEffect, useState, type FormEvent } from 'react';
 import type {
   AccountFeatures,
@@ -11,6 +12,7 @@ export interface AccountSettingsProps {
   onSessionRevoked(): void;
 }
 export function AccountSettings({ request, onSessionRevoked }: AccountSettingsProps) {
+  const { t } = useLocale();
   const [settings, setSettings] = useState<Settings>();
   const [features, setFeatures] = useState<AccountFeatures>();
   const [email, setEmail] = useState(''),
@@ -34,7 +36,7 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
         }
       })
       .catch(() => {
-        if (active) setMessage('无法读取账户设置');
+        if (active) setMessage(t("无法读取账户设置"));
       });
     return () => {
       active = false;
@@ -47,7 +49,7 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
     try {
       await action();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '操作失败');
+      setMessage(error instanceof Error ? error.message : t("操作失败"));
     } finally {
       setBusy(false);
     }
@@ -56,24 +58,21 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
     e.preventDefault();
     void run(async () => {
       await request('/api/auth/account/email', 'POST', { email });
-      setMessage('验证邮件已发送，请复制邮件中的令牌完成验证。');
+      setMessage(t("验证邮件已发送，请复制邮件中的令牌完成验证。"));
     });
   };
   return (
-    <section aria-label="账户安全">
-      <h2>账户安全</h2>
+    <section aria-label={t("账户安全")}>
+      <h2>{t("账户安全")}</h2>
       <p role="status">{message}</p>
       {settings && (
-        <p>
-          邮箱：{settings.email || '未设置'}（{settings.emailVerified ? '已验证' : '未验证'}）；双重验证：
-          {settings.mfaEnabled ? '已开启' : '未开启'}
+        <p>{t('邮箱：{email}（{verification}）；双重验证：{mfa}', { email: settings.email || t('未设置'), verification: settings.emailVerified ? t('已验证') : t('未验证'), mfa: settings.mfaEnabled ? t('已开启') : t('未开启') })}
         </p>
       )}
       {features?.emailVerification && (
         <>
           <form onSubmit={submitEmail}>
-            <label>
-              邮箱{' '}
+            <label>{t("邮箱")}{' '}
               <input
                 type="email"
                 required
@@ -82,10 +81,9 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
                 autoComplete="email"
               />
             </label>
-            <button disabled={busy}>发送验证邮件</button>
+            <button disabled={busy}>{t("发送验证邮件")}</button>
           </form>
-          <label>
-            验证令牌 <input value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
+          <label>{t("验证令牌")}<input value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
           </label>
           <button
             disabled={busy || !token}
@@ -94,12 +92,10 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
                 await request('/api/auth/account/email/complete', 'POST', { token });
                 setToken('');
                 setSettings(await request<Settings>('/api/auth/account'));
-                setMessage('邮箱已验证');
+                setMessage(t("邮箱已验证"));
               })
             }
-          >
-            确认邮箱
-          </button>
+          >{t("确认邮箱")}</button>
         </>
       )}
       {features?.mfa && !settings?.mfaEnabled && !enrollment && (
@@ -110,17 +106,14 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
               setEnrollment(await request<MfaEnrollment>('/api/auth/account/mfa/setup', 'POST', {})),
             )
           }
-        >
-          设置验证器
-        </button>
+        >{t("设置验证器")}</button>
       )}
       {enrollment && (
         <div>
-          <p>将以下密钥导入 TOTP 验证器。不要分享或截图密钥。</p>
+          <p>{t("将以下密钥导入 TOTP 验证器。不要分享或截图密钥。")}</p>
           <code>{enrollment.secret}</code>
-          <p>密钥只在此显示，验证成功会退出所有会话。</p>
-          <label>
-            验证码{' '}
+          <p>{t("密钥只在此显示，验证成功会退出所有会话。")}</p>
+          <label>{t("验证码")}{' '}
             <input
               value={code}
               onChange={(e) => setCode(e.target.value)}
@@ -140,33 +133,28 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
                 setCodes(result.recoveryCodes);
                 setEnrollment(undefined);
                 setCode('');
-                setMessage('已启用。请保存一次性恢复码，再返回登录。');
+                setMessage(t("已启用。请保存一次性恢复码，再返回登录。"));
               })
             }
-          >
-            确认启用
-          </button>
+          >{t("确认启用")}</button>
         </div>
       )}
       {codes.length > 0 && (
         <div>
-          <h3>一次性恢复码（仅显示一次）</h3>
+          <h3>{t("一次性恢复码（仅显示一次）")}</h3>
           <pre>{codes.join('\n')}</pre>
           <button
             onClick={() => {
               setCodes([]);
               onSessionRevoked();
             }}
-          >
-            已安全保存，返回登录
-          </button>
+          >{t("已安全保存，返回登录")}</button>
         </div>
       )}
       {features?.mfa && settings?.mfaEnabled && (
         <div>
-          <p>剩余恢复码：{settings.recoveryCodesRemaining}</p>
-          <label>
-            验证码或恢复码{' '}
+          <p>{t('剩余恢复码：{count}', { count: settings.recoveryCodesRemaining })}</p>
+          <label>{t("验证码或恢复码")}{' '}
             <input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" />
           </label>
           <button
@@ -178,9 +166,7 @@ export function AccountSettings({ request, onSessionRevoked }: AccountSettingsPr
                 onSessionRevoked();
               })
             }
-          >
-            关闭双重验证并退出
-          </button>
+          >{t("关闭双重验证并退出")}</button>
         </div>
       )}
     </section>

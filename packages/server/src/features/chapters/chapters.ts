@@ -11,6 +11,19 @@ import {
   inputError,
   invalidateSteps,
 } from '../projects/project-operations.js';
+/** A later chapter's planning context includes earlier canonical prose too. */
+function invalidateChapterContexts(project: Project, number: number) {
+  for (const steps of [project.steps, ...(project.workflows || []).map((graph) => graph.steps)]) {
+    for (const step of steps) {
+      if (step.generationContext && step.generationContext.number >= number) {
+        step.status = 'idle';
+        delete step.generationContext;
+        // Keep prior output available for inspection, but not as a fresh dependency.
+      }
+    }
+  }
+}
+
 export const chaptersService: FeatureService = {
   id: 'chapters',
   register(app, context) {
@@ -58,18 +71,7 @@ export const chaptersService: FeatureService = {
           revision: chapter.revision + 1,
           updatedAt: new Date().toISOString(),
         });
-        for (const graph of draft.workflows || []) {
-          for (const step of graph.steps)
-            if (step.generationContext?.number === chapter.number) {
-              step.status = 'idle';
-              delete step.generationContext;
-            }
-        }
-        for (const step of draft.steps)
-          if (step.generationContext?.number === chapter.number) {
-            step.status = 'idle';
-            delete step.generationContext;
-          }
+        invalidateChapterContexts(draft, chapter.number);
       });
       res.json(p);
     });
@@ -91,8 +93,8 @@ export const chaptersService: FeatureService = {
       const p = res.locals.project as Project;
       checkWorkflow(p, v);
       mutateProject(p, (draft) => {
-        restoreChapterRevision(draft, req.params.chapterId, v.expectedRevision, v.revision);
-        invalidateSteps(draft);
+        const chapter = restoreChapterRevision(draft, req.params.chapterId, v.expectedRevision, v.revision);
+        invalidateChapterContexts(draft, chapter.number);
       });
       res.json(p);
     });

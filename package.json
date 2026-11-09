@@ -1,6 +1,6 @@
 {
   "name": "novel-agent",
-  "version": "0.0.4-a",
+  "version": "0.0.5-a",
   "private": true,
   "type": "module",
   "workspaces": [

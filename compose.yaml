@@ -4,7 +4,7 @@ services:
       context: .
       args:
         CoreModel: ${CoreModel:-server}
-    image: novel-agent:v0.0.4a
+    image: novel-agent:v0.0.5a
     init: true
     user: "1000:1000"
     ports:

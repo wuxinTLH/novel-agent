@@ -1,3 +1,4 @@
+import { runtimeT } from "../locals/runtimeTranslate";
 let csrfToken: string | undefined;
 let sessionRequest: Promise<string> | undefined;
 let authCsrfToken: string | undefined;
@@ -16,7 +17,7 @@ async function adminMutationToken() {
     adminCsrfRequest = api<{ mode: string; csrfToken?: string }>('/admin/session')
       .then((session) => {
         if (epoch !== identityEpoch || tokenEpoch !== csrfEpoch)
-          throw new Error('用户会话已切换，请重新操作。');
+          throw new Error(runtimeT("用户会话已切换，请重新操作。"));
         adminCsrfToken = session.csrfToken;
         return session;
       })
@@ -53,8 +54,8 @@ async function authMutationToken() {
       )
       .then((session) => {
         if (epoch !== identityEpoch || tokenEpoch !== csrfEpoch)
-          throw new Error('用户会话已切换，请重新操作。');
-        if (!session.csrfToken) throw new Error('无法取得登录会话凭据，请刷新后重试。');
+          throw new Error(runtimeT("用户会话已切换，请重新操作。"));
+        if (!session.csrfToken) throw new Error(runtimeT("无法取得登录会话凭据，请刷新后重试。"));
         authCsrfToken = session.csrfToken;
         return session.csrfToken;
       })
@@ -94,7 +95,7 @@ async function refreshSession(): Promise<boolean> {
     // A session CSRF token is not a prelogin nonce. Fetch a fresh nonce and its HttpOnly cookie.
     const { csrfToken: nonce } = await apiRequest<{ csrfToken: string }>('/auth/csrf', {}, false);
     if (epoch !== identityEpoch) return false;
-    if (!nonce) throw new Error('无法取得登录会话凭据，请刷新后重试。');
+    if (!nonce) throw new Error(runtimeT("无法取得登录会话凭据，请刷新后重试。"));
     try {
       await apiRequest('/auth/refresh', { method: 'POST', headers: { 'x-csrf-token': nonce } }, false);
     } catch (error) {
@@ -127,8 +128,8 @@ async function mutationToken() {
     sessionRequest = api<{ csrfToken: string }>('/platforms/session')
       .then((session) => {
         if (epoch !== identityEpoch || tokenEpoch !== csrfEpoch)
-          throw new Error('用户会话已切换，请重新操作。');
-        if (!session.csrfToken) throw new Error('无法取得本地会话凭据，请刷新页面后重试。');
+          throw new Error(runtimeT("用户会话已切换，请重新操作。"));
+        if (!session.csrfToken) throw new Error(runtimeT("无法取得本地会话凭据，请刷新页面后重试。"));
         csrfToken = session.csrfToken;
         return csrfToken;
       })
@@ -164,7 +165,7 @@ async function apiRequest<T>(url: string, options: ApiOptions, allowRefresh: boo
     if (authCsrfToken && !headers.has('x-csrf-token')) headers.set('x-csrf-token', authCsrfToken);
     if (!headers.has('X-Platform-CSRF')) headers.set('X-Platform-CSRF', await mutationToken());
   }
-  if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+  if (epoch !== identityEpoch) throw new Error(runtimeT("用户会话已切换，请重新操作。"));
   if (options.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
   const timeoutMs = options.timeoutMs ?? (mutation ? 30_000 : 15_000);
   const controller = new AbortController();
@@ -191,8 +192,8 @@ async function apiRequest<T>(url: string, options: ApiOptions, allowRefresh: boo
       controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError';
     throw new ApiError(
       timedOut
-        ? '请求超时，服务端可能仍在处理。请先核对运行状态。'
-        : '网络连接中断，请先核对运行状态后再操作。',
+        ? runtimeT("请求超时，服务端可能仍在处理。请先核对运行状态。")
+        : runtimeT("网络连接中断，请先核对运行状态后再操作。"),
       timedOut ? 524 : 0,
       { code: timedOut ? 'REQUEST_TIMEOUT' : 'NETWORK_ERROR', retryable: true },
     );
@@ -205,7 +206,7 @@ async function apiRequest<T>(url: string, options: ApiOptions, allowRefresh: boo
     body = text ? JSON.parse(text) : undefined;
   } catch {
     throw new ApiError(
-      response.ok ? '服务器返回了无法读取的数据。' : `请求失败（${response.status}），请检查本地服务。`,
+      response.ok ? runtimeT("服务器返回了无法读取的数据。") : runtimeT("请求失败（{x0}），请检查本地服务。", { x0: response.status }),
       response.status,
     );
   }
@@ -228,16 +229,16 @@ async function apiRequest<T>(url: string, options: ApiOptions, allowRefresh: boo
       // Session inspection is safe even in local/disabled mode; only the server's
       // refreshAvailable bit permits exchanging an existing refresh cookie.
       await apiRequest('/auth/session', {}, true);
-      if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+      if (epoch !== identityEpoch) throw new Error(runtimeT("用户会话已切换，请重新操作。"));
       if (generation !== refreshGeneration) return apiRequest<T>(url, options, false);
     }
     if (response.status === 401 && !authRoute && epoch === identityEpoch)
       window.dispatchEvent(new Event('novel-auth-expired'));
-    const message = typeof data?.error === 'string' ? data.error : '请求失败，请稍后重试。';
+    const message = typeof data?.error === 'string' ? data.error : runtimeT("请求失败，请稍后重试。");
     throw new ApiError(
       message +
         (response.status === 403 && mutation
-          ? ' 本地会话可能已过期，请刷新页面或再次操作；未自动重试写入。'
+          ? runtimeT(" 本地会话可能已过期，请刷新页面或再次操作；未自动重试写入。")
           : ''),
       response.status,
       {
@@ -247,14 +248,14 @@ async function apiRequest<T>(url: string, options: ApiOptions, allowRefresh: boo
       },
     );
   }
-  if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+  if (epoch !== identityEpoch) throw new Error(runtimeT("用户会话已切换，请重新操作。"));
   if (url === '/auth/session' && allowRefresh) {
     // A concurrent rotation may have completed while this older response was in flight.
     if (generation !== refreshGeneration) return apiRequest<T>(url, options, false);
     const session = body as { authenticated?: boolean; refreshAvailable?: boolean };
     if (session.authenticated === false && session.refreshAvailable === true) {
       if (await refreshSession()) {
-        if (epoch !== identityEpoch) throw new Error('用户会话已切换，请重新操作。');
+        if (epoch !== identityEpoch) throw new Error(runtimeT("用户会话已切换，请重新操作。"));
         return apiRequest<T>(url, options, false);
       }
     }

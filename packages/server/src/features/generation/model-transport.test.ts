@@ -53,6 +53,22 @@ test('per-call budgets reject before DNS checks, request construction or network
   const free = await generateModelTransport({ ...settings, maxEstimatedCostPerCall: 0, inputPricePerMillion: 0, outputPricePerMillion: 0 }, 'abc', [], new AbortController().signal, deps('json', [JSON.stringify({ choices: [{ message: { content: 'ok' } }] })]));
   assert.equal(free.usage.estimatedCost, 0);
 });
+test('attempt capture distinguishes rejection/failure and never replays successful content on telemetry failure', async () => {
+  let starts = 0, finishes = 0, fetches = 0;
+  const completed: Array<{ succeeded: boolean; usage: { inputTokens: number; outputTokens: number; estimated: boolean } }> = [];
+  const base = deps('json', [JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 8, completion_tokens: 2 } })]);
+  const tracked: TransportDependencies = { ...base, fetch: async (...args) => { fetches++; return base.fetch!(...args); }, onAttemptStart: () => { starts++; }, onAttempt: attempt => { finishes++; completed.push(attempt); } };
+  await assert.rejects(generateModelTransport({ ...settings, perCallBudgetTokens: 1 }, 'a', [], new AbortController().signal, tracked));
+  assert.equal(starts, 0); assert.equal(finishes, 0); assert.equal(fetches, 0);
+  await assert.rejects(generateModelTransport(settings, 'a', [], new AbortController().signal, { ...tracked, onAttemptStart: () => { throw new Error('disk'); } }), (error: unknown) => error instanceof ModelTransportError && error.code === 'TOKEN_USAGE_STORAGE_UNAVAILABLE' && !error.retryable);
+  assert.equal(fetches, 0);
+  const result = await generateModelTransport(settings, 'a', [], new AbortController().signal, { ...tracked, onAttempt: () => { throw new Error('disk'); } });
+  assert.equal(result.text, 'ok'); assert.equal(fetches, 1);
+  await assert.rejects(generateModelTransport(settings, 'a', [], new AbortController().signal, { ...tracked, fetch: async () => { throw new Error('network'); } }));
+  assert.equal(completed[0].succeeded, false); assert.equal(completed[0].usage.inputTokens, 0); assert.equal(completed[0].usage.estimated, true);
+  await assert.rejects(generateModelTransport(settings, 'a', [], new AbortController().signal, { ...tracked, ...deps('sse', [sse({ usage: { prompt_tokens: 12, completion_tokens: 4 }, choices: [{ finish_reason: 'length' }] })]) }));
+  assert.equal(completed[1].succeeded, false); assert.equal(completed[1].usage.inputTokens, 12); assert.equal(completed[1].usage.outputTokens, 4); assert.equal(completed[1].usage.estimated, false);
+});
 test('preflight happens before network, cancellation interrupts a blocked reader', async () => {
   const base = deps('sse', []); base.fetch = async () => { throw new Error('must not fetch'); };
   await assert.rejects(generateModelTransport({ ...settings, vision: false }, 'a', [{ mime: 'image/png', data: 'x' }], new AbortController().signal, base), /视觉/);

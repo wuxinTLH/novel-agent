@@ -1,3 +1,4 @@
+import { closeChapterAnalyses } from '../../features/chapters/chapter-analysis.js';
 import express from 'express';
 import { hasPermission } from '../../../../../shared/permissions.js';
 import path from 'node:path';
@@ -92,6 +93,7 @@ export function createTenantApplication(options: TenantApplicationOptions) {
       for (const { context } of contexts.values())
         for (const controller of context.runner.controllers.values()) controller.abort();
       for (const tenant of contexts.values()) {
+        await closeChapterAnalyses(tenant.context);
         await tenant.context.platformRuntime.close();
         while (tenant.context.runner.controllers.size)
           await new Promise((resolve) => setTimeout(resolve, 25));

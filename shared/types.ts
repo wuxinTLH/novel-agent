@@ -1,4 +1,5 @@
 import type { ModelRuntimeOptions, ModelUsage } from './model-runtime.js';
+import type { ChapterAnalysis } from './chapter-analysis.js';
 import type { KnowledgeFact } from './knowledge.js';
 import type { AssetRevision } from './asset-history.js';
 
@@ -297,6 +298,7 @@ export interface Run {
 }
 export interface Project {
   id: string;
+  chapterAnalyses?: ChapterAnalysis[];
   modelUsage?: Array<ModelUsage & { stepId: string; modelId?: string; createdAt: string; runId?: string }>;
   knowledgeFacts?: KnowledgeFact[];
   title: string;

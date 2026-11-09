@@ -25,6 +25,7 @@ Weights are display/sort metadata, **not permission inheritance**. Operations ha
 | `storage.manage`, `sql.initialize` | ✓ | ✓ | — | — |
 | `maintenance.read`, `maintenance.backup`, `maintenance.validate` | ✓ | ✓ | ✓ | — |
 | `maintenance.restorePlan`, `maintenance.cancel`, `maintenance.commands` | ✓ | ✓ | — | — |
+| `usage.read` (aggregate Token usage metadata only) | ✓ | ✓ | — | — |
 | `security.read` | ✓ | ✓ | — | — |
 | `security.manage` | ✓ | — | — | — |
 

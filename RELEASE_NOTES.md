@@ -1,46 +1,45 @@
-# v0.0.4a — Chapter management, world stages and safer platform automation
+# v0.0.5a — Chapter analysis, continuity and usage analytics
 
-Release tag: `v0.0.4a` · npm/package SemVer: `0.0.4-a`
+Release tag: `v0.0.5a` · npm/package SemVer: `0.0.5-a`
 
 ## 中文
 
-本次预发布汇总 v0.0.3a 之后的章节管理、世界观资产和番茄自动化改进。**不声明公网生产就绪、等保认证或真实外部服务全面验收。**
+本次预发布包含 v0.0.4a 以来的当前增量。保留旧标签及旧版 Release，不声明公网生产就绪、认证合规或真实外部服务全面验收。
 
-- **章节分页与批量删除：** 批量模式默认关闭，点击后显示勾选操作；每页 20 / 50 / 100 条，本页全选，跨页保留所选项并显示数量。未保存草稿须先保存或放弃；删除有明确确认。后端对整批修订号执行 CAS，一次提交，失败回滚；不重排章节编号、不降低编号高水位、不删除远端平台草稿。
-- **世界观阶段：** 按自定义阶段分别管理世界观文本和地图，支持阶段新建、改名、空阶段删除及资产移动；旧资产保持未分组。阶段仅组织资产，不自动成为生成上下文。保留租户 / 项目隔离与修订冲突保护。
-- **界面与流程：** 模式和身份在 Logo 下方，语言紧邻主题，系统设置位于指南下方；弹窗启闭及尺寸变化平滑过渡，遵循减少动态效果偏好。小说流 / 人物流 / 世界观流创建对应各自预设，修复同类流程切换回跳和资源页尾随斜杠路由。
-- **番茄稳定性：** 显式选中账号可复用其现有活跃登录窗口，不接管个人浏览器。空闲和聚焦时刷新本地记录，不定时调用远端平台。作品列表等待就绪，区分未加载和真实空列表，保留 64 位 ID。
-- **安全自动核对：** 仅对 `autoApprove=true` 的不可变预览，在已开始写入且已持久化精确远端草稿 ID 后，执行一次精确 ID 的只读完整核对；只有可证明的完整结果才继续。验证码、账号变化、对话框或不确定结果停止；不绕过验证、不重复创建。旧 unknown 批次不会自动重放，缺少远端 ID 仍须人工提供证据。
-- **并发租户启动：** 修复首次创建共享目录的检查 / 创建竞态，仅容忍 EEXIST 并强制逐层检查真实目录；符号链接、非目录和其他创建错误继续失败关闭。
-- 中英文操作指南、接口说明、项目 Skills 指引及版本标识同步更新；[本次验证报告](docs/release-validation-v0.0.4a.md)记录实际测试结果与限制。
+- **章节解析：** 在书稿页选择手动起止章或最近 N 章，显式调用所选模型，分析写法、节奏、剧情规划与推进、人物变化、伏笔及章节衔接。报告和调用状态独立保存，可重复查看，不修改正文。来源章节固定修订和哈希；超限拒绝而非静默截断，无自动付费调用或未知请求重放。
+- **章节连续性：** 规划、写作与审校获得独立前章结尾锚点，要求状态过渡及前后证据；修改或恢复前章使后续相关节点失效，防止旧规划授权写作。已有章节不自动覆盖，仍需人工对比候选。
+- **阅读与语言：** 放大生成进度、流式预览和候选阅读区；移动端自适应。集中双语系统文案与回归审计，保留用户正文、名称和模型结果原文。历史已完成但正文已删除的章节正确标识并折叠，不改写历史记录。
+- **Token 用量：** 超级管理员和管理员专属 Three.js 饼图/柱图、明细表和模型筛选；UTC 日范围最多 31 天。记录准入、成功、失败及 pending，显示请求和 Token、平均/峰值 RPM/TokenPM。仅记录启用后的调用，不补造历史；pending 不证明供应商已接收。WebGL 失败时可读表格仍可用。
+- **作品删除：** 作品卡删除、未变更远端的安全批次取消，以及显式二次确认的“保留平台记录并删除本地作品”。后者保留完整平台证据而非全量抹除，历史未知目标仍禁止盲写；不自动重发、核销、清空或删除远端草稿。
+- **时间：** 前端时间戳以 UTC+8 的 `yyyy:mm:dd HH:mm` 显示，无后缀。后端普通日志默认 `Asia/Shanghai`，`LOG_TIME_ZONE` 可配置 IANA 时区。业务 ISO 时间、安全审计和统计 UTC 日桶不变。
 
-### 升级和资产
+### 升级与资产
 
-升级前备份数据、数据库与外部密钥，停止原服务后更换产物，再重启。重启会丢失活跃平台浏览器会话，必要时重新登录并在应用内核验账号。server 仍要求已配置的短信供应商、离线启用认证、同源真实 HTTPS、独立密钥及 hardened / 审计；单实例 / 非 HA 边界不变。
+升级前停止写入，备份本地数据、SQL 业务仓库及独立密钥；Token 统计本地账本也须纳入备份。停止原服务后替换产物再启动；活跃浏览器会话不随重启保存，必要时重新登录核验。解析中的进程被终止后不会自动重试模型调用。服务端认证/短信、同源 HTTPS、hardened 审计、单实例/非 HA 边界不变。
 
-资产为 `novel-agent-v0.0.4a.tar.gz`（跟踪源码 + 本次服务 / 前端编译产物）及 `SHA256SUMS.txt`，内含提交 manifest。排除依赖、真实配置、业务数据、凭据、浏览器登录态和本地记忆 / 测试产物。使用 Node `^22.23.4 || ^24.22.2`，推荐 24.22.2；从解压根目录执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再执行 `node build/packages/server/src/index.js`。GitHub 自动源码归档不含编译产物，须另行安装开发依赖并构建。Docker 镜像标识为 `novel-agent:v0.0.4a`，不含 Chromium。
+资产为 `novel-agent-v0.0.5a.tar.gz`（跟踪源码及本次 web/server 编译产物）和 `SHA256SUMS.txt`，包含提交 manifest。不含 node_modules、真实数据、环境凭据、Token 账本、个人截图、浏览器登录态或本地记忆。使用 Node `^22.23.4 || ^24.22.2`；解压后按部署指南安装生产依赖及 sharp，再启动编译入口。GitHub 自动源码归档不含编译产物。Docker 标识为 `novel-agent:v0.0.5a`，不含 Chromium。
 
-已知验证限制：TypeScript 源码模式的 SQL Worker 启动测试曾间歇触发 5 秒超时，根因尚未证实；未放宽超时或跳过断言，随后多次源码复测及三次编译产物启动通过。详细失败与复测证据保留于验证报告，不能称为已修复。
+实际测试结果以[本次验证报告](docs/release-validation-v0.0.5a.md)为准。既有源码 Worker/测试启动时限的间歇失败不因发布自动成为“已修复”；若复现须同时记录失败与复测。隔离 stub 不证明真实付费模型质量、供应商 SQL、短信、SMTP/OIDC/Turnstile、TLS 或番茄送审验收。
 
-隔离测试不等于真实模型、短信、SMTP、OIDC、Turnstile、TLS 代理、供应商 SQL 或番茄送审验收；草稿核对不等于公开发布。详见[部署指南](docs/deployment-modes.md)、[番茄接入](docs/番茄平台接入.md)和[验证报告](docs/release-validation-v0.0.4a.md)。
+详见[章节解析](docs/chapter-analysis.md)、[Token 统计](docs/token-usage.md)、[部署](docs/deployment-modes.md)和[番茄接入](docs/番茄平台接入.md)。
 
 ## English
 
-This prerelease adds chapter management, world-stage organization and safer Fanqie automation since v0.0.3a. **It does not claim public-production readiness, certification or complete real-service acceptance.**
+This prerelease includes the current changes since v0.0.4a without replacing historical tags or releases. It does not claim public-production readiness, certification or full external-service acceptance.
 
-- **Chapters:** batch mode is off until explicitly enabled; 20/50/100 pagination, current-page select-all, retained revision-pinned cross-page selections and destructive confirmation. Unsaved selected drafts must be saved or discarded first. The server validates the entire CAS set and commits atomically, rolling back persistence failures. Survivors are not renumbered, the high watermark is retained, and remote platform drafts are never deleted.
-- **World stages:** create/rename stages, delete empty stages, upload/filter/move world text and maps. Legacy assets remain ungrouped. Organization does not implicitly alter generation context; tenant/project isolation and revision checks remain.
-- **UI/workflows:** identity below the logo, adjacent language/theme controls, administration below the guide, smooth accessible modal motion, family-specific novel/character/world creation, stable workflow selection and trailing-slash resource routing.
-- **Fanqie:** reuse only explicitly selected live app-owned sessions; no personal-browser adoption. Automatic polling reads local records only. Wait separately for work-list readiness and preserve 64-bit IDs. Only immutable `autoApprove=true` previews may run one exact-ID full read-back after an execution failure with a durably pinned ID. Continue only on proven results; challenges, identity changes or uncertainty stop safely. No blind replay, CAPTCHA bypass or automatic retry of historical unknown batches.
-- **Concurrent tenant startup:** tolerate only a competing directory-creation EEXIST, then validate every ancestor with lstat; symlinks, non-directories and other errors still fail closed.
-- Updated bilingual operational guides, API notes, project-skill guidance and version labels. The [validation report](docs/release-validation-v0.0.4a.md) is the source for actual results and limitations.
+- **Chapter analysis:** explicitly invoke a selected model over a chapter-number range or the latest N canonical chapters. Analyze style, pacing, plot planning/progression, characters, foreshadowing and continuity. Durable reports and invocation records are separate from manuscript text; source revision/hash references remain fixed. Oversized input is rejected, not silently truncated; uncertain calls are never automatically replayed.
+- **Continuity:** independent previous-chapter endings inform planning, writing and review; transitions require evidence. Editing/restoring a predecessor invalidates relevant later node contexts. Existing prose is not overwritten automatically.
+- **Review and localization:** larger preview/candidate panes, responsive reading, bilingual system-copy catalogs and accurate collapsed deleted-manuscript history. User content, custom names and model output remain unchanged.
+- **Token analytics:** only administrators and super-administrators may view Three.js pie/bar charts and accessible tables. UTC day filters span at most 31 days, with model/request/Token totals and average/peak RPM/TokenPM. Durable admission, success, failure and pending are distinguished; pending does not prove provider receipt. No fabricated historical usage. Tables survive unavailable WebGL.
+- **Deletion and evidence:** project-card deletion, cancellation of provably unmutated batches, and separately confirmed local deletion while retaining platform records. Retention is not complete erasure; orphan unknown targets remain write-blocked. No automatic remote replay, evidence clearing or remote draft deletion.
+- **Time:** UTC+8 frontend timestamps use `yyyy:mm:dd HH:mm` without a suffix. Backend ordinary logs default to `Asia/Shanghai`, configurable through `LOG_TIME_ZONE`. Business ISO timestamps, security audit chains and UTC statistical buckets are unchanged.
 
 ### Upgrade and delivery
 
-Back up data, databases and independent secrets; stop the service, replace artifacts and restart. Browser sessions do not survive restart: re-login and verify the account in the app if required. Server SMS/authentication, exact same-origin HTTPS, distinct keys, hardened auditing and single-instance/non-HA restrictions remain.
+Quiesce all writers and back up local data, SQL repositories, the local Token ledger and independent keys. Stop before replacing artifacts/restoring. Browser sessions require re-login after restart. Interrupted analysis calls are not automatically retried. Server authentication/SMS, exact same-origin HTTPS, hardened auditing and single-instance/non-HA restrictions remain.
 
-Assets: `novel-agent-v0.0.4a.tar.gz` (tracked source plus built web/server output) and `SHA256SUMS.txt`, including a commit manifest. Dependencies, live configuration/data, credentials, browser sessions, local memory and test artifacts are excluded. With Node `^22.23.4 || ^24.22.2` (24.22.2 recommended), run `npm ci --omit=dev --ignore-scripts`, `npm rebuild sharp`, then `node build/packages/server/src/index.js` from the extracted root. GitHub-generated source archives require development dependencies and a build. Docker identifies `novel-agent:v0.0.4a` and does not include Chromium.
+Assets: `novel-agent-v0.0.5a.tar.gz` (tracked source and compiled web/server output) and `SHA256SUMS.txt`, with a commit manifest. Dependencies, live data/environment credentials, Token ledger, personal screenshots, browser state and local memory are excluded. Node `^22.23.4 || ^24.22.2` is required. Install production dependencies and rebuild sharp as documented before starting the compiled server. GitHub-generated source archives need a separate build. Docker identifies `novel-agent:v0.0.5a` and excludes Chromium.
 
-Known verification caveat: the TypeScript-source SQL-worker bootstrap test intermittently exceeded its 5-second deadline; the root cause remains unproven. No timeout was relaxed or assertion skipped. Repeated unchanged-source checks and three compiled-worker startups subsequently passed. The validation report preserves both failures and repeat evidence; this is not described as fixed.
+The [validation report](docs/release-validation-v0.0.5a.md) records actual results and limitations. Historical intermittent source-worker/startup deadlines are not declared fixed by release work; preserve failures and repeats if reproduced. Stub tests do not establish real paid-model quality, vendor SQL, SMS, SMTP/OIDC/Turnstile, TLS or Fanqie review acceptance.
 
-Isolated tests do not prove real paid-model/SMS/SMTP/OIDC/Turnstile/TLS/vendor-SQL/Fanqie acceptance. Verified drafts are not public publication. See [deployment](docs/en/deployment-modes.md), [Fanqie integration](docs/en/fanqie-integration.md) and [validation](docs/release-validation-v0.0.4a.md).
+See [chapter analysis](docs/en/chapter-analysis.md), [Token analytics](docs/en/token-usage.md), [deployment](docs/en/deployment-modes.md) and [Fanqie](docs/en/fanqie-integration.md).

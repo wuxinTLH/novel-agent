@@ -1,3 +1,4 @@
+import { runtimeMessage, runtimeT } from '../../locals/runtimeTranslate';
 import type {
   Asset,
   Category,
@@ -18,10 +19,10 @@ export function previousOutputControl(step: Pick<Step, 'reusePreviousOutput' | '
     // A stale checked preference must remain switchable off, even after invalidation clears output.
     disabled: locked || (!available && !checked),
     hint: available
-      ? '开启后跳过此节点的模型请求，沿用当前结果'
+      ? runtimeT("开启后跳过此节点的模型请求，沿用当前结果")
       : checked
-        ? '前次结果已失效，请取消勾选后重新运行此节点或完整工作流'
-        : '该节点尚无可复用结果，请先运行节点',
+        ? runtimeT("前次结果已失效，请取消勾选后重新运行此节点或完整工作流")
+        : runtimeT("该节点尚无可复用结果，请先运行节点"),
   };
 }
 
@@ -123,19 +124,19 @@ export function canApplyProject(current: Project | null, incoming: Project, iden
   });
 }
 export function candidateBlockReason(candidate: ChapterCandidate, chapters: Chapter[]) {
-  if (candidate.issues.length) return '候选稿存在硬性文本违规，不能采用。请修改要求或重新生成。';
+  if (candidate.issues.length) return runtimeT("候选稿存在硬性文本违规，不能采用。请修改要求或重新生成。");
   if (!candidate.chapterId)
     return chapters.some((chapter) => chapter.number === candidate.number)
-      ? '该章号已有正文，不能覆盖。请重新生成并对比。'
+      ? runtimeT("该章号已有正文，不能覆盖。请重新生成并对比。")
       : '';
   const original = chapters.find((chapter) => chapter.id === candidate.chapterId);
-  if (!original) return '原章节已删除，不能采用此候选稿。';
-  if (original.revision !== candidate.baseRevision) return '原稿已修改，此候选稿基于旧版本。请重新生成。';
+  if (!original) return runtimeT("原章节已删除，不能采用此候选稿。");
+  if (original.revision !== candidate.baseRevision) return runtimeT("原稿已修改，此候选稿基于旧版本。请重新生成。");
   return '';
 }
 export function targetNumbers(project: Project, request: RunRequest) {
   const parsed = runRequestSchema.safeParse(request);
-  if (!parsed.success) throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
+  if (!parsed.success) throw new Error(parsed.error.issues.map((issue) => runtimeMessage(issue.message)).join('; '));
   const target = parsed.data.target || { kind: 'next' as const, count: 1 };
   const first =
     target.kind === 'next'
@@ -149,6 +150,6 @@ export function targetNumbers(project: Project, request: RunRequest) {
       : target.kind === 'single'
         ? target.number
         : target.to;
-  if (last > GENERATION_LIMITS.maxChapterNumber) throw new Error('目标章号超出上限。');
+  if (last > GENERATION_LIMITS.maxChapterNumber) throw new Error(runtimeT("目标章号超出上限。"));
   return Array.from({ length: last - first + 1 }, (_, index) => first + index);
 }

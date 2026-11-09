@@ -1,5 +1,19 @@
 # 更新记录
 
+## v0.0.5a — 章节解析、用量统计与连续性 / Chapter analysis, usage analytics and continuity
+
+发布标签 `v0.0.5a`；npm/package SemVer `0.0.5-a`。本次汇总 v0.0.4a 之后的当前工作树更新，旧版说明和测试数字保留为历史记录。
+
+- **章节解析：** 手动指定起止章或选择最近 N 章，显式调用所选模型分析写法、节奏、剧情布局、人物、伏笔与跨章衔接；独立保存调用状态、来源修订和报告，可重复查看，不改写正文。不自动重试未知模型请求，不静默截断超限正文。
+- **连续性：** 独立前章结尾锚点传递至规划、写作和审校；要求状态过渡及两侧证据。保存或恢复前章使相关后续节点上下文失效；现有正文和历史输出不自动覆盖。模型判断不保证文字质量。
+- **审阅与国际化：** 生成进度、预览和候选使用更大的阅读区域，支持展开全文与窄屏排列。系统文案集中到双语词典并加入静态及浏览器回归；用户正文、名称、模型返回和未知服务端错误不擅自翻译。已删除正文的历史生成结果明确标记并默认折叠，而非误报已保存。
+- **Token 统计：** 独立持久化调用准入、成功、失败和待定状态；仅超级管理员和管理员可查看 Three.js 图表及表格。UTC 日范围最多 31 天，包含模型、请求、Token、平均/峰值 RPM 和 TokenPM；不编造历史，不将 pending 当作已发往供应商的证据。WebGL 不可用时保留表格。
+- **删除与平台证据：** 作品卡提供明确删除入口；未开始写入的安全批次可显式取消。未知远端结果可通过二次确认保留平台证据仅删除本地作品，不等于全部数据抹除；保留证据继续阻止同一远端目标盲写，不重放旧请求或自动清理历史。
+- **时间与日志：** 前端时间戳固定 UTC+8、`yyyy:mm:dd HH:mm`，不附时区；统计日边界仍是 UTC。后端日志默认 `Asia/Shanghai`，可通过 `LOG_TIME_ZONE` 配置，不改变持久化时间和安全审计链。
+- **交付边界：** Node、安全部署、租户隔离、CSRF、单实例及真实外部服务验收限制不变。实际测试和发布资产以[本次验证记录](docs/release-validation-v0.0.5a.md)为准，不把历史通过数字当作当前结果。
+
+**English:** Explicit chapter analysis supports a chapter range or the latest N chapters, with independent durable reports and invocation records, immutable source revision references and no manuscript mutation or blind request replay. Continuity anchors and downstream invalidation preserve canonical chapter boundaries. Larger review panes, bilingual system-copy catalogs, accurate deleted-chapter history, administrator-only bounded Token analytics, explicit local deletion with retained remote evidence, UTC+8 timestamp presentation and configurable backend log timezones are included. User-authored data is not translated. Historical unknown platform writes remain protected; retained deletion is not complete erasure. See the [current validation report](docs/release-validation-v0.0.5a.md) for actual tests and limitations.
+
 ## v0.0.4a — 章节管理与世界观阶段 / Chapter management and world stages
 
 发布标签 `v0.0.4a`；npm/package SemVer `0.0.4-a`。本次汇总 v0.0.3a 之后的创作界面、阶段资产与番茄安全自动化更新；下方旧版数字和限制保留为历史记录。

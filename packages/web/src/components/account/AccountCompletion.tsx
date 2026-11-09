@@ -1,3 +1,4 @@
+import { useLocale } from '../../locals';
 import { useState, type FormEvent } from 'react';
 /** Public registration/recovery completion. Parent must supply the prelogin CSRF client. */
 export function AccountCompletion({
@@ -11,6 +12,7 @@ export function AccountCompletion({
   request(path: string, method: string, body: unknown): Promise<unknown>;
   onComplete(): void;
 }) {
+  const { t } = useLocale();
   const [password, setPassword] = useState(''),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
@@ -26,18 +28,17 @@ export function AccountCompletion({
       setPassword('');
       onComplete();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '令牌无效或已过期');
+      setError(err instanceof Error ? err.message : t("令牌无效或已过期"));
     } finally {
       setBusy(false);
     }
   }
   return (
     <form onSubmit={submit}>
-      <h2>{purpose === 'reset' ? '设置新密码' : '确认注册'}</h2>
-      <p>此链接只能使用一次；不会自动登录。</p>
+      <h2>{purpose === 'reset' ? t("设置新密码") : t("确认注册")}</h2>
+      <p>{t("此链接只能使用一次；不会自动登录。")}</p>
       {purpose === 'reset' && (
-        <label>
-          新密码{' '}
+        <label>{t("新密码")}{' '}
           <input
             type="password"
             minLength={12}
@@ -49,7 +50,7 @@ export function AccountCompletion({
         </label>
       )}
       <p role="alert">{error}</p>
-      <button disabled={busy}>确认</button>
+      <button disabled={busy}>{t("确认")}</button>
     </form>
   );
 }

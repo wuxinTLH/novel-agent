@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -114,7 +115,7 @@ export function acquireDataLock(dir: string) {
       if (owner.token === token) fs.unlinkSync(file);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-        console.error('无法释放数据目录锁，请在进程结束后检查锁文件。');
+        logger.error('无法释放数据目录锁，请在进程结束后检查锁文件。');
     }
   };
 }

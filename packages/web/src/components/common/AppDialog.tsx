@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
+import { useLocale } from '../../locals/useLocale';
+
 type ConfirmOptions = { title?: string; confirmText?: string; danger?: boolean };
 type Request = { message: string; options: ConfirmOptions; resolve: (value: boolean) => void };
 const DialogContext = createContext<(message: string, options?: ConfirmOptions) => Promise<boolean>>(
@@ -10,6 +12,7 @@ export function useConfirm() {
   return useContext(DialogContext);
 }
 export function DialogProvider({ children }: { children: React.ReactNode }) {
+  const { locale, t } = useLocale();
   const [request, setRequest] = useState<Request | null>(null);
   const pending = useRef<Request | null>(null);
   const confirm = useCallback((message: string, options: ConfirmOptions = {}) => {
@@ -42,18 +45,18 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
             aria-modal="true"
             aria-labelledby="app-dialog-title"
           >
-            <h2 id="app-dialog-title">{request.options.title || '请确认'}</h2>
+            <h2 id="app-dialog-title">{request.options.title || (t("请确认"))}</h2>
             <p>{request.message}</p>
             <div>
               <button type="button" className="button secondary" onClick={() => close(false)}>
-                取消
+                {t("取消")}
               </button>
               <button
                 type="button"
                 className={`button ${request.options.danger ? 'danger' : 'primary'}`}
                 onClick={() => close(true)}
               >
-                {request.options.confirmText || '确定'}
+                {request.options.confirmText || (t("确定"))}
               </button>
             </div>
           </section>

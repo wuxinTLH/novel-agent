@@ -1,0 +1,11 @@
+.project-deletion-blockers {
+  overflow-wrap: anywhere;
+  p, li { line-height: 1.7; }
+  &__list { display: grid; gap: 12px; max-height: 42vh; overflow: auto; }
+  &__list article { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+  &__list h3 { margin: 0 0 8px; font-size: 14px; }
+  &__list ul { margin: 8px 0; padding-inline-start: 24px; }
+  &__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+  &__actions > .button { min-width: 0; max-width: 100%; height: auto; min-height: 37px; white-space: normal; overflow-wrap: anywhere; padding-block: 9px; }
+  @media (max-width: 540px) { &__actions > button { width: 100%; } }
+}

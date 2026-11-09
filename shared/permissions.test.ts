@@ -29,6 +29,7 @@ const expectedGrants: Record<Permission, readonly RoleId[]> = {
   'maintenance.commands': ['superadmin', 'admin'],
   'security.read': ['superadmin', 'admin'],
   'security.manage': ['superadmin'],
+  'usage.read': ['superadmin', 'admin'],
 };
 
 test('four roles have exact weights; ordering does not grant authority', () => {

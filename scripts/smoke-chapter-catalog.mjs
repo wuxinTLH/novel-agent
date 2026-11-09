@@ -286,6 +286,16 @@ try {
   await page.reload();
   await catalog.waitFor();
   assert.equal(await catalog.getByRole('checkbox').count(), 0, 'batch mode resets on unmount/reload');
+  step = 'English manuscript UI';
+  await page.getByRole('button', { name: '语言' }).click();
+  await page.getByRole('menuitemradio', { name: 'English' }).click();
+  await page.getByRole('heading', { name: 'Turn inspiration into your next chapter' }).waitFor();
+  await page.getByRole('button', { name: 'Add manuscript (upload / write)' }).waitFor();
+  await page.getByRole('button', { name: 'Bulk delete', exact: true }).waitFor();
+  assert.equal(await page.locator('.chapter-list-heading').innerText().then(text => /[\u4e00-\u9fff]/.test(text)), false);
+  assert.equal(await page.locator('.chapter-catalog').innerText().then(text => /批量删除|上一页|下一页|字符|每页/.test(text)), false);
+  assert.equal(await page.locator('.theme-menu').innerText().then(text => /主题|极简|跟随系统|蓝粉白/.test(text)), false);
+  await page.screenshot({ path: path.join(artifacts, 'chapter-catalog-en-390.png'), fullPage: true });
   // Baseline production CSP blocks the optional Google Fonts stylesheet before
   // routing; keep these visible separately and reject every other console error.
   const knownOptionalFontWarnings = browserErrors.filter(

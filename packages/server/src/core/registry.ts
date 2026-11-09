@@ -6,6 +6,7 @@ import { projectsService } from '../features/projects/projects.js';
 import { workflowService } from '../features/workflow/workflow.js';
 import { assetsService } from '../features/assets/assets.js';
 import { generationService } from '../features/generation/routes/generation.js';
+import { chapterAnalysisService } from '../features/chapters/chapter-analysis.js';
 import { chaptersService } from '../features/chapters/chapters.js';
 import { documentsService } from '../features/documents/documents.js';
 import { fileSandboxService } from '../features/file-sandbox/service.js';
@@ -20,6 +21,7 @@ export const coreServices: readonly FeatureService[] = [
   assetsService,
   generationService,
   chaptersService,
+  chapterAnalysisService,
   documentsService,
   fileSandboxService,
   knowledgeService,

@@ -1,3 +1,6 @@
+import { platformErrorText } from '../../hooks/platforms/localizedPlatformText';
+import { seedModelDisplayName } from '../../hooks/platforms/modelDisplayName';
+import { useLocale } from '../../locals/useLocale';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
@@ -20,11 +23,11 @@ import { modelRuntimeDefaults, modelRuntimeNumericRules, validateModelRuntime, t
 
 type ModelView = 'switch' | 'add' | 'edit';
 type RuntimeField = keyof typeof modelRuntimeNumericRules;
-const runtimeLabels: Record<RuntimeField, string> = {
+const runtimeLabels = {
   temperature: '温度', maxOutputTokens: '最大输出 token', timeoutMs: '超时（毫秒）', contextWindow: '上下文窗口（token）',
   maxImages: '图片上限', inputPricePerMillion: '输入价格 / 百万 token', outputPricePerMillion: '输出价格 / 百万 token',
   perCallBudgetTokens: '每次调用 token 预算（留空不限）', maxEstimatedCostPerCall: '每次调用预估费用预算（留空不限）',
-};
+} as const satisfies Record<RuntimeField, string>;
 type ModelForm = {
   name: string;
   baseUrl: string;
@@ -76,6 +79,7 @@ export default function ModelSettingsPanel({
   onSettingsChange: (settings: ModelSettings) => void;
   onError: (message: string) => void;
 }) {
+  const { t } = useLocale();
   const confirmDialog = useConfirm();
   const models = settings.models || [];
   const [view, setView] = useState<ModelView>('switch');
@@ -99,7 +103,7 @@ export default function ModelSettingsPanel({
       onSettingsChange(await action());
       if (message) setView('switch');
     } catch (error) {
-      onError(error instanceof Error ? error.message : '模型设置失败');
+      onError(platformErrorText(t, error, "模型设置失败"));
     } finally {
       setModelBusy(false);
     }
@@ -137,8 +141,16 @@ export default function ModelSettingsPanel({
       else if (key in modelRuntimeDefaults && view === 'edit' && (models.find(m => m.id === editingId) as ModelRuntimeOptions | undefined)?.[key] !== undefined)
         runtime[key] = modelRuntimeDefaults[key as keyof typeof modelRuntimeDefaults] as number;
     }
-    const errors = validateModelRuntime(runtime);
-    if (form.protocol === 'anthropic-messages' && (runtime.temperature ?? 0) > 1) errors.push('Anthropic 温度必须在 0–1 范围内。');
+    const errors = validateModelRuntime(runtime).map(message => {
+      for (const [key, rule] of Object.entries(modelRuntimeNumericRules)) {
+        if (message === `${key} 必须是 ${rule.min}–${rule.max} 范围内的${rule.integer ? '整数' : '数值'}。`)
+          return t("{field} 必须是 {min}–{max} 范围内的{kind}。", { field: t(runtimeLabels[key as RuntimeField]), min: rule.min, max: rule.max, kind: rule.integer ? t("整数") : t("数值") });
+      }
+      const known = ["vision 必须是布尔值。", "最大输出 token 不能超过上下文窗口。", "启用每次预估费用预算时，必须同时配置输入和输出价格。"] as const;
+      const key = known.find(key => key === message);
+      return key ? t(key) : message;
+    });
+    if (form.protocol === 'anthropic-messages' && (runtime.temperature ?? 0) > 1) errors.push(t("Anthropic 温度必须在 0–1 范围内。"));
     if (errors.length) { onError(errors.join(' ')); return; }
     const payload = {
       ...runtime,
@@ -159,7 +171,7 @@ export default function ModelSettingsPanel({
         }
         return api<ModelSettings>('/settings');
       },
-      view === 'add' ? '模型已添加' : '模型已更新',
+      view === 'add' ? t("模型已添加") : t("模型已更新"),
     );
   };
 
@@ -167,7 +179,7 @@ export default function ModelSettingsPanel({
     void mutate(() => api<ModelSettings>(`/models/${id}/select`, { method: 'POST' }));
 
   const deleteModel = async (id: string, name: string) => {
-    if (!(await confirmDialog(`确定删除模型「${name}」吗？`, { danger: true, confirmText: '删除' }))) return;
+    if (!(await confirmDialog(t("确定删除模型「{value1}」吗？", { value1: name }), { danger: true, confirmText: t("删除") }))) return;
     void mutate(async () => {
       await api(`/models/${id}`, { method: 'DELETE' });
       return api<ModelSettings>('/settings');
@@ -180,71 +192,66 @@ export default function ModelSettingsPanel({
       <div className="model-settings-page">
         <div className="model-page-heading">
           <button type="button" className="button secondary model-back" onClick={closeForm} disabled={modelBusy || busy}>
-            <ArrowLeft size={16} /> 返回模型切换
-          </button>
+            <ArrowLeft size={16} /> {t("返回模型切换")}</button>
           <div>
             <span className="eyebrow">MODEL CONFIGURATION</span>
-            <h2>{view === 'add' ? '新增模型' : '修改模型'}</h2>
-            <p>{view === 'add' ? '保存一个新的模型连接配置。' : `正在修改：${editingModel?.name || '模型配置'}`}</p>
+            <h2>{view === 'add' ? t("新增模型") : t("修改模型")}</h2>
+            <p>{view === 'add' ? t("保存一个新的模型连接配置。") : t("正在修改：{value1}", { value1: editingModel ? seedModelDisplayName(t, editingModel) : t("模型配置") })}</p>
           </div>
         </div>
         <form className="model-editor-page" onSubmit={submitForm} aria-busy={modelBusy || busy}>
           <div className="model-editor-heading">
             <Sparkles size={20} />
             <div>
-              <h3>{view === 'add' ? '模型连接信息' : '编辑连接信息'}</h3>
-              <p>密钥只用于本机服务进程，不会写入浏览器存储。</p>
+              <h3>{view === 'add' ? t("模型连接信息") : t("编辑连接信息")}</h3>
+              <p>{t("密钥只用于本机服务进程，不会写入浏览器存储。")}</p>
             </div>
           </div>
           <label>
-            显示名称
-            <input disabled={modelBusy || busy} value={form.name} onChange={(event) => update('name', event.target.value)} required maxLength={100} placeholder="例如：工作室 Qwen" />
+            {t("显示名称")}<input disabled={modelBusy || busy} value={form.name} onChange={(event) => update('name', event.target.value)} required maxLength={100} placeholder={t("例如：工作室 Qwen")} />
           </label>
           <label>
-            服务地址 <span>Base URL</span>
+            {t("服务地址")}<span>Base URL</span>
             <input type="url" disabled={modelBusy || busy} value={form.baseUrl} onChange={(event) => update('baseUrl', event.target.value)} required placeholder="https://api.openai.com/v1" />
           </label>
           <label>
-            接口协议
-            <select disabled={modelBusy || busy} value={form.protocol} onChange={(event) => update('protocol', event.target.value as ModelProtocol)}>
+            {t("接口协议")}<select disabled={modelBusy || busy} value={form.protocol} onChange={(event) => update('protocol', event.target.value as ModelProtocol)}>
               {(Object.keys(protocolLabels) as ModelProtocol[]).map((protocol) => (
                 <option key={protocol} value={protocol}>{protocolLabels[protocol]}</option>
               ))}
             </select>
           </label>
           <label>
-            模型 ID
-            <input disabled={modelBusy || busy} value={form.model} onChange={(event) => update('model', event.target.value)} required maxLength={100} placeholder="gpt-4.1-mini" />
+            {t("模型 ID")}<input disabled={modelBusy || busy} value={form.model} onChange={(event) => update('model', event.target.value)} required maxLength={100} placeholder="gpt-4.1-mini" />
           </label>
           <label>
             API Key
-            <input type="password" disabled={modelBusy || busy} autoComplete="off" value={form.apiKey} onChange={(event) => update('apiKey', event.target.value)} placeholder={view === 'edit' ? '留空以保留原密钥' : '输入 API Key'} />
+            <input type="password" disabled={modelBusy || busy} autoComplete="off" value={form.apiKey} onChange={(event) => update('apiKey', event.target.value)} placeholder={view === 'edit' ? t("留空以保留原密钥") : t("输入 API Key")} />
           </label>
           {view === 'edit' && editingModel?.hasKey && (
             <label className="checkbox-label">
               <input type="checkbox" disabled={modelBusy || busy} checked={form.clearKey} onChange={(event) => update('clearKey', event.target.checked)} />
-              清除当前密钥
-            </label>
+              {t("清除当前密钥")}</label>
           )}
           <fieldset disabled={modelBusy || busy}>
-            <legend>生成参数与能力</legend>
-            <p className="info-note">留空使用兼容默认值。上下文预检为保守估算；价格按同一货币每百万 token 填写，未填写时不估算费用。每次预算预留最大输出 token，超限将在请求前拒绝；费用预算须配置两项价格，0 表示只允许预估免费调用。费用为估算，不能保证服务商实际账单上限。</p>
+            <legend>{t("生成参数与能力")}</legend>
+            <p className="info-note">{t("留空使用兼容默认值。上下文预检为保守估算；价格按同一货币每百万 token 填写，未填写时不估算费用。每次预算预留最大输出 token，超限将在请求前拒绝；费用预算须配置两项价格，0 表示只允许预估免费调用。费用为估算，不能保证服务商实际账单上限。")}</p>
             {(Object.keys(modelRuntimeNumericRules) as RuntimeField[]).map(key => {
               const rule = modelRuntimeNumericRules[key];
-              return <label key={key}>{runtimeLabels[key]}
+              return <label key={key}>{t(runtimeLabels[key])}
                 <input type="number" min={rule.min} max={key === 'temperature' && form.protocol === 'anthropic-messages' ? 1 : rule.max} step={rule.integer ? 1 : 'any'}
-                  value={form.runtime[key]} placeholder={key in modelRuntimeDefaults ? String(modelRuntimeDefaults[key as keyof typeof modelRuntimeDefaults]) : '未配置'}
+                  value={form.runtime[key]} placeholder={key in modelRuntimeDefaults ? String(modelRuntimeDefaults[key as keyof typeof modelRuntimeDefaults]) : t("未配置")}
                   onChange={event => setForm(current => ({ ...current, runtime: { ...current.runtime, [key]: event.target.value } }))} />
               </label>;
             })}
-            <label className="checkbox-label"><input type="checkbox" checked={form.vision} onChange={event => update('vision', event.target.checked)} />启用视觉输入</label>
+            <label className="checkbox-label"><input type="checkbox" checked={form.vision} onChange={event => update('vision', event.target.checked)} />{t("启用视觉输入")}</label>
           </fieldset>
-          <p className="info-note">{form.protocol === 'anthropic-messages' ? 'Anthropic 使用 x-api-key 与 anthropic-version。' : form.protocol === 'responses' ? 'Responses API 使用 /responses 与 input。' : 'Chat Completions 使用 /chat/completions 与 messages。'}</p>
+          <p className="info-note">{form.protocol === 'anthropic-messages' ? t("Anthropic 使用 x-api-key 与 anthropic-version。") : form.protocol === 'responses' ? t("Responses API 使用 /responses 与 input。") : t("Chat Completions 使用 /chat/completions 与 messages。")}</p>
           <div className="model-editor-actions">
-            <button type="button" className="button secondary" onClick={closeForm} disabled={modelBusy || busy}><X size={15} /> 取消</button>
-            <button type="submit" className="button primary" disabled={modelBusy || busy}><Check size={15} /> {modelBusy ? '保存中…' : view === 'add' ? '保存模型' : '保存修改'}</button>
+            <button type="button" className="button secondary" onClick={closeForm} disabled={modelBusy || busy}><X size={15} /> {t("取消")}</button>
+            <button type="submit" className="button primary" disabled={modelBusy || busy}><Check size={15} /> {modelBusy ? t("保存中…") : view === 'add' ? t("保存模型") : t("保存修改")}</button>
           </div>
-          {modelBusy && <p role="status">正在保存模型配置…</p>}
+          {modelBusy && <p role="status">{t("正在保存模型配置…")}</p>}
         </form>
       </div>
     );
@@ -255,40 +262,40 @@ export default function ModelSettingsPanel({
       <div className="model-page-heading model-switch-heading">
         <div>
           <span className="eyebrow">MODEL SETTINGS</span>
-          <h2>切换模型</h2>
-          <p>选择当前创作使用的模型，或进入独立页面管理模型配置。</p>
+          <h2>{t("切换模型")}</h2>
+          <p>{t("选择当前创作使用的模型，或进入独立页面管理模型配置。")}</p>
         </div>
         <div className="model-page-actions">
-          <button type="button" className="button secondary" onClick={openAdd} disabled={modelBusy || busy}><Plus size={15} /> 新增模型</button>
-          <button type="button" className="button primary" onClick={() => activeModel && openEdit(activeModel.id)} disabled={!activeModel || modelBusy || busy}><Pencil size={15} /> 修改模型</button>
+          <button type="button" className="button secondary" onClick={openAdd} disabled={modelBusy || busy}><Plus size={15} /> {t("新增模型")}</button>
+          <button type="button" className="button primary" onClick={() => activeModel && openEdit(activeModel.id)} disabled={!activeModel || modelBusy || busy}><Pencil size={15} /> {t("修改模型")}</button>
         </div>
       </div>
       <section className="model-switch-card" aria-labelledby="model-switch-title">
         <div className="model-section-heading">
-          <div><h3 id="model-switch-title">已保存模型</h3><p>点击“切换使用”后，新的配置会立即用于后续工作流。</p></div>
-          <span className="subtle-tag">{models.length} 个配置</span>
+          <div><h3 id="model-switch-title">{t("已保存模型")}</h3><p>{t("点击“切换使用”后，新的配置会立即用于后续工作流。")}</p></div>
+          <span className="subtle-tag">{t("{count} 个配置", { count: models.length })}</span>
         </div>
         <div className="model-switch-list">
           {models.map((model) => (
             <article className={`model-switch-item ${settings.activeModelId === model.id ? 'active' : ''}`} key={model.id}>
               <div className="model-switch-icon"><Sparkles size={17} /></div>
-              <div className="model-list-copy"><strong>{model.name}</strong><small>{protocolLabels[model.protocol] || model.protocol} · {model.model} · {model.baseUrl}</small></div>
+              <div className="model-list-copy"><strong>{seedModelDisplayName(t, model)}</strong><small>{protocolLabels[model.protocol] || model.protocol} · {model.model} · {model.baseUrl}</small></div>
               <div className="model-list-actions">
-                <button type="button" className="button secondary" disabled={settings.activeModelId === model.id || modelBusy || busy} onClick={() => selectModel(model.id)}>{settings.activeModelId === model.id ? '当前使用' : '切换使用'}</button>
-                <button type="button" className="icon-button" aria-label={`修改模型 ${model.name}`} disabled={modelBusy || busy} onClick={() => openEdit(model.id)}><Pencil size={14} /></button>
-                <button type="button" className="icon-button delete" aria-label={`删除模型 ${model.name}`} disabled={modelBusy || busy} onClick={() => void deleteModel(model.id, model.name)}><Trash2 size={14} /></button>
+                <button type="button" className="button secondary" disabled={settings.activeModelId === model.id || modelBusy || busy} onClick={() => selectModel(model.id)}>{settings.activeModelId === model.id ? t("当前使用") : t("切换使用")}</button>
+                <button type="button" className="icon-button" aria-label={t("修改模型 {value1}", { value1: seedModelDisplayName(t, model) })} disabled={modelBusy || busy} onClick={() => openEdit(model.id)}><Pencil size={14} /></button>
+                <button type="button" className="icon-button delete" aria-label={t("删除模型 {value1}", { value1: seedModelDisplayName(t, model) })} disabled={modelBusy || busy} onClick={() => void deleteModel(model.id, seedModelDisplayName(t, model))}><Trash2 size={14} /></button>
               </div>
             </article>
           ))}
         </div>
       </section>
       <section className="model-mode-card" aria-labelledby="model-mode-title">
-        <div className="model-section-heading"><div><h3 id="model-mode-title">运行模式</h3><p>演示模式不请求外部服务，连接模型会使用上方当前配置。</p></div><ShieldCheck size={19} /></div>
+        <div className="model-section-heading"><div><h3 id="model-mode-title">{t("运行模式")}</h3><p>{t("演示模式不请求外部服务，连接模型会使用上方当前配置。")}</p></div><ShieldCheck size={19} /></div>
         <div className="mode-options">
-          <button type="button" className={mode === 'demo' ? 'active' : ''} aria-pressed={mode === 'demo'} disabled={busy || modelBusy} onClick={() => setMode('demo')}><WandSparkles size={18} /><strong>演示模式</strong><small>无需密钥，体验创作流程</small>{mode === 'demo' && <Check size={15} />}</button>
-          <button type="button" className={mode === 'live' ? 'active' : ''} aria-pressed={mode === 'live'} disabled={busy || modelBusy} onClick={() => setMode('live')}><Sparkles size={18} /><strong>连接模型</strong><small>使用当前模型生成小说内容</small>{mode === 'live' && <Check size={15} />}</button>
+          <button type="button" className={mode === 'demo' ? 'active' : ''} aria-pressed={mode === 'demo'} disabled={busy || modelBusy} onClick={() => setMode('demo')}><WandSparkles size={18} /><strong>{t("演示模式")}</strong><small>{t("无需密钥，体验创作流程")}</small>{mode === 'demo' && <Check size={15} />}</button>
+          <button type="button" className={mode === 'live' ? 'active' : ''} aria-pressed={mode === 'live'} disabled={busy || modelBusy} onClick={() => setMode('live')}><Sparkles size={18} /><strong>{t("连接模型")}</strong><small>{t("使用当前模型生成小说内容")}</small>{mode === 'live' && <Check size={15} />}</button>
         </div>
-        {mode !== settings.mode && activeModel && <button type="button" className="button primary model-mode-save" onClick={() => onSave({ mode, baseUrl: activeModel.baseUrl, model: activeModel.model, protocol: activeModel.protocol, activeModelId: activeModel.id })} disabled={busy || modelBusy}><Check size={15} /> 保存运行模式</button>}
+        {mode !== settings.mode && activeModel && <button type="button" className="button primary model-mode-save" onClick={() => onSave({ mode, baseUrl: activeModel.baseUrl, model: activeModel.model, protocol: activeModel.protocol, activeModelId: activeModel.id })} disabled={busy || modelBusy}><Check size={15} /> {t("保存运行模式")}</button>}
       </section>
       <DatabaseSettings />
     </div>

@@ -15,7 +15,7 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 FROM node:22.23.4-bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="Novel Agent" \
-      org.opencontainers.image.version="0.0.4a" \
+      org.opencontainers.image.version="0.0.5a" \
       org.opencontainers.image.source="https://github.com/wuxinTLH/novel-agent"
 # Only these deployment modes are supported. local binds container loopback only.
 ARG CoreModel=server

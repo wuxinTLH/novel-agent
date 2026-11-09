@@ -1,4 +1,5 @@
 import express from 'express';
+import { bindTokenUsageWorker } from '../../features/administration/token-usage-channel.js';
 import { hasPermission } from '../../../../../shared/permissions.js';
 import http from 'node:http';
 import path from 'node:path';
@@ -180,6 +181,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
         )
       : new Worker(moduleUrl, { workerData, stdout: true, stderr: true });
     locks.bindWorker(worker, platformAccountLocks);
+    bindTokenUsageWorker(worker, options.dir);
     // Worker/driver exceptions can contain credentials. Never forward their output.
     worker.stdout?.resume();
     worker.stderr?.resume();

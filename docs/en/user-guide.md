@@ -2,7 +2,7 @@
 
 [中文原文](../使用手册.md) · [English documentation index](README.md) · [English overview](../../README/README_en.md)
 
-This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Deployment-mode prerelease v0.0.4a defaults to local-only use, authentication off; server requires offline-enabled authentication and hardened/audit checks. Do not expose the default service to the public Internet.
+This is the operational English counterpart of the Chinese user guide, not a claim of a fully translated UI. UI labels may remain Chinese. Deployment-mode prerelease v0.0.5a defaults to local-only use, authentication off; server requires offline-enabled authentication and hardened/audit checks. Do not expose the default service to the public Internet.
 
 ## Install and start
 
@@ -36,6 +36,16 @@ A separate static process is not a second backend or a public-Internet safety gu
 - `/settings`: model profiles, protocols, credentials, execution mode and optional SQLconnect.
 
 Refresh preserves the route. Unknown routes show a 404 and return after five seconds. Workflow arrangement (layered, horizontal, vertical or grid) changes positions only, not dependencies or execution semantics. Project settings edit title, type, synopsis and a PNG/JPEG/WebP cover up to 4 MiB. Avatars are cropped and stored only in the current browser after server-side file checking.
+
+### v0.0.5a analysis and current increment
+
+- **Chapter analysis:** from manuscripts, choose a manual chapter-number range or the latest N saved chapters, select a live model and explicitly start analysis. Independently persisted reports can be reopened without another model call. Analysis never edits canonical text, history or candidates, or triggers publication. Save manuscript edits first; see [chapter analysis](chapter-analysis.md) for limits, statuses and APIs.
+- **Project-card deletion:** delete the specified card without first changing the active project. At least one project must remain; running/platform-busy safeguards apply. If the server permits, a separately confirmed local-only deletion can retain unknown publication records and duplicate-prevention evidence. It does not delete remote text, clear uncertainty or permit resending. See [platform guidance](fanqie-integration.md); hiding records, read-only reconciliation and preserving-record deletion are different operations.
+- **Usage and review:** [Token statistics](token-usage.md) covers admin/superadmin access, UTC date aggregation, estimates versus provider usage and synthetic-test limitations. Review can collapse as a group, expand long text and stack comparisons on small screens; explicit adoption, revision and dirty-edit protections remain.
+- **Continuity:** saving/restoring canonical chapter n invalidates generation contexts targeting n or later in active and inactive workflows. Old output remains inspectable, but standalone downstream runs must regenerate invalid upstream dependencies. Later manuscript chapters are not rewritten automatically.
+- **Language and time:** fixed interface copy spans authoring, accounts, platforms and administration; user names, prose, prompts, model responses and unknown diagnostics remain verbatim. Frontend timestamps use fixed UTC+8 `yyyy:mm:dd HH:mm`, without changing stored/API times. Application logs default to Asia/Shanghai; backend `LOG_TIME_ZONE` accepts a valid IANA zone such as `UTC`, with invalid values producing `LOG_TIME_ZONE_INVALID`. This wrapper does not rewrite third-party output or CLI JSON; usage date buckets remain UTC.
+
+This section describes release scope, not paid-model, platform, database, SMS or other live-service acceptance.
 
 ### v0.0.4a authoring and shell updates
 

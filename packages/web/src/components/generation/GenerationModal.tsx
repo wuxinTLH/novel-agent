@@ -1,3 +1,6 @@
+import { stepDisplayLabel } from '../workflow/nodeCatalog';
+import type { TranslationKey } from '../../locals/core';
+import { useLocale } from '../../locals/useLocale';
 import { useMemo, useRef, useState } from 'react';
 import { Check, Play } from 'lucide-react';
 import type { GenerationMode, Project, Requirements, RunRequest, WorkflowRunMode } from '../../../../../shared/types';
@@ -31,6 +34,7 @@ export default function GenerationModal({
   onSave: (requirements: Requirements, chapterRequirements: Record<string, Requirements>) => Promise<void>;
   onRun: (request: RunRequest) => Promise<void>;
 }) {
+  const { t } = useLocale();
   const [kind, setKind] = useState<'next' | 'single' | 'range'>(entry.number ? 'single' : 'next');
   const [mode, setModeState] = useState<GenerationMode>(entry.mode || 'create');
   const modeRef = useRef<GenerationMode>(entry.mode || 'create');
@@ -122,7 +126,7 @@ export default function GenerationModal({
   try {
     targets = targetNumbers(project, request);
   } catch (error) {
-    targetError = error instanceof Error ? error.message : '目标无效';
+    targetError = error instanceof Error ? error.message : t("目标无效");
   }
   const conflicts = targets.filter((target) =>
     mode === 'create'
@@ -132,10 +136,10 @@ export default function GenerationModal({
   if (!targetError && conflicts.length)
     targetError =
       mode === 'create'
-        ? `已有正文的章号：${conflicts.join('、')}。请改用重生成，原稿不会直接覆盖。`
-        : `以下章号没有原稿：${conflicts.join('、')}。请改用新建。`;
+        ? t("已有正文的章号：{value0}。请改用重生成，原稿不会直接覆盖。", { value0: conflicts.join('、') })
+        : t("以下章号没有原稿：{value0}。请改用新建。", { value0: conflicts.join('、') });
   if (!targetError && writers.length > 1 && !writers.some((step) => step.id === writer))
-    targetError = '请选择本次运行的最终正文输出节点。';
+    targetError = t("请选择本次运行的最终正文输出节点。");
   const validRequirementNumber = chapterNumberSchema.safeParse(Number(requirementNumber)).success;
   const chapterKey = String(Number(requirementNumber));
   const chapterRequirement = validRequirementNumber
@@ -167,7 +171,7 @@ export default function GenerationModal({
         setRequirementsDirty(false);
       }
       if (run) await onRun(request);
-      else setMessage('创作要求已保存。清空的字段和列表也已保存。');
+      else setMessage(t("创作要求已保存。清空的字段和列表也已保存。"));
     } catch (failure) {
       setError(failure);
     } finally {
@@ -177,8 +181,8 @@ export default function GenerationModal({
   };
   return (
     <Modal
-      title={entry.stepId ? '运行指定节点' : '生成章节与创作要求'}
-      description="目标只用于本次运行；正式章节目录只统计已保存章节。"
+      title={entry.stepId ? t("运行指定节点") : t("生成章节与创作要求")}
+      description={t("目标只用于本次运行；正式章节目录只统计已保存章节。")}
       close={onClose}
       wide
       busy={locked}
@@ -188,21 +192,21 @@ export default function GenerationModal({
     >
       <section className="run-controls">
         <div className="run-mode-menu">
-          <span>运行模式</span>
+          <span>{t("运行模式")}</span>
           <button
             type="button"
             aria-expanded={modeMenuOpen}
             disabled={locked}
             onClick={() => setModeMenuOpen((value) => !value)}
           >
-            {workflowMode === 'world' ? '世界观模式' : '正文模式'}
+            {workflowMode === 'world' ? t("世界观模式") : t("正文模式")}
           </button>
           {modeMenuOpen && (
-            <div className="workflow-run-modes" role="menu" aria-label="运行模式">
+            <div className="workflow-run-modes" role="menu" aria-label={t("运行模式")}>
               {(
                 [
-                  ['chapter', '正文模式'],
-                  ['world', '世界观模式'],
+                  ['chapter', t("正文模式")],
+                  ['world', t("世界观模式")],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -213,8 +217,8 @@ export default function GenerationModal({
                     ? (entry.stepId ? writers.some((step) => step.id === entry.stepId) : writers.length > 0)
                     : !entry.stepId && writers.length === 0)}
                   title={value === 'world' && writers.length > 0
-                    ? '完整正文图不能切换为设定模式，请先切换独立设定工作流。'
-                    : value === 'chapter' && !writers.length ? '此工作流没有正文节点。' : undefined}
+                    ? t("完整正文图不能切换为设定模式，请先切换独立设定工作流。")
+                    : value === 'chapter' && !writers.length ? t("此工作流没有正文节点。") : undefined}
                   onClick={() => {
                     setWorkflowMode(value);
                     setModeMenuOpen(false);
@@ -236,30 +240,28 @@ export default function GenerationModal({
             onChange={(event) => setOverwrite(event.target.checked)}
           />
           <span>
-            <strong>覆盖原文</strong>
-            <small>{workflowMode === 'world' ? '替换同名设定' : '替换同章正文，并保留旧版本'}</small>
+            <strong>{t("覆盖原文")}</strong>
+            <small>{workflowMode === 'world' ? t("替换同名设定") : t("替换同章正文，并保留旧版本")}</small>
           </span>
         </label>
         {workflowMode === 'world' && (
           <>
             <label>
-              名字
-              <input
+              {t("名字")}<input
                 value={settingName}
                 disabled={locked}
                 maxLength={120}
-                placeholder="留空则根据内容生成"
+                placeholder={t("留空则根据内容生成")}
                 onChange={(event) => setSettingName(event.target.value)}
               />
             </label>
             <label>
-              额外信息
-              <textarea
+              {t("额外信息")}<textarea
                 value={settingExtra}
                 disabled={locked}
                 maxLength={2000}
                 rows={3}
-                placeholder="补充必须遵守的设定、边界或禁忌"
+                placeholder={t("补充必须遵守的设定、边界或禁忌")}
                 onChange={(event) => setSettingExtra(event.target.value)}
               />
             </label>
@@ -269,47 +271,40 @@ export default function GenerationModal({
       {workflowMode === 'world' ? (
         <>
           <label>
-            本次目标
-            <select
-              aria-label="本次目标"
+            {t("本次目标")}<select
+              aria-label={t("本次目标")}
               value={settingTarget}
               disabled={locked}
               onChange={(event) => setSettingTarget(event.target.value as typeof settingTarget)}
             >
-              <option value="world">世界观编写</option>
-              <option value="character">人物编写</option>
-              <option value="plot">剧情编排</option>
+              <option value="world">{t("世界观编写")}</option>
+              <option value="character">{t("人物编写")}</option>
+              <option value="plot">{t("剧情编排")}</option>
             </select>
           </label>
           {settingTarget === 'character' && (
             <section className="character-generation-settings">
               <div className="character-generation-heading">
-                <strong>人物参数</strong>
-                <span>留空项按世界设定随机补全</span>
+                <strong>{t("人物参数")}</strong>
+                <span>{t("留空项按世界设定随机补全")}</span>
               </div>
               <label>
-                生成人物数量
-                <input type="number" min={1} max={100} value={characterCount} disabled={locked} onChange={(event) => setCharacterCount(event.target.value)} />
+                {t("生成人物数量")}<input type="number" min={1} max={100} value={characterCount} disabled={locked} onChange={(event) => setCharacterCount(event.target.value)} />
               </label>
               <label>
-                名字
-                <input value={characterName} disabled={locked} placeholder="不填则随机" onChange={(event) => setCharacterName(event.target.value)} />
+                {t("名字")}<input value={characterName} disabled={locked} placeholder={t("不填则随机")} onChange={(event) => setCharacterName(event.target.value)} />
               </label>
               <label>
-                性别
-                <input value={characterGender} disabled={locked} placeholder="不填则随机男女" onChange={(event) => setCharacterGender(event.target.value)} />
+                {t("性别")}<input value={characterGender} disabled={locked} placeholder={t("不填则随机男女")} onChange={(event) => setCharacterGender(event.target.value)} />
               </label>
               <label>
-                性格
-                <textarea rows={2} value={characterPersonality} disabled={locked} placeholder="不填则随机" onChange={(event) => setCharacterPersonality(event.target.value)} />
+                {t("性格")}<textarea rows={2} value={characterPersonality} disabled={locked} placeholder={t("不填则随机")} onChange={(event) => setCharacterPersonality(event.target.value)} />
               </label>
               <label>
-                经历
-                <textarea rows={3} value={characterExperience} disabled={locked} placeholder="填写部分内容，Agent 会根据世界设定补全" onChange={(event) => setCharacterExperience(event.target.value)} />
+                {t("经历")}<textarea rows={3} value={characterExperience} disabled={locked} placeholder={t("填写部分内容，Agent 会根据世界设定补全")} onChange={(event) => setCharacterExperience(event.target.value)} />
               </label>
               <label>
-                人物模板
-                <textarea rows={12} value={characterTemplate} disabled={locked} placeholder="粘贴 Markdown 模板，留空使用节点模板" onChange={(event) => setCharacterTemplate(event.target.value)} />
+                {t("人物模板")}<textarea rows={12} value={characterTemplate} disabled={locked} placeholder={t("粘贴 Markdown 模板，留空使用节点模板")} onChange={(event) => setCharacterTemplate(event.target.value)} />
               </label>
             </section>
           )}
@@ -317,26 +312,24 @@ export default function GenerationModal({
       ) : (
         <div className="generation-target">
           <label>
-            本次目标
-            <select
-              aria-label="本次目标"
+            {t("本次目标")}<select
+              aria-label={t("本次目标")}
               value={kind}
               disabled={locked}
               onChange={(event) => setKind(event.target.value as typeof kind)}
             >
-              <option value="next">续写新章</option>
-              <option value="single">指定单章</option>
+              <option value="next">{t("续写新章")}</option>
+              <option value="single">{t("指定单章")}</option>
               <option value="range" disabled={!!entry.stepId}>
-                指定区间
-              </option>
+                {t("指定区间")}</option>
             </select>
           </label>
           {workflowMode === 'chapter' && (
-            <div className="generation-mode-options" role="radiogroup" aria-label="生成方式">
+            <div className="generation-mode-options" role="radiogroup" aria-label={t("生成方式")}>
               {(
                 [
-                  ['create', '新建正文'],
-                  ['regenerate', '重生成候选'],
+                  ['create', t("新建正文")],
+                  ['regenerate', t("重生成候选")],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -354,8 +347,7 @@ export default function GenerationModal({
           )}
           {kind === 'next' ? (
             <label>
-              续写章数
-              <input
+              {t("续写章数")}<input
                 type="number"
                 min={1}
                 max={entry.stepId ? 1 : GENERATION_LIMITS.maxBatchSize}
@@ -367,7 +359,7 @@ export default function GenerationModal({
             </label>
           ) : (
             <label>
-              {kind === 'range' ? '开始章号' : '章号'}
+              {kind === 'range' ? t("开始章号") : t("章号")}
               <input
                 type="number"
                 min={1}
@@ -381,8 +373,7 @@ export default function GenerationModal({
           )}
           {kind === 'range' && (
             <label>
-              结束章号
-              <input
+              {t("结束章号")}<input
                 type="number"
                 min={1}
                 max={GENERATION_LIMITS.maxChapterNumber}
@@ -397,32 +388,28 @@ export default function GenerationModal({
       )}
       {workflowMode === 'chapter' && writers.length > 1 && (
         <label>
-          最终正文输出节点
-          <select value={writer} disabled={locked} onChange={(event) => setWriter(event.target.value)}>
-            <option value="">请选择一个正文节点</option>
+          {t("最终正文输出节点")}<select value={writer} disabled={locked} onChange={(event) => setWriter(event.target.value)}>
+            <option value="">{t("请选择一个正文节点")}</option>
             {writers.map((step) => (
               <option value={step.id} key={step.id}>
-                {step.title}
+                {stepDisplayLabel(step, 'title', key => t(key as TranslationKey))}
               </option>
             ))}
           </select>
-          <small>只有该节点提交章节，其余正文节点作为中间结果。</small>
+          <small>{t("只有该节点提交章节，其余正文节点作为中间结果。")}</small>
         </label>
       )}
       {workflowMode === 'chapter' && (
         <>
           <p className="info-note">
             {demo
-              ? '演示模式：固定模板，不调用模型，也不保证遵循文学语义。'
-              : '语义和风格要求需作者确认；硬性原文规则将逐字校验。'}{' '}
-            单批最多 {GENERATION_LIMITS.maxBatchSize} 章。不会自动同步或发布。
-          </p>
+              ? t("演示模式：固定模板，不调用模型，也不保证遵循文学语义。")
+              : t("语义和风格要求需作者确认；硬性原文规则将逐字校验。")}{' '}
+            {t('单批最多 {count} 章。不会自动同步或发布。', { count: GENERATION_LIMITS.maxBatchSize })}</p>
           {targets.length > 0 && (
             <p className="generation-target-summary">
-              本次目标：第 {targets[0]} 章
-              {targets.length > 1 ? ` — 第 ${targets.at(-1)} 章（共 ${targets.length} 章）` : ''}
-              。目标仅用于本次运行，不沿用到下次续写。
-            </p>
+              {t('本次目标：第 {number} 章', { number: targets[0] })}{targets.length > 1 ? t(" — 第 {value0} 章（共 {value1} 章）", { value0: targets.at(-1) ?? 0, value1: targets.length }) : ''}
+              {t("。目标仅用于本次运行，不沿用到下次续写。")}</p>
           )}
           {targetError && (
             <p className="generation-warning" role="alert">
@@ -430,7 +417,7 @@ export default function GenerationModal({
             </p>
           )}
           <GenerationRequirements
-            label="作品级正文要求（每章累加）"
+            label={t("作品级正文要求（每章累加）")}
             value={global}
             disabled={locked}
             onChange={(value) => {
@@ -440,8 +427,7 @@ export default function GenerationModal({
           />
           <div className="generation-chapter-choice">
             <label>
-              按章保存额外要求
-              <input
+              {t("按章保存额外要求")}<input
                 type="number"
                 min={1}
                 max={GENERATION_LIMITS.maxChapterNumber}
@@ -451,11 +437,11 @@ export default function GenerationModal({
                 onChange={(event) => setRequirementNumber(event.target.value)}
               />
             </label>
-            <p>可提前设置尚未生成的章号，不会创建占位章节。这里切换章号不会改变本次生成目标。</p>
+            <p>{t("可提前设置尚未生成的章号，不会创建占位章节。这里切换章号不会改变本次生成目标。")}</p>
           </div>
           {validRequirementNumber ? (
             <GenerationRequirements
-              label={`第 ${chapterKey} 章专属要求（与作品要求累加）`}
+              label={t("第 {value0} 章专属要求（与作品要求累加）", { value0: chapterKey })}
               value={chapterRequirement}
               disabled={locked}
               onChange={(value) => {
@@ -465,31 +451,28 @@ export default function GenerationModal({
             />
           ) : (
             <p role="alert" className="generation-warning">
-              请输入有效的正整数章号。
-            </p>
+              {t("请输入有效的正整数章号。")}</p>
           )}
           <details className="generation-effective">
-            <summary>查看本次合并要求</summary>
+            <summary>{t("查看本次合并要求")}</summary>
             {targets.map((target) => {
               const local = chapters[String(target)] || emptyRequirements();
               return (
                 <div key={target}>
-                  <strong>第 {target} 章</strong>
+                  <strong>{t('第 {value0} 章', { value0: target })}</strong>
                   <p>
                     {[global.instructions, local.instructions].filter(Boolean).join('\n') ||
-                      '未设置自然语言要求'}
+                      t("未设置自然语言要求")}
                   </p>
                   <p>
-                    必须出现：
-                    {[...global.requiredText, ...local.requiredText]
+                    {t("必须出现：")}{[...global.requiredText, ...local.requiredText]
                       .map((text) => JSON.stringify(text))
-                      .join('、') || '无'}
+                      .join('、') || t("无")}
                   </p>
                   <p>
-                    禁止出现：
-                    {[...global.forbiddenText, ...local.forbiddenText]
+                    {t("禁止出现：")}{[...global.forbiddenText, ...local.forbiddenText]
                       .map((text) => JSON.stringify(text))
-                      .join('、') || '无'}
+                      .join('、') || t("无")}
                   </p>
                 </div>
               );
@@ -497,13 +480,12 @@ export default function GenerationModal({
           </details>
           {requirementErrors.length > 0 && (
             <div className="generation-warning" role="alert">
-              要求格式或长度不合法：{requirementErrors.join('；')}
+              {t("要求格式或长度不合法：")}{requirementErrors.join('；')}
             </div>
           )}
           {literalConflicts.length > 0 && (
             <div className="generation-warning" role="alert">
-              第 {literalConflicts.join('、')} 章的必须出现文本包含禁止文本，请先解决冲突。
-            </div>
+              {t('第 {numbers} 章的必须出现文本包含禁止文本，请先解决冲突。', { numbers: literalConflicts.join(', ') })}</div>
           )}
         </>
       )}
@@ -520,8 +502,7 @@ export default function GenerationModal({
           onClick={() => void perform(false)}
         >
           <Check size={15} />
-          只保存要求
-        </button>
+          {t("只保存要求")}</button>
         <button
           type="button"
           className="button primary"
@@ -529,7 +510,7 @@ export default function GenerationModal({
           onClick={() => void perform(true)}
         >
           <Play size={15} />
-          {pending ? '正在提交…' : requirementsDirty ? '保存要求并开始' : '开始生成'}
+          {pending ? t("正在提交…") : requirementsDirty ? t("保存要求并开始") : t("开始生成")}
         </button>
       </div>
     </Modal>

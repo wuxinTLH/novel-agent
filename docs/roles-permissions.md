@@ -27,6 +27,7 @@
 | `storage.manage`、`sql.initialize`                                      |     ✓      |   ✓    |     —      |  —   |
 | `maintenance.read`、`maintenance.backup`、`maintenance.validate`        |     ✓      |   ✓    |     ✓      |  —   |
 | `maintenance.restorePlan`、`maintenance.cancel`、`maintenance.commands` |     ✓      |   ✓    |     —      |  —   |
+| `usage.read`（Token 使用统计，仅汇总运维元数据）                         |     ✓      |   ✓    |     —      |  —   |
 | `security.read`                                                         |     ✓      |   ✓    |     —      |  —   |
 | `security.manage`                                                       |     ✓      |   —    |     —      |  —   |
 

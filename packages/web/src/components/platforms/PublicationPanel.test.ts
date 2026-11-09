@@ -38,7 +38,7 @@ test('auto-approved preview response starts promised three-chapter batch exactly
 });
 
 test('server-started, paused, unknown and terminal auto responses are never started again', async () => {
-  for (const state of ['queued', 'running', 'paused', 'unknown', 'failed', 'completed'] as const) {
+  for (const state of ['queued', 'running', 'paused', 'unknown', 'failed', 'completed', 'cancelled'] as const) {
     const batch = fixture(state);
     assert.equal(await ensureAutoApprovedBatchStarted(batch, true, async () => { throw new Error('duplicate start'); }), batch);
   }
@@ -75,6 +75,14 @@ test('stopped batches do not describe unstarted items as still waiting to execut
   batch.items[0].state = 'unknown';
   batch.items[0].mutationStarted = true;
   assert.equal(publicationItemOutcome(batch, batch.items[0]), '结果未知，禁止重发');
+});
+
+test('cancelled batch and items explicitly report no remote writes and never claim success', () => {
+  const batch = fixture('cancelled');
+  batch.items.forEach(item => { item.state = 'cancelled'; });
+  assert.match(publicationOutcome(batch), /已安全取消（未开始远端写入）/);
+  assert.equal(publicationItemOutcome(batch, batch.items[0]), '已安全取消，未执行远端写入');
+  assert.match(publicationOutcome(batch), /远端回读核实草稿 0 \/ 3 章/);
 });
 
 test('completed means only processing completed; verified and submitted outcomes are counted separately', () => {

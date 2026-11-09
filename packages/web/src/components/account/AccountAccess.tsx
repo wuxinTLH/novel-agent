@@ -1,3 +1,4 @@
+import { useLocale } from '../../locals';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { TurnstilePublicSettings } from '../../../../../shared/auth';
 import type { AccountFeatures } from '../../../../../shared/account';
@@ -20,6 +21,7 @@ export function AccountAccess({
   renderChallenge?: (attempt: number, onToken: (token: string) => void) => ReactNode;
   onAuthenticated(result: unknown): void;
 }) {
+  const { t } = useLocale();
   const [features, setFeatures] = useState<AccountFeatures>();
   const [mode, setMode] = useState<'register' | 'reset'>('reset');
   const [turnstileToken, setTurnstileToken] = useState(''),
@@ -55,13 +57,13 @@ export function AccountAccess({
     try {
       await fn();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : '账户操作失败');
+      setMessage(e instanceof Error ? e.message : t("账户操作失败"));
     } finally {
       setBusy(false);
     }
   }
   function challengeToken() {
-    if (turnstile?.enabled && !turnstileToken) throw new Error('请先完成人机验证');
+    if (turnstile?.enabled && !turnstileToken) throw new Error(t("请先完成人机验证"));
     return turnstile?.enabled ? { turnstileToken } : {};
   }
   async function sendSms() {
@@ -76,7 +78,7 @@ export function AccountAccess({
         setRegistrationSmsVerified(false);
       }
       setCode('');
-      setMessage('验证码已发送，请检查手机短信。');
+      setMessage(t("验证码已发送，请检查手机短信。"));
     } finally {
       setTurnstileToken('');
       setAttempt((v) => v + 1);
@@ -101,7 +103,7 @@ export function AccountAccess({
         return;
       }
       if (mode === 'register' && features?.smsRequired && !registrationSmsVerified)
-        throw new Error('请先完成手机短信验证');
+        throw new Error(t("请先完成手机短信验证"));
       const token = mode === 'register' ? challengeToken() : {};
       try {
         await request(
@@ -118,31 +120,30 @@ export function AccountAccess({
         }
       }
       setPassword('');
-      setMessage('如果请求可以处理，验证邮件将发送到该邮箱。请检查邮件。');
+      setMessage(t("如果请求可以处理，验证邮件将发送到该邮箱。请检查邮件。"));
     });
   }
   if (pendingSms)
     return (
-      <section aria-label="短信登录验证">
-        <h2>手机短信验证</h2>
-        <p>请输入绑定手机收到的一次性验证码。</p>
+      <section aria-label={t("短信登录验证")}>
+        <h2>{t("手机短信验证")}</h2>
+        <p>{t("请输入绑定手机收到的一次性验证码。")}</p>
         {turnstile?.enabled &&
           (renderChallenge ? (
             renderChallenge(attempt, setTurnstileToken)
           ) : (
-            <p role="alert">无法载入人机验证，请联系管理员。</p>
+            <p role="alert">{t("无法载入人机验证，请联系管理员。")}</p>
           ))}
         <button
           type="button"
           disabled={busy || (!!turnstile?.enabled && (!renderChallenge || !turnstileToken))}
           onClick={() => void perform(sendSms)}
         >
-          {smsSent ? '重新发送验证码' : '发送验证码'}
+          {smsSent ? t("重新发送验证码") : t("发送验证码")}
         </button>
         {smsSent && (
           <form onSubmit={submit}>
-            <label>
-              短信验证码{' '}
+            <label>{t("短信验证码")}{' '}
               <input
                 required
                 autoComplete="one-time-code"
@@ -152,7 +153,7 @@ export function AccountAccess({
                 onChange={(e) => setCode(e.target.value)}
               />
             </label>
-            <button disabled={busy}>验证并登录</button>
+            <button disabled={busy}>{t("验证并登录")}</button>
           </form>
         )}
         <p role="status">{message}</p>
@@ -161,9 +162,8 @@ export function AccountAccess({
   if (pendingMfa)
     return (
       <form onSubmit={submit}>
-        <h2>双重验证</h2>
-        <label>
-          验证器验证码或一次性恢复码{' '}
+        <h2>{t("双重验证")}</h2>
+        <label>{t("验证器验证码或一次性恢复码")}{' '}
           <input
             required
             autoComplete="one-time-code"
@@ -172,11 +172,11 @@ export function AccountAccess({
           />
         </label>
         <p role="status">{message}</p>
-        <button disabled={busy}>验证并登录</button>
+        <button disabled={busy}>{t("验证并登录")}</button>
       </form>
     );
   return (
-    <section aria-label="其他账户入口">
+    <section aria-label={t("其他账户入口")}>
       {features?.oidc && (
         <button
           disabled={busy}
@@ -184,33 +184,26 @@ export function AccountAccess({
             void perform(async () => {
               const result = await request<{ url: string }>('/api/auth/account/oidc/start', 'POST', {});
               const url = new URL(result.url);
-              if (url.protocol !== 'https:') throw new Error('无效提供商地址');
+              if (url.protocol !== 'https:') throw new Error(t("无效提供商地址"));
               window.location.assign(url.href);
             })
           }
-        >
-          使用 OIDC 登录
-        </button>
+        >{t("使用 OIDC 登录")}</button>
       )}
       {(features?.registration || features?.passwordRecovery) && (
         <>
-          <nav aria-label="账户操作">
+          <nav aria-label={t("账户操作")}>
             {features.registration && (
-              <button type="button" onClick={() => setMode('register')}>
-                注册账户
-              </button>
+              <button type="button" onClick={() => setMode('register')}>{t("注册账户")}</button>
             )}
             {features.passwordRecovery && (
-              <button type="button" onClick={() => setMode('reset')}>
-                找回密码
-              </button>
+              <button type="button" onClick={() => setMode('reset')}>{t("找回密码")}</button>
             )}
           </nav>
           <form onSubmit={submit}>
-            <h3>{mode === 'register' ? '注册账户（需验证邮箱）' : '找回密码'}</h3>
+            <h3>{mode === 'register' ? t("注册账户（需验证邮箱）") : t("找回密码")}</h3>
             {mode === 'register' && (
-              <label>
-                用户名{' '}
+              <label>{t("用户名")}{' '}
                 <input
                   required
                   pattern="[a-z0-9][a-z0-9_.-]{2,63}"
@@ -224,8 +217,7 @@ export function AccountAccess({
                 />
               </label>
             )}
-            <label>
-              邮箱{' '}
+            <label>{t("邮箱")}{' '}
               <input
                 required
                 type="email"
@@ -240,8 +232,7 @@ export function AccountAccess({
             </label>
             {mode === 'register' && features?.smsRequired && (
               <>
-                <label>
-                  手机号码（含国家码）{' '}
+                <label>{t("手机号码（含国家码）")}{' '}
                   <input
                     required
                     type="tel"
@@ -256,12 +247,11 @@ export function AccountAccess({
                     }}
                   />
                 </label>
-                <p>请填写国际格式手机号码，例如 +8613800138000。</p>
+                <p>{t("请填写国际格式手机号码，例如 +8613800138000。")}</p>
               </>
             )}
             {mode === 'register' && (
-              <label>
-                密码{' '}
+              <label>{t("密码")}{' '}
                 <input
                   required
                   type="password"
@@ -277,7 +267,7 @@ export function AccountAccess({
               (renderChallenge ? (
                 renderChallenge(attempt, setTurnstileToken)
               ) : (
-                <p role="alert">无法载入人机验证，请联系管理员。</p>
+                <p role="alert">{t("无法载入人机验证，请联系管理员。")}</p>
               ))}
             {mode === 'register' && features?.smsRequired && (
               <div>
@@ -292,12 +282,11 @@ export function AccountAccess({
                   }
                   onClick={() => void perform(sendSms)}
                 >
-                  {registrationSmsSent ? '重新发送短信验证码' : '发送短信验证码'}
+                  {registrationSmsSent ? t("重新发送短信验证码") : t("发送短信验证码")}
                 </button>
                 {registrationSmsSent && !registrationSmsVerified && (
                   <>
-                    <label>
-                      短信验证码{' '}
+                    <label>{t("短信验证码")}{' '}
                       <input
                         autoComplete="one-time-code"
                         inputMode="numeric"
@@ -314,15 +303,13 @@ export function AccountAccess({
                           await request('/api/auth/account/register/sms/verify', 'POST', { code });
                           setCode('');
                           setRegistrationSmsVerified(true);
-                          setMessage('手机号码已验证，请完成人机验证并提交注册。');
+                          setMessage(t("手机号码已验证，请完成人机验证并提交注册。"));
                         })
                       }
-                    >
-                      验证手机号
-                    </button>
+                    >{t("验证手机号")}</button>
                   </>
                 )}
-                {registrationSmsVerified && <p role="status">手机号码已验证</p>}
+                {registrationSmsVerified && <p role="status">{t("手机号码已验证")}</p>}
               </div>
             )}
             <button
@@ -334,9 +321,7 @@ export function AccountAccess({
                     (!!turnstile?.enabled && (!renderChallenge || !turnstileToken))
                   : !features.passwordRecovery)
               }
-            >
-              发送验证邮件
-            </button>
+            >{t("发送验证邮件")}</button>
           </form>
         </>
       )}

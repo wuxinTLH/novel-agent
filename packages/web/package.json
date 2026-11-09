@@ -1,6 +1,6 @@
 {
   "name": "space.syjx.agent.novel.web",
-  "version": "0.0.4-a",
+  "version": "0.0.5-a",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,12 +13,14 @@
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "three": "0.187.0",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
+    "@types/three": "0.187.0",
     "@vitejs/plugin-react": "^5.0.2",
     "sass": "^1.105.1",
     "typescript": "~5.9.2",

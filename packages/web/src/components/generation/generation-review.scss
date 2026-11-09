@@ -1,0 +1,121 @@
+// Preserve the compact workflow-inspector preview outside the chapter workbench.
+.generation-live-preview {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+// The page scrolls; only long reading panes scroll, never their containing cards.
+.generation-review-workbench {
+  flex: none;
+  min-width: 0;
+  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+
+  > .generation-review-heading {
+    padding: 18px 20px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+
+    small {
+      display: block;
+      margin-top: 8px;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--muted-text);
+      line-height: 1.7;
+    }
+  }
+
+  summary:focus-visible,
+  pre:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  .generation-review-content {
+    padding: 0 20px 20px;
+    min-width: 0;
+  }
+
+  .generation-progress,
+  .generation-candidates {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .generation-progress ul {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .generation-candidates h3 small {
+    display: block;
+    margin-top: 8px;
+    line-height: 1.7;
+  }
+
+  .generation-candidate {
+    padding: 20px;
+    min-width: 0;
+  }
+
+  .candidate-heading > div,
+  .candidate-compare > section {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .candidate-saved > pre,
+  .candidate-compare pre,
+  .generation-live-preview {
+    height: clamp(360px, 52vh, 640px);
+    max-height: none;
+    overflow: auto;
+    scrollbar-gutter: stable;
+    padding: 16px;
+    margin-top: 12px;
+    background: var(--soft);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 2;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .candidate-full-text {
+    margin-block: 14px;
+    > pre {
+      max-height: none;
+      overflow: visible;
+      font-size: 15px;
+      line-height: 2;
+      padding: 16px 0;
+    }
+  }
+
+  .candidate-actions { margin-top: 16px; }
+}
+
+@media (max-width: 680px) {
+  .generation-review-workbench {
+    > .generation-review-heading { padding: 16px 12px; }
+    .generation-review-content { padding: 0 12px 12px; }
+    .generation-candidate { padding: 12px; }
+    .candidate-compare { grid-template-columns: minmax(0, 1fr); }
+    .candidate-saved > pre,
+    .candidate-compare pre,
+    .generation-live-preview {
+      height: 360px;
+      padding: 12px;
+      font-size: 14px;
+    }
+  }
+}

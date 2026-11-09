@@ -1,3 +1,4 @@
+import { logger, readLogTimeZone } from './core/logger.js';
 import { assertSupportedNodeVersion } from '../../../shared/node-runtime.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -30,6 +31,7 @@ try {
 } catch (error) {
   if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 }
+readLogTimeZone(); // Validate after environment loading, before any data mutation or listeners.
 const port = Number(process.env.PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT_INVALID');
 const coreModel = readCoreModel(process.env);
@@ -158,16 +160,16 @@ let closing = false;
 let exitCode = 0;
 let gatewayStartup: Promise<void> = Promise.resolve();
 const server = app.listen(port, bindHost, () => {
-  console.log(`Novel Agent API (${coreModel}): http://${bindHost}:${port}`);
+  logger.info(`Novel Agent API (${coreModel}): http://${bindHost}:${port}`);
   if (closing) return;
   gatewayStartup = (async () => {
     try {
       gateway = await startLocalGateway(gatewayConfig);
       if (gateway.addresses.length)
-        console.log(`Novel Agent local gateway: ${gateway.addresses.map(({ host, port: value }) => `http://${host}:${value}`).join(', ')}`);
+        logger.info(`Novel Agent local gateway: ${gateway.addresses.map(({ host, port: value }) => `http://${host}:${value}`).join(', ')}`);
     } catch {
       exitCode = 1;
-      console.error('本机网关无法启动，请检查配置和端口是否被占用。');
+      logger.error('本机网关无法启动，请检查配置和端口是否被占用。');
       void shutdown();
     }
   })();
@@ -189,7 +191,7 @@ async function shutdown() {
     clearTimeout(deadline);
     process.exit(exitCode);
   } catch {
-    console.error('关闭未完整完成，下次启动请检查任务和数据目录锁。');
+    logger.error('关闭未完整完成，下次启动请检查任务和数据目录锁。');
     process.exit(1);
   }
 }
@@ -201,6 +203,6 @@ process.once('SIGTERM', () => {
 });
 server.on('error', () => {
   exitCode = 1;
-  console.error('本机服务无法启动，请检查端口是否被占用。');
+  logger.error('本机服务无法启动，请检查端口是否被占用。');
   void shutdown();
 });

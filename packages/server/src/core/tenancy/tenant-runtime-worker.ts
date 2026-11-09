@@ -1,4 +1,6 @@
 import { isMainThread, parentPort, workerData } from 'node:worker_threads';
+import { installTokenUsageWorker } from '../../features/administration/token-usage-channel.js';
+import { closeChapterAnalyses } from '../../features/chapters/chapter-analysis.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,6 +44,7 @@ async function run(data: RuntimeData) {
       try {
         if (context) {
           for (const controller of context.runner.controllers.values()) controller.abort();
+          await closeChapterAnalyses(context);
           await context.platformRuntime.close();
           while (context.runner.controllers.size) await new Promise((resolve) => setTimeout(resolve, 25));
         }
@@ -74,6 +77,7 @@ async function run(data: RuntimeData) {
     ensureTenantDirectory(data.root, data.dir);
     binding = activateScopedStorage(data.root, data.dir, data.ownerId);
     installPlatformAccountLockClient(createWorkerPlatformAccountLockClient(parentPort!, data.platformAccountLocks));
+    installTokenUsageWorker(parentPort!);
     context = createServiceContext(data.dir, data.inheritEnvironment);
     const app = createApplication(context, {
       port: data.port,

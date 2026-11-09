@@ -1,3 +1,4 @@
+import { useLocale } from '../../locals/useLocale';
 import { useConfirm } from './AppDialog';
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
@@ -29,6 +30,7 @@ export default function Modal({
   error?: unknown;
   className?: string;
 }) {
+  const { t } = useLocale();
   const confirmDialog = useConfirm();
   const titleId = useId();
   const descriptionId = useId();
@@ -36,11 +38,11 @@ export default function Modal({
   const backdrop = useRef<HTMLDivElement>(null);
   const closing = useRef(false);
   const motion = useRef<Animation | null>(null);
-  const props = useRef({ close, busy, dirty });
-  props.current = { close, busy, dirty };
+  const props = useRef({ close, busy, dirty, t });
+  props.current = { close, busy, dirty, t };
   const requestClose = async () => {
     if (props.current.busy || closing.current) return;
-    if (props.current.dirty && !(await confirmDialog('有未保存的修改，确定关闭并丢弃吗？'))) return;
+    if (props.current.dirty && !(await confirmDialog(props.current.t("有未保存的修改，确定关闭并丢弃吗？")))) return;
     if (props.current.busy || closing.current) return;
     closing.current = true;
     const panel = section.current;
@@ -164,7 +166,7 @@ export default function Modal({
             className="icon-button"
             disabled={busy}
             onClick={requestClose}
-            aria-label="关闭弹窗"
+            aria-label={t("关闭弹窗")}
           >
             <X size={20} />
           </button>

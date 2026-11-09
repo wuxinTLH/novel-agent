@@ -13,6 +13,9 @@ export interface TransportDependencies {
   fetch?: typeof fetch;
   onText?: (delta: string) => void;
   onUsage?: (usage: ModelUsage) => void;
+  /** One completed actual fetch attempt; never invoked for preflight/DNS rejection. */
+  onAttemptStart?: (at: string) => void | Promise<void>;
+  onAttempt?: (attempt: { at: string; succeeded: boolean; usage: ModelUsage }) => void | Promise<void>;
   maxResponseBytes?: number;
 }
 export class ModelTransportError extends Error {
@@ -39,8 +42,16 @@ export async function generateModelTransport(settings: TransportSettings, contex
   if (protocol === 'chat-completions') request.body.stream_options = { include_usage: true };
   // Preserve older Responses/Anthropic requests that did not send temperature.
   if (protocol === 'chat-completions' || settings.temperature !== undefined) request.body.temperature = options.temperature;
+  const body = JSON.stringify(request.body);
+  timed.throwIfAborted();
+  const at = new Date().toISOString();
+  try { await deps.onAttemptStart?.(at); }
+  catch { throw new ModelTransportError('Token 统计存储不可用，未发起模型请求。', 'TOKEN_USAGE_STORAGE_UNAVAILABLE', 503, false); }
+  let succeeded = false, input: number | undefined, output: number | undefined;
+  let completedUsage: ModelUsage | undefined;
+  try {
   let response: Response;
-  try { response = await (deps.fetch || fetch)(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body), signal: timed, redirect: 'error' }); }
+  try { response = await (deps.fetch || fetch)(request.url, { method: 'POST', headers: request.headers, body, signal: timed, redirect: 'error' }); }
   catch { if (timed.aborted) throw timed.reason; throw new ModelTransportError('模型服务连接失败。', 'PROVIDER_CONNECTION_ERROR'); }
   if (!response.ok) {
     await response.body?.cancel();
@@ -50,7 +61,7 @@ export async function generateModelTransport(settings: TransportSettings, contex
   const reader = response.body?.getReader();
   if (!reader) throw new ModelTransportError('模型服务未返回响应正文。', 'EMPTY_OUTPUT');
   const maxBytes = deps.maxResponseBytes ?? 8 * 1024 * 1024;
-  let bytes = 0, text = '', buffer = '', ended = false, anthropicStopped = false, input: number | undefined, output: number | undefined;
+  let bytes = 0, text = '', buffer = '', ended = false, anthropicStopped = false;
   const decoder = new TextDecoder();
   const addText = (v: unknown) => { if (typeof v === 'string') { text += v; deps.onText?.(v); } };
   const usageFrom = (v: unknown) => {
@@ -67,6 +78,8 @@ export async function generateModelTransport(settings: TransportSettings, contex
     let value: RecordValue;
     try { value = record(JSON.parse(data)); } catch { throw new ModelTransportError('模型流包含无效 JSON。', 'PROVIDER_INVALID_RESPONSE'); }
     const type = value.type || event;
+    usageFrom(value.usage);
+    usageFrom(record(value.response).usage);
     if (value.error || type === 'error' || type === 'response.failed' || type === 'response.error') throw new ModelTransportError('模型服务报告生成失败。', 'PROVIDER_ERROR');
     if (protocol === 'chat-completions') {
       usageFrom(value.usage);
@@ -122,11 +135,12 @@ export async function generateModelTransport(settings: TransportSettings, contex
     } else {
       let data: unknown;
       try { data = JSON.parse(buffer); } catch { throw new ModelTransportError('模型返回无效 JSON。', 'PROVIDER_INVALID_RESPONSE'); }
-      text = deps.parseResponse(protocol, data); usageFrom(record(data).usage);
+      usageFrom(record(data).usage); text = deps.parseResponse(protocol, data);
       deps.onText?.(text);
     }
     if (!text.trim()) throw new ModelTransportError('模型未返回文本内容。', 'EMPTY_OUTPUT');
     const usage = modelUsage(input ?? preflight.estimatedInputTokens, output ?? Array.from(text).length, input === undefined || output === undefined, settings);
+    completedUsage = usage; succeeded = true;
     deps.onUsage?.(usage);
     return { text, usage };
   } catch (error) {
@@ -136,5 +150,12 @@ export async function generateModelTransport(settings: TransportSettings, contex
   } finally {
     timed.removeEventListener('abort', abortRead);
     await reader.cancel().catch(() => {}); reader.releaseLock();
+  }
+  } finally {
+    // Failed calls retain provider counts already received, but never invent unobserved tokens.
+    const usage = completedUsage ?? modelUsage(input ?? 0, output ?? 0, input === undefined || output === undefined);
+    // Telemetry failure must not turn successful content into a retryable model failure.
+    // Ledger marks itself unhealthy; administrative queries fail closed until restart/recovery.
+    try { await deps.onAttempt?.({ at, succeeded, usage }); } catch { /* no remote replay */ }
   }
 }

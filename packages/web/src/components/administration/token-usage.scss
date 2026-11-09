@@ -1,0 +1,66 @@
+.token-usage-panel {
+  min-width: 0;
+  max-width: 100%;
+  display: grid;
+  gap: 18px;
+  overflow-wrap: anywhere;
+
+  .token-usage-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(130px, 1fr)) minmax(120px, 1.3fr) auto;
+    align-items: end;
+    gap: 12px;
+    min-width: 0;
+
+    label { min-width: 0; }
+    input, select { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
+    .token-usage-range { grid-column: 1 / -1; font-size: 12px; }
+    .is-invalid { color: var(--danger, #c94444); }
+  }
+
+  .token-usage-results { display: grid; gap: 16px; min-width: 0; }
+  .token-usage-applied { font-variant-numeric: tabular-nums; }
+  .token-usage-metrics {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    > div { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    dt { color: var(--muted-text); font-size: 12px; }
+    dd { margin: 8px 0 0; color: var(--text); font-weight: 650; font-size: clamp(17px, 2vw, 25px); font-variant-numeric: tabular-nums; }
+  }
+  .token-usage-disclaimer { padding: 12px 14px; border-left: 3px solid var(--accent); border-radius: 4px; background: var(--soft); font-size: 12px; }
+  .token-usage-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .token-usage-chart { position: relative; min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  .token-usage-chart figcaption { font-weight: 600; color: var(--text); }
+  .token-usage-chart__canvas { height: 240px; width: 100%; min-width: 0; }
+  .token-usage-chart__canvas[hidden] { display: none; }
+  .token-usage-chart canvas { display: block; max-width: 100%; }
+  .token-usage-chart__fallback { padding: 24px 0; }
+  .token-usage-chart__scale { position: absolute; pointer-events: none; left: 14px; top: 60px; height: 180px; display: flex; flex-direction: column; justify-content: space-between; color: var(--muted-text); font-size: 10px; }
+  .token-usage-chart__daily { display: grid; grid-template-columns: repeat(auto-fit, minmax(52px, 1fr)); gap: 4px; margin-top: 12px; font-size: 10px; color: var(--muted-text); }
+  .token-usage-chart__daily > span { display: grid; gap: 2px; min-width: 0; padding: 3px; border: 1px solid var(--line); border-radius: 3px; }
+  .token-usage-chart__daily strong { color: var(--text); font-weight: 500; }
+  .token-usage-chart__axis { display: flex; justify-content: space-between; gap: 12px; color: var(--muted-text); font-size: 11px; }
+  .token-usage-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 12px; }
+  .token-usage-legend li { display: flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
+  .token-usage-legend i { display: inline-block; flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; }
+  .token-usage-table-scroll { min-width: 0; max-width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  caption { text-align: left; padding: 12px; font-weight: 600; color: var(--text); background: var(--soft); }
+  th, td { padding: 9px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th:first-child { text-align: left; white-space: normal; min-width: 95px; max-width: 220px; overflow-wrap: anywhere; }
+  thead th { color: var(--muted-text); font-weight: 500; }
+  tbody th { font-weight: 500; }
+  tr:last-child > * { border-bottom: 0; }
+  @media (max-width: 800px) {
+    .token-usage-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .token-usage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .token-usage-charts { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 420px) {
+    .token-usage-filters { grid-template-columns: minmax(0, 1fr); }
+    .token-usage-metrics > div { padding: 10px; }
+    .token-usage-chart { padding: 10px; }
+  }
+}

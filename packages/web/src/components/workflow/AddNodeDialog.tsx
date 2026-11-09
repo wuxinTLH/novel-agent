@@ -1,12 +1,12 @@
 import { useConfirm } from '../common/AppDialog';
 import { useRef, useState } from 'react';
 import { Plus, Search, List, LayoutGrid, PanelsTopLeft, ChevronRight } from 'lucide-react';
-import { nodeCatalog } from './nodeCatalog';
+import { nodeCatalog, presetDisplayLabel } from './nodeCatalog';
 import { readNodeView, saveNodeView, type NodeView } from './nodeViewPreference';
 
 import Modal from '../common/Modal';
 import { useLocale } from '../../locals/useLocale';
-import { translate } from '../../locals/core';
+import type { TranslationKey } from '../../locals/core';
 
 export type NodeFields = { title: string; subtitle: string; prompt: string };
 export function applyNodePreset(
@@ -49,7 +49,7 @@ export default function AddNodeDialog({
   onAdd: (values: NodeFields & { kind: string }) => Promise<void>;
 }) {
   const confirmDialog = useConfirm();
-  const { locale, t } = useLocale();
+  const { t } = useLocale();
   const [view, setView] = useState<NodeView>(() => readNodeView());
   const changeView = (next: NodeView) => {
     if (gate.current) return;
@@ -59,7 +59,7 @@ export default function AddNodeDialog({
   const [query, setQuery] = useState('');
   const [categoryTitle, setCategoryTitle] = useState('设定与人物');
   const [groupTitle, setGroupTitle] = useState('世界设定');
-  const catalog = nodeCatalog(presets, query, (text) => translate(locale, text));
+  const catalog = nodeCatalog(presets, query, (text) => t(text as TranslationKey));
   const category = catalog.find((item) => item.title === categoryTitle) || catalog[0];
   const group = category?.groups.find((item) => item.title === groupTitle) || category?.groups[0];
   const visibleKinds =
@@ -88,23 +88,23 @@ export default function AddNodeDialog({
       setConfirming,
     ).catch(setError);
   };
-  const requestClose = () => requestConfirmation('有未保存的修改，确定关闭并丢弃吗？', onClose);
+  const requestClose = () => requestConfirmation(t("有未保存的修改，确定关闭并丢弃吗？"), onClose);
   const limits = { title: 100, subtitle: 300, prompt: 12000 };
-  const labels = { title: '节点名称', subtitle: '节点说明', prompt: '创作指令' };
+  const labels = { title: t("节点名称"), subtitle: t("节点说明"), prompt: t("创作指令") };
   const errors = Object.fromEntries(
     (Object.keys(fields) as (keyof NodeFields)[]).map((field) => [
       field,
       !fields[field].trim()
-        ? `请填写${labels[field]}。`
+        ? t("请填写{value0}。", { value0: labels[field] })
         : fields[field].length > limits[field]
-          ? `最多 ${limits[field]} 个字符。`
+          ? t("最多 {value0} 个字符。", { value0: limits[field] })
           : '',
     ]),
   );
   return (
     <Modal
-      title="新增工作流节点"
-      description="选择节点职责，再补充它在故事中的任务。添加后可在画布连接上下游。"
+      title={t("新增工作流节点")}
+      description={t("选择节点职责，再补充它在故事中的任务。添加后可在画布连接上下游。")}
       close={requestClose}
       wide
       busy={locked}
@@ -142,7 +142,7 @@ export default function AddNodeDialog({
           </details>
         </div>
         <fieldset className="node-presets" disabled={locked}>
-          <legend>节点类型</legend>
+          <legend>{t("节点类型")}</legend>
           <div className="node-catalog-toolbar">
             <div className="node-catalog-search">
               <Search size={15} aria-hidden="true" />
@@ -161,27 +161,27 @@ export default function AddNodeDialog({
             <div className="node-view-switch" role="group" aria-label={t('节点展示方式')}>
               {(
                 [
-                  { value: 'list', label: '列表展示', text: '列表', Icon: List },
-                  { value: 'grid', label: '网格展示', text: '网格', Icon: LayoutGrid },
-                  { value: 'menu', label: '分级菜单展示', text: '分级菜单', Icon: PanelsTopLeft },
+                  { value: 'list', label: t("列表展示"), text: t("列表"), Icon: List },
+                  { value: 'grid', label: t("网格展示"), text: t("网格"), Icon: LayoutGrid },
+                  { value: 'menu', label: t("分级菜单展示"), text: t("分级菜单"), Icon: PanelsTopLeft },
                 ] as const
               ).map((item) => (
                 <button
                   type="button"
                   key={item.value}
-                  aria-label={t(item.label)}
+                  aria-label={item.label}
                   aria-pressed={view === item.value}
                   onClick={() => changeView(item.value)}
                 >
                   <item.Icon size={15} aria-hidden="true" />
-                  <span>{t(item.text)}</span>
+                  <span>{item.text}</span>
                 </button>
               ))}
             </div>
           </div>
           <div className="node-catalog-status" role="status">
             {t('找到 {count} 个节点', { count })} · {t('已选节点')}：
-            {translate(locale, presets[kind]?.title || kind)}
+            {presetDisplayLabel(kind, 'title', presets[kind]?.title || kind, key => t(key as TranslationKey))}
           </div>
           <div className={`node-catalog node-catalog--${view}`}>
             {view === 'menu' && category && (
@@ -197,7 +197,7 @@ export default function AddNodeDialog({
                         setGroupTitle(item.groups[0].title);
                       }}
                     >
-                      {translate(locale, item.title)}
+                      {t(item.title as TranslationKey)}
                       <ChevronRight size={14} aria-hidden="true" />
                     </button>
                   ))}
@@ -210,7 +210,7 @@ export default function AddNodeDialog({
                       aria-pressed={group?.title === item.title}
                       onClick={() => setGroupTitle(item.title)}
                     >
-                      {translate(locale, item.title)}
+                      {t(item.title as TranslationKey)}
                       <ChevronRight size={14} aria-hidden="true" />
                     </button>
                   ))}
@@ -242,8 +242,8 @@ export default function AddNodeDialog({
                       }}
                     />
                     <span>
-                      <strong>{translate(locale, preset.title || '自定义 Agent')}</strong>
-                      <small>{translate(locale, preset.subtitle)}</small>
+                      <strong>{presetDisplayLabel(value, 'title', preset.title || t("自定义 Agent"), key => t(key as TranslationKey))}</strong>
+                      <small>{presetDisplayLabel(value, 'subtitle', preset.subtitle, key => t(key as TranslationKey))}</small>
                     </span>
                   </label>
                 );
@@ -253,21 +253,20 @@ export default function AddNodeDialog({
           </div>
         </fieldset>
         <div className="preset-hint">
-          <span>切换类型会保留你编辑过的字段。</span>
+          <span>{t("切换类型会保留你编辑过的字段。")}</span>
           <button
             type="button"
             className="text-button"
             disabled={locked}
             onClick={() =>
-              requestConfirmation('应用此预设将替换名称、说明和创作指令，是否继续？', () => {
+              requestConfirmation(t("应用此预设将替换名称、说明和创作指令，是否继续？"), () => {
                 setFields({ ...presets[kind] });
                 setEdited({});
                 setAttempted(false);
               })
             }
           >
-            应用此预设
-          </button>
+            {t("应用此预设")}</button>
         </div>
         {(Object.keys(fields) as (keyof NodeFields)[]).map((field) => (
           <label key={field} htmlFor={`new-node-${field}`}>
@@ -312,11 +311,10 @@ export default function AddNodeDialog({
         ))}
         <div className="modal-actions">
           <button type="button" className="button secondary" disabled={locked} onClick={requestClose}>
-            取消
-          </button>
+            {t("取消")}</button>
           <button className="button primary" disabled={locked}>
             <Plus size={16} />
-            {pending ? '正在添加…' : '添加节点'}
+            {pending ? t("正在添加…") : t("添加节点")}
           </button>
         </div>
       </form>

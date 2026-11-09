@@ -4,13 +4,13 @@ import { api, resetApiSession } from '../../services/api';
 import './auth-toolbar.scss';
 import { ShellChromePortal } from './ShellChromePortal';
 import { createSessionRevalidator } from './session-revalidation';
-import { hasPermission, ROLES } from '../../../../../shared/permissions';
+import { hasPermission } from '../../../../../shared/permissions';
 import Administration from '../administration/Administration';
 import AccountSecurity from './AccountSecurity';
 import { AccountAccess } from '../account/AccountAccess';
 import { AccountCompletion } from '../account/AccountCompletion';
 import { AccountSettings } from '../account/AccountSettings';
-import { LanguageSwitcher, useLocale } from '../../locals';
+import { createTranslator, getLocale, type Translator, LanguageSwitcher, useLocale } from '../../locals';
 import Modal from '../common/Modal';
 import type {
   AuthStatus as Session,
@@ -33,8 +33,8 @@ const card: CSSProperties = {
   background: 'var(--surface)',
 };
 const stack: CSSProperties = { display: 'grid', gap: 12 };
-function message(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请重试。';
+function message(error: unknown, t: Translator) {
+  return error instanceof Error ? error.message : t("请求失败，请重试。");
 }
 
 // Only remove keys owned by this app, never clear unrelated origin storage.
@@ -75,6 +75,7 @@ function Challenge({
   attempt: number;
   token: (value: string) => void;
 }) {
+  const { t } = useLocale();
   const container = useRef<HTMLDivElement>(null);
   const callback = useRef(token);
   callback.current = token;
@@ -97,14 +98,14 @@ function Challenge({
           'expired-callback': () => callback.current(''),
           'error-callback': () => {
             callback.current('');
-            setError('人机验证失败，请刷新验证后重试。');
+            setError(t("人机验证失败，请刷新验证后重试。"));
           },
         });
       } catch {
-        setError('无法初始化人机验证，请刷新页面。');
+        setError(t("无法初始化人机验证，请刷新页面。"));
       }
     };
-    const failed = () => setError('无法载入 Cloudflare 人机验证，请检查网络后刷新。');
+    const failed = () => setError(t("无法载入 Cloudflare 人机验证，请检查网络后刷新。"));
     const src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
     let script = document.querySelector<HTMLScriptElement>('script[data-novel-turnstile]');
     if (window.turnstile) render();
@@ -136,8 +137,9 @@ function Challenge({
 }
 
 const accountRequest = <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
+  const t = createTranslator(getLocale());
   if (!path.startsWith('/api/auth/') && !path.startsWith('/api/admin/'))
-    return Promise.reject(new Error('无效账户请求路径'));
+    return Promise.reject(new Error(t("无效账户请求路径")));
   return api<T>(path.slice(4), { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 };
 
@@ -185,7 +187,7 @@ function Login({ session }: { session: Session }) {
       // A reload purges App's module-level pending-run caches as well as React state.
       window.location.reload();
     } catch (error) {
-      setError(message(error));
+      setError(message(error, t));
     } finally {
       setPassword('');
       setAttempt((value) => value + 1);
@@ -309,7 +311,7 @@ function CompletionPage({ session, completion }: { session: Session; completion?
                 setError('');
                 void accountRequest('/api/auth/account/email/complete', 'POST', { token: completion.token })
                   .then(() => setDone(true))
-                  .catch((reason: unknown) => setError(message(reason)))
+                  .catch((reason: unknown) => setError(message(reason, t)))
                   .finally(() => setBusy(false));
               }}
             >
@@ -381,7 +383,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         window.location.reload();
       },
       checking: () => setError(''),
-      error: (error) => setError(message(error)),
+      error: (error) => setError(message(error, t)),
     });
     const refresh = () => revalidator.check();
     refreshRef.current = refresh;
@@ -486,7 +488,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       await api('/auth/logout', { method: 'POST' });
       window.location.reload();
     } catch (error) {
-      setError(message(error));
+      setError(message(error, t));
       setBusy(false);
     }
   };
@@ -504,7 +506,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
               </span>
               <span className="auth-toolbar__pill">
                 <span className="auth-toolbar__dot" />
-                {ROLES[user.role]?.label ?? '未知角色'}
+                {t(({ superadmin: '超级管理员', admin: '管理员', operations: '运维管理员', writer: '作家' } as const)[user.role] ?? '未知角色')}
               </span>
             </span>
           </div>

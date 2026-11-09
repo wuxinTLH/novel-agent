@@ -14,6 +14,8 @@ export interface PublicationExecutionContext {
   identified(remoteDraftId: string): void;
 }
 export interface PublicationQueueHooks {
+  /** Synchronous local-only write admission, including retained orphan evidence. */
+  assertWriteAdmission?(target: PublicationTarget): void;
   /** Read-only. Compare every approved target/chapter field with current local AND remote state. */
   validate(preview: PublicationPreview, items?: readonly PublicationItem[]): Promise<void>;
   execute(preview: PublicationPreview, item: PublicationItem, context: PublicationExecutionContext): Promise<{
@@ -141,6 +143,27 @@ export class PublicationQueue {
   private batches: PublicationBatch[] = [];
   private tasks = new Map<string, Promise<void>>();
   private tail: Promise<void> = Promise.resolve();
+  private reconciling = new Set<string>();
+  isActive(id: string): boolean { return this.tasks.has(id) || this.reconciling.has(id); }
+  canCancel(id: string): boolean {
+    const batch = this.batch(id);
+    return !this.isActive(id) && ['preview', 'queued', 'paused', 'failed'].includes(batch.state) &&
+      batch.items.every(item => !item.mutationStarted && !item.remoteDraftId && !item.remoteFingerprint &&
+        ['queued', 'failed'].includes(item.state));
+  }
+  cancel(id: string, approvalHash: string): PublicationBatch {
+    const batch = this.batch(id);
+    this.checkHash(batch.preview);
+    if (approvalHash !== batch.preview.hash) reject('APPROVAL_MISMATCH', 'Exact preview hash required for cancellation');
+    if (batch.state === 'cancelled') return this.get(id);
+    if (!this.canCancel(id)) reject('INVALID_STATE', 'Only idle, provably unmutated batches can be cancelled');
+    this.change(() => {
+      batch.state = 'cancelled'; batch.cancelledAt = this.now(); batch.updatedAt = batch.cancelledAt;
+      batch.pauseRequested = true;
+      for (const item of batch.items) item.state = 'cancelled';
+    });
+    return this.get(id);
+  }
   private persist: (filePath: string, contents: string) => void;
   private now: () => string;
   constructor(private filePath: string, private hooks: PublicationQueueHooks, options: PublicationQueueOptions = {}) {
@@ -187,14 +210,14 @@ export class PublicationQueue {
   private checkBatch(batch: PublicationBatch): void {
     if (!batch || !batch.preview || !Array.isArray(batch.items) || !Array.isArray(batch.startRequestIds) ||
       batch.startRequestIds.some(id => typeof id !== 'string' || !id) || new Set(batch.startRequestIds).size !== batch.startRequestIds.length ||
-      !['preview', 'queued', 'running', 'paused', 'completed', 'failed', 'unknown'].includes(batch.state) ||
+      !['preview', 'queued', 'running', 'paused', 'completed', 'failed', 'unknown', 'cancelled'].includes(batch.state) ||
       typeof batch.pauseRequested !== 'boolean' || !Array.isArray(batch.preview.chapters) ||
       !batch.preview.chapters.length || batch.preview.chapters.length > 50 || batch.id !== batch.preview.id ||
       !['save_draft', 'submit_review'].includes(batch.preview.action) ||
       (batch.preview.action === 'submit_review' && batch.preview.useAi !== 1 && batch.preview.useAi !== 2) ||
       (batch.preview.action === 'save_draft' && batch.preview.useAi !== undefined) ||
       (batch.approvalHash !== undefined && batch.approvalHash !== batch.preview.hash) ||
-      (batch.state !== 'preview' && !batch.approvalHash) ||
+      (!['preview', 'cancelled'].includes(batch.state) && !batch.approvalHash) ||
       !Number.isFinite(Date.parse(batch.preview.createdAt))) reject('INVALID_STORE', 'Invalid publication queue record');
     if ((batch.preview.autoApprove !== undefined && typeof batch.preview.autoApprove !== 'boolean') ||
       (batch.approval !== undefined && (!['manual', 'automatic'].includes(batch.approval.mode) || !['prepare', 'start'].includes(batch.approval.source) ||
@@ -204,12 +227,16 @@ export class PublicationQueue {
       reject('INVALID_STORE', 'Invalid publication failure diagnostics');
     if (canonical(targetSnapshot(batch.preview.target)) !== canonical(batch.preview.target)) reject('INVALID_STORE', 'Invalid publication target');
     for (const chapter of batch.preview.chapters) if (canonical(chapterSnapshot(chapter)) !== canonical(chapter)) reject('INVALID_STORE', 'Invalid chapter snapshot');
+    if (batch.state === 'cancelled' ? (!batch.cancelledAt || !Number.isFinite(Date.parse(batch.cancelledAt)) ||
+      batch.items.some(item => item.state !== 'cancelled' || item.mutationStarted || item.remoteDraftId || item.remoteFingerprint)) :
+      (batch.cancelledAt !== undefined || batch.items.some(item => item.state === 'cancelled')))
+      reject('INVALID_STORE', 'Invalid cancelled publication record');
     validateRemotePlan(batch.preview);
     this.checkHash(batch.preview);
     const keys = batch.preview.chapters.map(chapter => identity(batch.preview, chapter));
     if (new Set(keys).size !== keys.length || new Set(batch.items.map(item => item.id)).size !== batch.items.length ||
       batch.items.some(item => !item.id || typeof item.mutationStarted !== 'boolean' ||
-        !['queued', 'running', 'draft_verified', 'submitted', 'failed', 'unknown'].includes(item.state) ||
+        !['queued', 'running', 'draft_verified', 'submitted', 'failed', 'unknown', 'cancelled'].includes(item.state) ||
         (item.remoteFingerprint !== undefined && (typeof item.remoteFingerprint !== 'string' || !item.remoteFingerprint)) ||
         (item.remoteDraftId !== undefined && (typeof item.remoteDraftId !== 'string' || !item.remoteDraftId)))) reject('INVALID_STORE', 'Invalid publication items');
     if (batch.items.length !== batch.preview.chapters.length || batch.items.some((item, index) =>
@@ -225,7 +252,7 @@ export class PublicationQueue {
     for (const batch of [...this.batches].reverse()) {
       if (!batch.approvalHash || batch.id === preview.id) continue;
       const item = batch.items.find(i => !superseded.has(i.id) && identity(batch.preview, i.snapshot) === identity(preview, snapshot) &&
-        !(i.state === 'failed' && !i.mutationStarted));
+        !(['failed', 'cancelled'].includes(i.state) && !i.mutationStarted));
       if (!item) continue;
       if (batch.preview.action === 'save_draft' && item.state === 'draft_verified' && item.remoteDraftId && canonical(item.snapshot) === canonical(snapshot))
         return freeze(clone(item));
@@ -263,6 +290,7 @@ export class PublicationQueue {
     return this.get(batch.id);
   }
   private checkConflicts(batch: PublicationBatch): void {
+    this.hooks.assertWriteAdmission?.(batch.preview.target);
     for (const item of batch.items) {
       if (item.state !== 'queued') continue;
       const plan = planFor(batch.preview, item.snapshot.chapterId);
@@ -281,7 +309,7 @@ export class PublicationQueue {
       }
       for (const prior of overlaps) {
         const existing = prior.item;
-        if (!existing.mutationStarted && (existing.state === 'failed' ||
+        if (!existing.mutationStarted && (['failed', 'cancelled'].includes(existing.state) ||
           (prior.batch.state === 'failed' && existing.state === 'queued'))) continue;
         if (!['draft_verified', 'submitted'].includes(existing.state)) {
           const same = canonical(item.snapshot) === canonical(existing.snapshot);
@@ -317,6 +345,7 @@ export class PublicationQueue {
     const batch = this.batch(id);
     this.checkHash(batch.preview);
     if (approvalHash !== batch.preview.hash) reject('APPROVAL_MISMATCH', 'Exact preview hash approval required');
+    if (batch.state === 'cancelled') reject('INVALID_STATE', 'Cancelled batches cannot be approved again');
     if (batch.approvalHash === approvalHash) return this.get(id);
     if (batch.state !== 'preview') reject('INVALID_STATE', 'Only a preview can be approved');
     if (Date.parse(this.now()) - Date.parse(batch.preview.createdAt) >= 10 * 60 * 1000)
@@ -331,6 +360,7 @@ export class PublicationQueue {
     this.checkHash(batch.preview);
     if (batch.approvalHash !== input.approvalHash || batch.preview.hash !== input.approvalHash)
       reject('APPROVAL_MISMATCH', 'Exact approved preview hash required');
+    this.hooks.assertWriteAdmission?.(batch.preview.target);
     const owner = this.batches.find(b => b.startRequestIds.includes(input.requestId));
     if (owner) {
       if (owner.id !== id) reject('REQUEST_CONFLICT', 'Start request belongs to another batch');
@@ -358,7 +388,7 @@ export class PublicationQueue {
   }
   async reconcile(id: string, candidates: Record<string, string> = {}): Promise<PublicationBatch> {
     const initial = this.get(id);
-    if (this.tasks.has(id) || initial.state !== 'unknown') reject('INVALID_STATE', 'Only an idle unknown batch can be reconciled');
+    if (this.isActive(id) || initial.state !== 'unknown') reject('INVALID_STATE', 'Only an idle unknown batch can be reconciled');
     if (!this.hooks.reconcile) reject('RECONCILIATION_UNAVAILABLE', 'Read-only reconciliation is unavailable');
     for (const [itemId, candidate] of Object.entries(candidates)) {
       const item = initial.items.find(value => value.id === itemId && value.state === 'unknown');
@@ -368,6 +398,7 @@ export class PublicationQueue {
       if (pinned && pinned !== candidate) reject('INVALID_RECONCILIATION', 'Cannot replace the known remote chapter ID');
     }
     let release: (() => void | Promise<void>) | undefined;
+    this.reconciling.add(id);
     try {
       release = await this.hooks.acquire?.(initial.preview);
       for (const item of initial.items.filter(value => value.state === 'unknown')) {
@@ -392,10 +423,12 @@ export class PublicationQueue {
         });
       }
       return this.get(id);
-    } finally { await release?.(); }
+    } finally {
+      try { await release?.(); } finally { this.reconciling.delete(id); }
+    }
   }
   clearStaging(projectId: string) {
-    if (this.batches.some(batch => batch.preview.target.projectId === projectId && (this.tasks.has(batch.id) || ['queued', 'running'].includes(batch.state))))
+    if (this.batches.some(batch => batch.preview.target.projectId === projectId && (this.isActive(batch.id) || ['queued', 'running'].includes(batch.state))))
       reject('INVALID_STATE', 'Cannot clear active publication batches');
     if (fs.existsSync(this.filePath)) fs.copyFileSync(this.filePath, `${this.filePath}.staging-${Date.now()}.bak`);
     this.change(() => { this.batches = this.batches.filter(batch => batch.preview.target.projectId !== projectId); });

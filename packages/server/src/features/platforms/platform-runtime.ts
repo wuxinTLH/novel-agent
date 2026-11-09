@@ -2,7 +2,7 @@ import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { defaultPlatformAccountLockClient, PlatformAccountLockError, type PlatformAccountLockClient, type PlatformAccountLease } from '../../core/tenancy/platform-account-lock.js';
 import { PublicationQueue } from './publication-queue.js';
-import type { PublicationPreview, PublicationBatch, PublicationChapterRemotePlan } from '../../../../../shared/publication.js';
+import type { PublicationPreview, PublicationBatch, PublicationChapterRemotePlan, PublicationDeletionBlockers } from '../../../../../shared/publication.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Chapter } from '../../../../../shared/types.js';
 import type {
@@ -90,6 +90,7 @@ export class PlatformRuntime {
       this.secretStore = new SecretStore(store.dir);
       this.platformStore = new PlatformStore(store.dir);
       this.publicationQueue = new PublicationQueue(path.join(store.dir, 'publication-queue.json'), {
+        assertWriteAdmission: (target) => { this.assertWritable(target.projectId); this.assertNoUnknownOrphan(target); },
         validate: (preview, items) => this.lockContext.run(preview.target, () => this.validatePublication(preview, items)),
         acquire: async (preview) => {
           const record = this.connection(preview.target.projectId, preview.target.connectionId);
@@ -795,6 +796,7 @@ export class PlatformRuntime {
   private async validatePublication(preview: PublicationPreview, items?: readonly PublicationBatch['items'][number][]) {
     const target = preview.target;
     this.assertWritable(target.projectId);
+    this.assertNoUnknownOrphan(target);
     const record = this.connection(target.projectId, target.connectionId);
     const link = this.platforms.links(target.projectId).find((item) => item.id === target.linkId);
     if (!link || link.connectionId !== target.connectionId || link.providerId !== target.providerId || record.providerId !== target.providerId || record.accountName !== target.accountName || record.accountId !== target.accountId || link.accountId !== target.accountId || link.remoteWorkId !== target.remoteWorkId)
@@ -890,7 +892,8 @@ export class PlatformRuntime {
   }
   private queuedPublications(accountId: string, workId: string, chapterId: string) {
     return this.publications.list().filter((batch) => batch.approvalHash && batch.preview.target.accountId === accountId && batch.preview.target.remoteWorkId === workId)
-      .flatMap((batch) => batch.items.filter((item) => item.snapshot.chapterId === chapterId).map((item) => ({ batch, item })));
+      .flatMap((batch) => batch.items.filter((item) => item.snapshot.chapterId === chapterId &&
+        !(item.state === 'cancelled' && !item.mutationStarted)).map((item) => ({ batch, item })));
   }
   private priorDraft(accountId: string, workId: string, chapterId: string) {
     return this.platforms
@@ -968,6 +971,7 @@ export class PlatformRuntime {
       throw new PlatformError(404, 'PLATFORM_PREVIEW_NOT_FOUND', '预览不存在，请重新选择并预览。');
     if (preparation.snapshot.contentHash !== contentHash)
       throw new PlatformError(409, 'PLATFORM_PREVIEW_CHANGED', '确认内容与预览不一致。');
+    this.assertNoUnknownOrphan(preparation);
     const requestKey = businessHash([projectId, idempotencyKey]);
     const businessKey = businessHash([
       preparation.providerId,
@@ -1074,6 +1078,8 @@ export class PlatformRuntime {
     let release: PlatformAccountLease | undefined;
     try {
       release = await this.externalLease(record);
+      this.assertWritable(operation.projectId);
+      this.assertNoUnknownOrphan(operation);
       operation.state = 'running';
       operation.updatedAt = now();
       this.platforms.putDraftOperation(operation);
@@ -1171,6 +1177,7 @@ export class PlatformRuntime {
     if (operation.state !== 'verified' || !operation.remoteDraftId)
       throw new PlatformError(409, 'PLATFORM_DRAFT_DELETE_INVALID', '只有已核实且有稳定远端 ID 的草稿才能删除。');
     const record = this.connection(projectId, operation.connectionId);
+    this.assertNoUnknownOrphan(operation);
     return this.withLock(projectId, record, async () => {
       const state = this.state(record);
       await this.verify(record, state);
@@ -1182,6 +1189,7 @@ export class PlatformRuntime {
           'PLATFORM_DRAFT_VERIFICATION_FAILED',
           '删除前回读的草稿与已核实版本不一致，未执行删除。',
         );
+      this.assertNoUnknownOrphan(operation);
       try {
         await this.browser.deleteDraft(record.id, state, operation.remoteWorkId, operation.remoteDraftId!);
       } catch (error) {
@@ -1272,9 +1280,88 @@ export class PlatformRuntime {
       this.secrets.delete(record.credentialRef);
     });
   }
+  /** Orphan evidence is a retained archive, never a new publication source. */
+  assertNoUnknownOrphan(target: { providerId: string; accountId: string; remoteWorkId: string }) {
+    const sameWork = (value: typeof target) => value.providerId === target.providerId &&
+      value.accountId === target.accountId && value.remoteWorkId === target.remoteWorkId;
+    if (this.publications.list().some(batch => !this.store.get(batch.preview.target.projectId) && sameWork(batch.preview.target) &&
+      (['unknown', 'queued', 'running'].includes(batch.state) || batch.items.some(item => ['unknown', 'running'].includes(item.state)))) ||
+      this.platforms.draftOperations().some(operation => !this.store.get(operation.projectId) && sameWork(operation) &&
+        ['unknown', 'queued', 'running'].includes(operation.state)))
+      throw new PlatformError(409, 'PLATFORM_ORPHAN_UNKNOWN', '此账号作品有已删除项目保留的未知操作记录；禁止新增远端写入，请先在官方作者页核对。');
+  }
+  deletedProjectRecords() {
+    const batches = this.publications.list();
+    const operations = this.platforms.draftOperations();
+    const projectIds = new Set([
+      ...this.platforms.allConnections().map(record => record.projectId),
+      ...batches.map(batch => batch.preview.target.projectId), ...operations.map(operation => operation.projectId),
+    ].filter(projectId => !this.store.get(projectId)));
+    return [...projectIds].map(projectId => ({
+      projectId,
+      batches: batches.filter(batch => batch.preview.target.projectId === projectId).map(batch => ({
+        id: batch.id, state: batch.state, providerId: batch.preview.target.providerId,
+        accountId: batch.preview.target.accountId, remoteWorkId: batch.preview.target.remoteWorkId,
+        createdAt: batch.createdAt, updatedAt: batch.updatedAt,
+        items: batch.items.map(item => ({ id: item.id, number: item.snapshot.number, state: item.state,
+          mutationStarted: item.mutationStarted, hasRemoteDraftId: !!item.remoteDraftId })),
+      })),
+      legacyOperations: operations.filter(operation => operation.projectId === projectId).map(operation => ({
+        id: operation.id, state: operation.state, providerId: operation.providerId, accountId: operation.accountId,
+        remoteWorkId: operation.remoteWorkId, mutationStarted: operation.mutationStarted,
+        hasRemoteDraftId: !!operation.remoteDraftId, createdAt: operation.createdAt, updatedAt: operation.updatedAt,
+      })),
+    }));
+  }
+  async removeProjectPreservingRecords(projectId: string, deleteCore: () => void) {
+    this.assertWritable(projectId);
+    this.assertProjectIdle(projectId);
+    if (this.store.projects.length <= 1)
+      throw new PlatformError(400, 'LAST_PROJECT', '至少保留一个作品。');
+    if (this.publications.list(projectId).some(batch => this.publications.isActive(batch.id) || batch.state === 'running') ||
+      this.platforms.draftOperations(projectId).some(operation => operation.state === 'running'))
+      throw new PlatformError(409, 'PLATFORM_BUSY', '平台任务正在执行，不能删除作品。');
+    // Hold the project lock across browser teardown AND the core durable commit. No platform record is changed.
+    await this.withLock(projectId, undefined, async () => {
+      for (const connection of this.platforms.connections(projectId)) {
+        this.stopResidentRefresh(connection.id);
+        await this.browser.closeConnection(connection.id);
+      }
+      this.assertWritable(projectId);
+      if (this.store.projects.length <= 1)
+        throw new PlatformError(400, 'LAST_PROJECT', '至少保留一个作品。');
+      this.extension.revokeProject(projectId);
+      deleteCore();
+    });
+  }
+  deletionBlockers(projectId: string): PublicationDeletionBlockers {
+    const batches = this.publications.list(projectId).filter(batch => this.publications.isActive(batch.id) ||
+      ['queued', 'running', 'paused', 'unknown'].includes(batch.state) || batch.items.some(item => item.state === 'unknown'));
+    const legacyOperations = this.platforms.draftOperations(projectId).filter(operation => ['unknown', 'queued', 'running'].includes(operation.state))
+      .map(operation => ({ id: operation.id, state: operation.state }));
+    const busy = this.isProjectBusy(projectId) || legacyOperations.some(operation => operation.state === 'running') || this.store.get(projectId)?.run?.status === 'running' ||
+      batches.some(batch => this.publications.isActive(batch.id) || batch.state === 'running');
+    return {
+      removable: !busy && !batches.length && !legacyOperations.length, busy,
+      canDeletePreservingRecords: !busy && !!this.store.get(projectId) && this.store.projects.length > 1,
+      batches: batches.map(batch => ({ id: batch.id, state: batch.state, approvalHash: batch.preview.hash,
+        canCancel: !busy && this.publications.canCancel(batch.id),
+        ...(batch.errorCode ? { errorCode: batch.errorCode } : {}), ...(batch.failureStage ? { failureStage: batch.failureStage } : {}),
+        items: batch.items.map(item => ({ number: item.snapshot.number, state: item.state, mutationStarted: item.mutationStarted,
+          hasRemoteDraftId: !!item.remoteDraftId })),
+      })), legacyOperations,
+    };
+  }
+  cancelPublication(projectId: string, batchId: string, approvalHash: string) {
+    this.assertWritable(projectId);
+    if (this.publications.get(batchId).preview.target.projectId !== projectId)
+      throw new PlatformError(404, 'PUBLICATION_NOT_FOUND', '发布队列不存在。');
+    this.assertProjectIdle(projectId);
+    return this.publications.cancel(batchId, approvalHash);
+  }
   assertPublicationRemovable(projectId: string, connectionId?: string, workId?: string) {
     if (this.publications.list(projectId).some((batch) => (!connectionId || batch.preview.target.connectionId === connectionId) && (!workId || batch.preview.target.remoteWorkId === workId) &&
-      (['queued', 'running', 'paused', 'unknown'].includes(batch.state) || batch.items.some((item) => item.state === 'unknown'))))
+      (this.publications.isActive(batch.id) || ['queued', 'running', 'paused', 'unknown'].includes(batch.state) || batch.items.some((item) => item.state === 'unknown'))))
       throw new PlatformError(409, 'PUBLICATION_PENDING', '存在未完成或结果未知的发布队列，禁止删除恢复所需的项目或连接。');
   }
   async removeProject(projectId: string) {

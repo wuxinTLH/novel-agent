@@ -595,6 +595,95 @@ test('persistent verification storage failure leaves last durable unknown checkp
   assert.equal(reopened.state, 'unknown'); assert.equal(reopened.items[0].reconciliation, undefined);
 });
 
+test('safe cancellation is durable, hash-bound and preserves approval history without replay', async t => {
+  for (const approvedFirst of [false, true]) {
+    const { queue, file, hooks } = fixture(t);
+    const batch = await queue.preview({ target, action: 'save_draft', chapters: [chapter()] });
+    if (approvedFirst) queue.approve(batch.id, batch.preview.hash);
+    assert.throws(() => queue.cancel(batch.id, 'wrong'), errorCode('APPROVAL_MISMATCH'));
+    const result = queue.cancel(batch.id, batch.preview.hash);
+    assert.equal(result.state, 'cancelled'); assert.equal(result.items[0].state, 'cancelled');
+    assert.equal(result.items[0].mutationStarted, false);
+    assert.deepEqual(result.preview, batch.preview);
+    assert.deepEqual(queue.cancel(batch.id, batch.preview.hash), result);
+    assert.equal(new PublicationQueue(file, hooks).get(batch.id).state, 'cancelled');
+    assert.throws(() => queue.approve(batch.id, batch.preview.hash), errorCode('INVALID_STATE'));
+    assert.throws(() => queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'never' }),
+      errorCode(approvedFirst ? 'INVALID_STATE' : 'APPROVAL_MISMATCH'));
+    const fresh = await queue.preview({ target, action: 'save_draft', chapters: [chapter()] });
+    assert.equal(queue.approve(fresh.id, fresh.preview.hash).state, 'queued');
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    data.batches[0].items[0].mutationStarted = true; fs.writeFileSync(file, JSON.stringify(data));
+    assert.throws(() => new PublicationQueue(file, hooks), errorCode('INVALID_STORE'));
+  }
+});
+
+test('inflight unmutated execution cannot be cancelled or cleared, and unknown never becomes cancelled', async t => {
+  let settle!: () => void;
+  const gate = new Promise<void>(resolve => { settle = resolve; });
+  const { queue } = fixture(t, { execute: async (_p, _i, context) => {
+    await gate; context.beforeMutation(); throw new Error('uncertain');
+  } });
+  const batch = await approved(queue);
+  queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' });
+  assert.equal(queue.canCancel(batch.id), false);
+  assert.throws(() => queue.cancel(batch.id, batch.preview.hash), errorCode('INVALID_STATE'));
+  queue.pause(batch.id);
+  assert.throws(() => queue.cancel(batch.id, batch.preview.hash), errorCode('INVALID_STATE'));
+  settle(); await queue.waitForIdle();
+  // A paused task which never entered execute can be safely cancelled after settling.
+  assert.equal(queue.cancel(batch.id, batch.preview.hash).state, 'cancelled');
+  assert.equal(queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: 'start' }).state, 'cancelled');
+  await queue.waitForIdle(); assert.equal(queue.get(batch.id).state, 'cancelled');
+  const next = await approved(queue);
+  queue.start(next.id, { approvalHash: next.preview.hash, requestId: 'next' }); await queue.waitForIdle();
+  assert.equal(queue.get(next.id).state, 'unknown');
+  assert.throws(() => queue.cancel(next.id, next.preview.hash), errorCode('INVALID_STATE'));
+  const duplicate = await queue.preview({ target, action: 'save_draft', chapters: [chapter()] });
+  assert.throws(() => queue.approve(duplicate.id, duplicate.preview.hash), errorCode('DUPLICATE_CHAPTER'));
+});
+
+test('cancellation persistence failure rolls back and reconciliation remains inflight until release', async t => {
+  let broken = false;
+  const { queue } = fixture(t, {}, { persist: (file, contents) => {
+    if (broken) throw new Error('disk full'); fs.writeFileSync(file, contents);
+  } });
+  const batch = await approved(queue); broken = true;
+  assert.throws(() => queue.cancel(batch.id, batch.preview.hash), /disk full/);
+  assert.equal(queue.get(batch.id).state, 'queued');
+  let releaseRead!: () => void;
+  const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+  const f = fixture(t, { execute: async (_p, _i, context) => { context.beforeMutation(); context.identified('known-id'); throw new Error('unknown'); },
+    reconcile: async () => { await gate; return undefined; } });
+  const unknown = await approved(f.queue);
+  f.queue.start(unknown.id, { approvalHash: unknown.preview.hash, requestId: 'run' }); await f.queue.waitForIdle();
+  const read = f.queue.reconcile(unknown.id);
+  assert.equal(f.queue.isActive(unknown.id), true);
+  assert.throws(() => f.queue.clearStaging(target.projectId), errorCode('INVALID_STATE'));
+  await assert.rejects(f.queue.reconcile(unknown.id), errorCode('INVALID_STATE'));
+  releaseRead(); await read; assert.equal(f.queue.isActive(unknown.id), false);
+  assert.equal(f.queue.get(unknown.id).state, 'unknown');
+});
+
+test('safe cancellation covers paused and pre-write failed batches but rejects remote identity and partial success', async t => {
+  for (const mode of ['paused', 'failed', 'remote', 'partial'] as const) {
+    const f = fixture(t, { execute: async (_p, item, context) => {
+      if (mode === 'failed') throw new Error('before mutation');
+      context.beforeMutation(); context.identified(`remote-${item.snapshot.number}`);
+      if (mode === 'remote') throw new Error('unknown');
+      f.queue.pause(batch.id);
+      return { state: 'draft_verified', remoteDraftId: `remote-${item.snapshot.number}` };
+    } });
+    const batch = await f.queue.preview({ target, action: 'save_draft', chapters: [chapter(), chapter(2)] });
+    f.queue.approve(batch.id, batch.preview.hash);
+    if (mode === 'paused') f.queue.pause(batch.id);
+    else { f.queue.start(batch.id, { approvalHash: batch.preview.hash, requestId: mode }); await f.queue.waitForIdle(); }
+    assert.equal(f.queue.canCancel(batch.id), mode === 'paused' || mode === 'failed');
+    if (mode === 'paused' || mode === 'failed') assert.equal(f.queue.cancel(batch.id, batch.preview.hash).state, 'cancelled');
+    else assert.throws(() => f.queue.cancel(batch.id, batch.preview.hash), errorCode('INVALID_STATE'));
+  }
+});
+
 test('tampered immutable preview is rejected on reopen', async t => {
   const { queue, file, hooks } = fixture(t); await approved(queue);
   const data = JSON.parse(fs.readFileSync(file, 'utf8')); data.batches[0].preview.chapters[0].content = 'tampered'; fs.writeFileSync(file, JSON.stringify(data));

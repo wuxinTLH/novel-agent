@@ -2,6 +2,20 @@
 
 Platform feature route registration lives here.
 
+## Local deletion diagnostics and safe cancellation
+
+`GET /api/projects/:projectId/platform-deletion-blockers` reads only local metadata: blocking batches/items, error codes/stages, mutation intent, exact-ID availability, legacy operations and current busy state. It contains no manuscript snapshots or credentials and does not contact a provider. `removable` is advisory; project deletion rechecks runtime guards.
+
+`POST /api/projects/:projectId/platform-publication-batches/:batchId/cancel` requires the strict body `{ confirmed: true, approvalHash }`, project ownership and existing CSRF/origin checks. Cancellation is allowed only for an idle preview/queued/paused/failed batch whose every item is queued/failed, has no mutation intent, remote ID or fingerprint. It persists `cancelled` items, a terminal batch and `cancelledAt`, preserving the immutable preview, approval and request IDs. Persistence failures roll back. Cancelled records cannot resume or be approved again; repeated start request IDs return history without replay. Reopening storage validates these invariants. Only proven unmutated cancellations are excluded from pending/deduplication paths.
+
+Unknown results, partial success and any possible remote mutation remain protected. Execution **and reconciliation** count as in-flight work until their lease release settles, blocking cancellation, clear and destructive removal. Cancellation never clears evidence, deletes remote content or automatically deletes a project. The older backup-and-clear operation remains separate and destructive, not a safe recovery substitute. See the [integration guide](../../../../../docs/en/fanqie-integration.md) for operational boundaries.
+
+## Explicit local deletion retaining platform evidence
+
+Ordinary project deletion still refuses ambiguous publication records. The separate strict opt-in DELETE body `{ confirmed: true, preservePlatformRecords: true }` removes only the local project after idle/last-project checks; it preserves all platform records, snapshots, approvals, deduplication and bindings. The diagnostic's optional `canDeletePreservingRecords` is advisory, not authorization. Missing flags fail closed in the UI. No unknown record is marked successful or replayed. Retained snapshots are private historical data, so this is not complete erasure.
+
+`GET /api/platforms/deleted-project-records` returns tenant-local retained metadata only, no credentials or manuscript bodies. Missing canonical project ownership makes retained evidence an archive; source batches cannot execute through deleted-project routes. New chapter/project IDs cannot bypass unresolved retained provider/account/work write barriers. The local deletion callback runs under a project exclusion through canonical persistence; failed persistence restores the local project and leaves evidence intact. Platform evidence is not cleared or moved between independent stores. Browser refresh is stopped and extension pairing revoked before the core commit; if persistence fails, durable project/evidence rollback does not automatically resume those volatile browser/extension capabilities.
+
 ## Single-instance external-account safety
 
 The main-thread `mainPlatformAccountLockCoordinator()` owns non-expiring leases across tenant workers. Before constructing each Worker, obtain `credentials()` and pass them in private workerData; immediately call `bindWorker(worker, credentials)`. In the worker, install `createWorkerPlatformAccountLockClient(parentPort, credentials)` via `installPlatformAccountLockClient()` **before** creating the service context/runtime. Workers without this capability fail closed. Existing non-isolated main-thread runtimes use the same process singleton. There is no distributed or multi-instance exclusion guarantee.

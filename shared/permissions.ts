@@ -23,6 +23,7 @@ export const PERMISSION_MODULES = {
     'maintenance.commands': managers,
   },
   security: { 'security.read': managers, 'security.manage': ['superadmin'] },
+  usage: { 'usage.read': managers },
 } as const satisfies Record<string, Record<string, readonly RoleId[]>>;
 type Values<T> = T[keyof T];
 export type Permission = Values<{

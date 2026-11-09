@@ -1,3 +1,7 @@
+import { formatDateTime } from '../../lib/dateTime';
+import { platformErrorText, platformSystemText } from '../../hooks/platforms/localizedPlatformText';
+import { interpolate, type Translator } from '../../locals/core';
+import { useLocale } from '../../locals/useLocale';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useHiddenPlatformRecords } from '../../hooks/platforms/useHiddenPlatformRecords';
 import { publicationChapterPages } from '../../hooks/platforms/publicationChapterPages';
@@ -6,7 +10,7 @@ import { useConfirm } from '../common/AppDialog';
 import { api } from '../../services/api';
 import type { PlatformChapterChoice, ProjectPlatformWorkLink } from '../../../../../shared/platforms';
 import type { Project, WorkflowSettings } from '../../../../../shared/types';
-import type { PublicationAction, PublicationBatch, PublicationItem } from '../../../../../shared/publication';
+import type { PublicationAction, PublicationBatch, PublicationItem, PublicationDeletionBlockers } from '../../../../../shared/publication';
 import type { PlatformStep } from '../../hooks/platforms/platformSteps';
 
 export interface PublicationPanelProps {
@@ -28,7 +32,7 @@ export interface PublicationPanelProps {
   onShowResults: () => void;
 }
 
-const batchLabels: Record<PublicationBatch['state'], string> = {
+const batchLabels = {
   preview: '待人工批准',
   queued: '已排队',
   running: '正在执行',
@@ -36,27 +40,24 @@ const batchLabels: Record<PublicationBatch['state'], string> = {
   completed: '队列处理完成（不代表已发布）',
   failed: '失败，未自动重试',
   unknown: '结果未知，禁止盲目重发',
-};
-const itemLabels: Record<PublicationItem['state'], string> = {
+  cancelled: '已安全取消（未开始远端写入）',
+} as const satisfies Record<PublicationBatch['state'], string>;
+const itemLabels = {
   queued: '等待执行',
   running: '正在执行',
   draft_verified: '草稿已回读核实（未发布）',
   submitted: '已提交审核（不代表已发布）',
   failed: '失败，未自动重试',
   unknown: '结果未知，禁止重发',
-};
+  cancelled: '已安全取消，未执行远端写入',
+} as const satisfies Record<PublicationItem['state'], string>;
 export const publicationItemOutcome = (batch: PublicationBatch, item: PublicationItem) =>
   batch.state === 'failed' && item.state === 'queued' && !item.mutationStarted
-    ? '未执行（批次已停止，不会自动继续）'
+    ? "未执行（批次已停止，不会自动继续）"
     : itemLabels[item.state];
-const messageOf = (error: unknown) =>
-  error instanceof Error ? error.message : '操作失败，请先刷新本地队列核对状态。';
 const active = (batch: PublicationBatch) => batch.state === 'queued' || batch.state === 'running';
 const uncertain = (batch: PublicationBatch) =>
   batch.state === 'unknown' || batch.items.some((item) => item.state === 'unknown');
-const actionLabel = (action: PublicationAction) =>
-  action === 'save_draft' ? '保存草稿（不发布）' : '提交审核（不代表发布）';
-
 export async function ensureAutoApprovedBatchStarted(
   batch: PublicationBatch,
   autoApprove: boolean,
@@ -70,13 +71,13 @@ export function publicationApprovalReady(batch: PublicationBatch, autoApprove: b
   return batch.preview.autoApprove ? autoApprove : approval === `${batch.id}:${batch.preview.hash}`;
 }
 
-export const publicationOutcome = (batch: PublicationBatch) => {
+export const publicationOutcome = (batch: PublicationBatch, t: Translator = (key, values) => interpolate(key, values)) => {
   const verified = batch.items.filter((item) => item.state === 'draft_verified').length;
   const submitted = batch.items.filter((item) => item.state === 'submitted').length;
-  const counts = `远端回读核实草稿 ${verified} / ${batch.items.length} 章；已提交审核 ${submitted} / ${batch.items.length} 章（不代表已发布）。`;
+  const counts = t("远端回读核实草稿 {value1} / {value2} 章；已提交审核 {value3} / {value4} 章（不代表已发布）。", { value1: verified, value2: batch.items.length, value3: submitted, value4: batch.items.length });
   return batch.state === 'preview'
-    ? `仅已准备 ${batch.items.length} 章本地预览，未启动上传、未提交审核。请核对全部快照后批准启动。${counts}`
-    : `${batchLabels[batch.state]}。${counts} 排队、运行、失败或结果未知均不算上传成功。`;
+    ? t("仅已准备 {value1} 章本地预览，未启动上传、未提交审核。请核对全部快照后批准启动。{value2}", { value1: batch.items.length, value2: counts })
+    : t("{value1}。{value2} 排队、运行、失败或结果未知均不算上传成功。", { value1: t(batchLabels[batch.state]), value2: counts });
 };
 
 /** Key the stateful panel so a project switch cannot retain approvals or stale requests. */
@@ -102,11 +103,17 @@ function ProjectPublicationPanel({
   onPreviewReady,
   onShowResults,
 }: PublicationPanelProps) {
+  const { t } = useLocale();
+  const messageOf = (error: unknown) =>
+  platformErrorText(t, error, "操作失败，请先刷新本地队列核对状态。");
+  const actionLabel = (action: PublicationAction) =>
+  action === 'save_draft' ? t("保存草稿（不发布）") : t("提交审核（不代表发布）");
   const history = useHiddenPlatformRecords(projectId, 'batches');
   const confirmDialog = useConfirm();
   const base = `/projects/${encodeURIComponent(projectId)}/platform-publication-batches`;
   const [workflowBusy, setWorkflowBusy] = useState(false);
   const [batches, setBatches] = useState<PublicationBatch[]>([]);
+  const [cancellable, setCancellable] = useState<string[]>([]);
   const linkId = targetLinkId;
   const [volumes, setVolumes] = useState<{ id: string; name: string }[]>([]);
   const [volumeId, setVolumeId] = useState('');
@@ -168,9 +175,14 @@ function ProjectPublicationPanel({
       if (pending.current || signal.aborted) return;
       const version = ++readVersion.current;
       try {
-        const next = await api<PublicationBatch[]>(base, { signal });
+        const [next, diagnostic] = await Promise.all([
+          api<PublicationBatch[]>(base, { signal }),
+          // Diagnostics are optional to viewing history; failure only removes cancellation permissions.
+          api<PublicationDeletionBlockers>(`/projects/${encodeURIComponent(projectId)}/platform-deletion-blockers`, { signal }).catch(() => undefined),
+        ]);
         if (signal.aborted || version !== readVersion.current || pending.current) return;
         setBatches(next);
+        setCancellable(diagnostic?.batches.filter(batch => batch.canCancel).map(batch => `${batch.id}:${batch.approvalHash}`) ?? []);
         setNeedsRefresh(false);
         setError('');
       } catch (failure) {
@@ -201,7 +213,7 @@ function ProjectPublicationPanel({
     setLoading(false);
     setNeedsRefresh(false);
     setApproval('');
-    setNotice(publicationOutcome(incomingBatch));
+    setNotice(publicationOutcome(incomingBatch, t));
     history.show(incomingBatch.id);
   }, [incomingBatch, projectId]);
 
@@ -288,12 +300,12 @@ function ProjectPublicationPanel({
       history.show(next.id);
       setApproval('');
       setNeedsRefresh(false);
-      setNotice(publicationOutcome(next));
+      setNotice(publicationOutcome(next, t));
       if (next.state === 'preview') onPreviewReady();
       else onShowResults();
     } catch (failure) {
       if (!controller.signal.aborted) {
-        setError(`${messageOf(failure)} 未自动重试；请先刷新本地队列核对结果。`);
+        setError(t("{value1} 未自动重试；请先刷新本地队列核对结果。", { value1: messageOf(failure) }));
         setNeedsRefresh(true);
         setApproval('');
       }
@@ -332,6 +344,15 @@ function ProjectPublicationPanel({
       crypto.randomUUID(),
     );
   };
+  const cancel = async (batch: PublicationBatch) => {
+    if (locked || pending.current || uncertain(batch) || !cancellable.includes(`${batch.id}:${batch.preview.hash}`)) return;
+    const controller = lifetime.current;
+    if (!(await confirmDialog(t('确定安全取消批次 {id}？仅终止尚未开始远端写入的本地队列，不删除远端内容，也不会继续删除作品。', { id: batch.id })))) return;
+    if (!controller || controller !== lifetime.current || controller.signal.aborted || pending.current) return;
+    setCancellable([]);
+    await post(`/${encodeURIComponent(batch.id)}/cancel`, { confirmed: true, approvalHash: batch.preview.hash }, crypto.randomUUID());
+    if (!controller.signal.aborted) await refresh(controller.signal);
+  };
   const execute = (batch: PublicationBatch, operation: 'start' | 'resume') => {
     if (
       !publicationApprovalReady(batch, autoApprove, approval) ||
@@ -361,7 +382,7 @@ function ProjectPublicationPanel({
     const controller = lifetime.current;
     if (!workflow?.id || !controller || controller.signal.aborted || locked || workflowBusy) return;
     if (enabled && (!selectedLink || !volumeId || (action === 'submit_review' && !useAi))) {
-      setError('请先选择绑定作品、目标卷和送审所需的 AI 声明，再启用工作流自动上传。');
+      setError(t("请先选择绑定作品、目标卷和送审所需的 AI 声明，再启用工作流自动上传。"));
       return;
     }
     setWorkflowBusy(true);
@@ -375,7 +396,7 @@ function ProjectPublicationPanel({
       });
       if (!controller.signal.aborted) {
         onProjectChange?.(next);
-        setNotice(enabled ? '已保存：此工作流成功完成后，将自动上传/送审，无需人工批准。' : '已关闭工作流完成后的远端上传。');
+        setNotice(enabled ? t("已保存：此工作流成功完成后，将自动上传/送审，无需人工批准。") : t("已关闭工作流完成后的远端上传。"));
       }
     } catch (failure) { if (!controller.signal.aborted) setError(messageOf(failure)); }
     finally { if (!controller.signal.aborted) setWorkflowBusy(false); }
@@ -383,10 +404,10 @@ function ProjectPublicationPanel({
 
   return (
     <section className="platform-card" hidden={step !== 'setup' && step !== 'review' && step !== 'results'}>
-      <h2>{step === 'setup' ? '选择章节与目标' : step === 'review' ? '完整预览与批准' : '远端队列与结果'}</h2>
-      <p className="platform-help">选择作品、分卷和章节后生成预览；核对无误再启动。草稿不会发布，送审也不代表已发布。</p>
+      <h2>{step === 'setup' ? t("选择章节与目标") : step === 'review' ? t("完整预览与批准") : t("远端队列与结果")}</h2>
+      <p className="platform-help">{t("选择作品、分卷和章节后生成预览；核对无误再启动。草稿不会发布，送审也不代表已发布。")}</p>
       {!reviewAvailable && (
-        <p className="platform-notice">提交审核尚未通过官方精确确认流程核验，目前仅允许保存草稿。</p>
+        <p className="platform-notice">{t("提交审核尚未通过官方精确确认流程核验，目前仅允许保存草稿。")}</p>
       )}
       {error && (
         <p className="platform-notice" role="alert">
@@ -405,29 +426,23 @@ function ProjectPublicationPanel({
             onAutoApproveChange(enabled);
             setApproval('');
           }} />
-          自动审批：后续操作跳过本地人工批准，准备后直接上传 / 送审
-        </label>
+          {t("自动审批：后续操作跳过本地人工批准，准备后直接上传 / 送审")}</label>
         {autoApprove ? <p className="platform-notice">
-          已启用自动授权及番茄自动核验：等待编辑器与准确章节 ID；执行异常时仅对已记录 ID 自动只读全文核对一次，证实成功才继续。验证码、未知弹窗或结果不明仍暂停，不重发。平台审核不受此开关影响。
-          <button type="button" className="button secondary" disabled={busy} onClick={() => { onAutoApproveChange(false); setApproval(''); }}>
-            切换为手动预览与批准（不会上传）
-          </button>
-        </p> : <p className="platform-help">手动批准模式：先准备完整预览，再到批次底部勾选核对并批准启动。</p>}
+          {t("已启用自动授权及番茄自动核验：等待编辑器与准确章节 ID；执行异常时仅对已记录 ID 自动只读全文核对一次，证实成功才继续。验证码、未知弹窗或结果不明仍暂停，不重发。平台审核不受此开关影响。")}<button type="button" className="button secondary" disabled={busy} onClick={() => { onAutoApproveChange(false); setApproval(''); }}>
+            {t("切换为手动预览与批准（不会上传）")}</button>
+        </p> : <p className="platform-help">{t("手动批准模式：先准备完整预览，再到批次底部勾选核对并批准启动。")}</p>}
         {hasUnknown && <p className="platform-notice" role="status">
-          历史批次存在未知结果，新建或恢复上传暂不可用。这不是批准失败；请先使用该批次的“只读核对远端结果（不重发）”。切换审批模式不会解除未知保护。
-        </p>}
-        <p className="platform-notice">本次目标：{selectedLink ? `${selectedLink.title} · 账号 ${selectedLink.accountId} · 作品 ${selectedLink.remoteWorkId}` : '请先到“绑定作品”步骤明确选择目标'}</p>
+          {t("历史批次存在未知结果，新建或恢复上传暂不可用。这不是批准失败；请先使用该批次的“只读核对远端结果（不重发）”。切换审批模式不会解除未知保护。")}</p>}
+        <p className="platform-notice">{t("本次目标：")}{selectedLink ? t("{value1} · 账号 {value2} · 作品 {value3}", { value1: selectedLink.title, value2: selectedLink.accountId, value3: selectedLink.remoteWorkId }) : t("请先到“绑定作品”步骤明确选择目标")}</p>
         <label>
-          目标分卷
-          <select value={volumeId} disabled={locked || volumeLoading || !selectedLink} onChange={(event) => setVolumeId(event.target.value)}>
-            <option value="">{volumeLoading ? '正在读取番茄分卷…' : '自动定位已有章节；新建章节请选卷'}</option>
+          {t("目标分卷")}<select value={volumeId} disabled={locked || volumeLoading || !selectedLink} onChange={(event) => setVolumeId(event.target.value)}>
+            <option value="">{volumeLoading ? t("正在读取番茄分卷…") : t("自动定位已有章节；新建章节请选卷")}</option>
             {volumes.map((volume) => <option key={volume.id} value={volume.id}>{volume.name} · {volume.id}</option>)}
           </select>
         </label>
-        {volumeError && <p className="platform-notice" role="alert">分卷读取失败：{volumeError}</p>}
+        {volumeError && <p className="platform-notice" role="alert">{t("分卷读取失败：")}{volumeError}</p>}
         <label>
-          操作
-          <select
+          {t("操作")}<select
             value={action}
             disabled={locked}
             onChange={(event) => {
@@ -435,43 +450,40 @@ function ProjectPublicationPanel({
               setUseAi('');
             }}
           >
-            <option value="save_draft">保存草稿（不发布）</option>
+            <option value="save_draft">{t("保存草稿（不发布）")}</option>
             <option value="submit_review" disabled={!reviewAvailable}>
-              提交审核（不代表发布）
-            </option>
+              {t("提交审核（不代表发布）")}</option>
           </select>
         </label>
         {action === 'submit_review' && (
           <label>
-            是否使用AI（必选，不设默认值）
-            <select
+            {t("是否使用AI（必选，不设默认值）")}<select
               required
               value={useAi}
               disabled={locked || !reviewAvailable}
               onChange={(event) => setUseAi(event.target.value as '' | '1' | '2')}
             >
-              <option value="">请根据实际情况明确选择</option>
-              <option value="1">是</option>
-              <option value="2">否</option>
+              <option value="">{t("请根据实际情况明确选择")}</option>
+              <option value="1">{t("是")}</option>
+              <option value="2">{t("否")}</option>
             </select>
           </label>
         )}
         <fieldset disabled={locked}>
-          <legend>选择正文（{chapterIds.length}/50）</legend>
+          <legend>{t("选择正文（{count}/50）", { count: chapterIds.length })}</legend>
           <div className="publication-selection-actions">
-            <span>共 {savedChapters.length} 章；按章节顺序上传，单批最多 50 章。切换分组不会上传或清空已选章节。</span>
+            <span>{t("共 {count} 章；按章节顺序上传，单批最多 50 章。切换分组不会上传或清空已选章节。", { count: savedChapters.length })}</span>
             <div>
-              {chapterPages.length > 1 && <select aria-label="选择章节分组" value={Math.min(chapterPage, chapterPages.length - 1)} onChange={(event) => setChapterPage(Number(event.target.value))}>
+              {chapterPages.length > 1 && <select aria-label={t("选择章节分组")} value={Math.min(chapterPage, chapterPages.length - 1)} onChange={(event) => setChapterPage(Number(event.target.value))}>
                 {chapterPages.map((page, index) => <option key={index} value={index}>
-                  第 {index * 50 + 1}–{index * 50 + page.length} 项 · 第 {page[0].number}–{page[page.length - 1].number} 章
-                </option>)}
+                  {t("第 {start}–{end} 项 · 第 {first}–{last} 章", { start: index * 50 + 1, end: index * 50 + page.length, first: page[0].number, last: page[page.length - 1].number })}</option>)}
               </select>}
-              <button type="button" className="button secondary" disabled={!currentChapterPage.length || currentChapterPage.every((chapter) => chapterIds.includes(chapter.id))} onClick={() => setChapterIds(currentChapterPage.map(chapter => chapter.id))}>选择本组 {currentChapterPage.length} 章</button>
-              <button type="button" className="button secondary" disabled={!chapterIds.length} onClick={() => setChapterIds([])}>清空选择</button>
+              <button type="button" className="button secondary" disabled={!currentChapterPage.length || currentChapterPage.every((chapter) => chapterIds.includes(chapter.id))} onClick={() => setChapterIds(currentChapterPage.map(chapter => chapter.id))}>{t("选择本组 {count} 章", { count: currentChapterPage.length })}</button>
+              <button type="button" className="button secondary" disabled={!chapterIds.length} onClick={() => setChapterIds([])}>{t("清空选择")}</button>
             </div>
           </div>
-          {chapterIds.length > 0 && <p className="platform-help">本批已选 {chapterIds.length} 章（第 {savedChapters.find(chapter => chapterIds.includes(chapter.id))?.number}–{[...savedChapters].reverse().find(chapter => chapterIds.includes(chapter.id))?.number} 章，可能不连续）；提交前请在完整预览中核对逐章内容。</p>}
-          {!savedChapters.length && <p className="platform-empty">暂无已保存章节。</p>}
+          {chapterIds.length > 0 && <p className="platform-help">{t("本批已选 {count} 章（第 {first}–{last} 章，可能不连续）；提交前请在完整预览中核对逐章内容。", { count: chapterIds.length, first: savedChapters.find(chapter => chapterIds.includes(chapter.id))?.number ?? "", last: [...savedChapters].reverse().find(chapter => chapterIds.includes(chapter.id))?.number ?? "" })}</p>}
+          {!savedChapters.length && <p className="platform-empty">{t("暂无已保存章节。")}</p>}
           {currentChapterPage.map((chapter) => (
             <label className="publication-chapter-option" key={chapter.id}>
               <input
@@ -488,21 +500,21 @@ function ProjectPublicationPanel({
                   )
                 }
               />
-              第 {chapter.number} 章 · {chapter.title} · 已保存版本 {chapter.revision}
+              {t("第 {number} 章 · {title} · 已保存版本 {revision}", { number: chapter.number, title: chapter.title, revision: chapter.revision })}
             </label>
           ))}
         </fieldset>
         <details className="platform-advanced">
-          <summary>高级设置：工作流自动上传</summary>
+          <summary>{t("高级设置：工作流自动上传")}</summary>
           {workflow?.id && <div className="platform-notice">
-            <strong>自动化工作流远端接续</strong>
-            <p>完整工作流成功生成并保存章节后，按此处配置自动上传或送审；失败或未通过校验的章节不会上传。</p>
-            {workflow.publication?.enabled && <p>已配置：绑定 {workflow.publication.linkId} · {actionLabel(workflow.publication.action)} · 分卷 {workflow.publication.volumeId || '按既有章节定位'}</p>}
-            <button type="button" className="button secondary" disabled={locked || workflowBusy || !selectedLink || !volumeId || (action === 'submit_review' && !useAi)} onClick={() => void saveWorkflowPublication(true)}>保存当前选择并启用全自动接续</button>
-            {workflow.publication?.enabled && <button type="button" className="button secondary" disabled={locked || workflowBusy} onClick={() => void saveWorkflowPublication(false)}>关闭工作流远端接续</button>}
+            <strong>{t("自动化工作流远端接续")}</strong>
+            <p>{t("完整工作流成功生成并保存章节后，按此处配置自动上传或送审；失败或未通过校验的章节不会上传。")}</p>
+            {workflow.publication?.enabled && <p>{t("已配置：绑定")}{workflow.publication.linkId} · {actionLabel(workflow.publication.action)} {t("· 分卷")}{workflow.publication.volumeId || t("按既有章节定位")}</p>}
+            <button type="button" className="button secondary" disabled={locked || workflowBusy || !selectedLink || !volumeId || (action === 'submit_review' && !useAi)} onClick={() => void saveWorkflowPublication(true)}>{t("保存当前选择并启用全自动接续")}</button>
+            {workflow.publication?.enabled && <button type="button" className="button secondary" disabled={locked || workflowBusy} onClick={() => void saveWorkflowPublication(false)}>{t("关闭工作流远端接续")}</button>}
           </div>}
-          {workflow && !workflow.id && <p className="platform-help">先选择一个工作流，才能配置自动上传。</p>}
-          <p className="platform-help">平台审核、验证码与风控不会被此设置绕过。</p>
+          {workflow && !workflow.id && <p className="platform-help">{t("先选择一个工作流，才能配置自动上传。")}</p>}
+          <p className="platform-help">{t("平台审核、验证码与风控不会被此设置绕过。")}</p>
         </details>
         <button
           className="button primary"
@@ -516,7 +528,7 @@ function ProjectPublicationPanel({
           }
           onClick={prepare}
         >
-          {autoApprove ? '自动批准并启动上传 / 送审' : '生成上传预览'}
+          {autoApprove ? t("自动批准并启动上传 / 送审") : t("生成上传预览")}
         </button>
         <button
           className="button secondary"
@@ -530,22 +542,19 @@ function ProjectPublicationPanel({
             }
           }}
         >
-          刷新本地队列状态（只读）
-        </button>
+          {t("刷新本地队列状态（只读）")}</button>
       </div>}
       {loading && (
         <p className="platform-loading" role="status">
-          正在读取本地队列…
-        </p>
+          {t("正在读取本地队列…")}</p>
       )}
       {busy && (
         <p className="platform-loading" role="status">
-          正在处理人工请求，不会自动重试…
-        </p>
+          {t("正在处理人工请求，不会自动重试…")}</p>
       )}
       {step === 'results' && <div className="platform-list">
-        {!loading && !batches.length && <p className="platform-empty">暂无批次。</p>}
-        {history.hiddenIds.length > 0 && <p className="platform-notice">已隐藏 {batches.filter(batch => history.hiddenIds.includes(batch.id)).length} 个批次；未知结果仍会阻止重发。<button className="button secondary" onClick={history.restore}>恢复显示全部批次</button></p>}
+        {!loading && !batches.length && <p className="platform-empty">{t("暂无批次。")}</p>}
+        {history.hiddenIds.length > 0 && <p className="platform-notice">{t("已隐藏 {count} 个批次；未知结果仍会阻止重发。", { count: batches.filter(batch => history.hiddenIds.includes(batch.id)).length })}<button className="button secondary" onClick={history.restore}>{t("恢复显示全部批次")}</button></p>}
         {batches.filter(batch => !history.hiddenIds.includes(batch.id)).map((batch) => (
           <article className="platform-row" key={batch.id}>
             <div className="platform-row-content">
@@ -553,29 +562,27 @@ function ProjectPublicationPanel({
                 {batch.preview.target.workTitle} · {actionLabel(batch.preview.action)}
               </strong>
               <p className="platform-help">
-                批次 {batch.id} · {batchLabels[batch.state]} · {batch.items.length} 章
-              </p>
-              <p className="platform-notice" role="status">{publicationOutcome(batch)}</p>
-              {batch.approval && <p className="platform-help">审批方式：{batch.approval.mode === 'automatic' ? '自动审批' : '人工审批'} · {new Date(batch.approval.approvedAt).toLocaleString('zh-CN')}</p>}
+                {t("批次 {id} · {state} · {count} 章", { id: batch.id, state: t(batchLabels[batch.state]), count: batch.items.length })}</p>
+              <p className="platform-notice" role="status">{publicationOutcome(batch, t)}</p>
+              {batch.approval && <p className="platform-help">{t("审批方式：")}{batch.approval.mode === 'automatic' ? t("自动审批") : t("人工审批")} · {formatDateTime(batch.approval.approvedAt)}</p>}
               {batch.pauseRequested && (
-                <p className="platform-notice">已请求暂停：当前一章结束后停止，不会撤销已开始的写入。</p>
+                <p className="platform-notice">{t("已请求暂停：当前一章结束后停止，不会撤销已开始的写入。")}</p>
               )}
-              {batch.error && <p role="alert">{batch.error}</p>}
-              {batch.failureStage && <p className="platform-help">失败阶段：{{ acquire: '获取账号锁', validate: '只读校验', execute: '执行与回读' }[batch.failureStage]} · 错误码：{batch.errorCode || '未分类'}。未进入远端写入的失败需排查后重新预览批准；结果未知时只读核对，不重发。</p>}
+              {batch.error && <p role="alert">{platformSystemText(t, batch.error, batch.errorCode)}</p>}
+              {batch.failureStage && <p className="platform-help">{t("失败阶段：")}{{ acquire: t("获取账号锁"), validate: t("只读校验"), execute: t("执行与回读") }[batch.failureStage]} {t("· 错误码：")}{batch.errorCode || t("未分类")}{t("。未进入远端写入的失败需排查后重新预览批准；结果未知时只读核对，不重发。")}</p>}
               {uncertain(batch) && (
                 <p className="platform-notice">
-                  存在未知结果。请到官方作者页只读核对，禁止盲目重试、重新建批补发或恢复。
-                </p>
+                  {t("存在未知结果。请到官方作者页只读核对，禁止盲目重试、重新建批补发或恢复。")}</p>
               )}
               <ol>
                 {[...batch.items]
                   .sort((a, b) => a.snapshot.number - b.snapshot.number)
                   .map((item) => (
                     <li key={item.id}>
-                      第 {item.snapshot.number} 章 · {item.snapshot.title}：{publicationItemOutcome(batch, item)}
-                      {item.remoteDraftId && <> · 远端草稿 ID：{item.remoteDraftId}</>}
-                      {item.reconciliation && <p className="platform-help">只读核验：{item.reconciliation.outcome === 'unproven' ? '未证实，保持未知且不重发' : item.reconciliation.outcome === 'submitted' ? '送审回执及全文匹配' : '草稿全文匹配'} · {new Date(item.reconciliation.checkedAt).toLocaleString('zh-CN')}</p>}
-                      {item.error && <p role="alert">{item.error}</p>}
+                      {t("第 {number} 章 · {title}：{outcome}", { number: item.snapshot.number, title: item.snapshot.title, outcome: t(publicationItemOutcome(batch, item)) })}
+                      {item.remoteDraftId && <> {t("· 远端草稿 ID：")}{item.remoteDraftId}</>}
+                      {item.reconciliation && <p className="platform-help">{t("只读核验：")}{item.reconciliation.outcome === 'unproven' ? t("未证实，保持未知且不重发") : item.reconciliation.outcome === 'submitted' ? t("送审回执及全文匹配") : t("草稿全文匹配")} · {formatDateTime(item.reconciliation.checkedAt)}</p>}
+                      {item.error && <p role="alert">{platformSystemText(t, item.error, batch.errorCode)}</p>}
                     </li>
                   ))}
               </ol>
@@ -588,27 +595,27 @@ function ProjectPublicationPanel({
                   onPreviewReady();
                 }}
               >
-                查看全部快照与批准
-              </button>
+                {t("查看全部快照与批准")}</button>
               {!active(batch) && <button className="button secondary" onClick={async () => {
-                if (await confirmDialog('仅隐藏本地批次和暂存预览，不删除本地正文或远端章节；审计、已批准记录及未知防重复限制保留。可以恢复显示。是否继续？')) {
+                if (await confirmDialog(t("仅隐藏本地批次和暂存预览，不删除本地正文或远端章节；审计、已批准记录及未知防重复限制保留。可以恢复显示。是否继续？"))) {
                   history.hide(batch.id);
                   if (selectedId === batch.id) { setSelectedId(''); setApproval(''); }
                 }
-              }}>移出本地暂存列表</button>}
+              }}>{t("移出本地暂存列表")}</button>}
               {uncertain(batch) && (
                 <div className="platform-form">
                   {batch.items.filter(item => item.state === 'unknown' && !item.remoteDraftId && !batch.preview.remotePlan?.some(plan => plan.chapterId === item.snapshot.chapterId && plan.mode !== 'create')).map(item => (
                     <label key={item.id}>
-                      第 {item.snapshot.number} 章缺少远端 ID：从官方后台该章编辑链接复制章节 ID（不是作品 ID）
-                      <input value={reconcileIds[item.id] || ''} placeholder="准确的远端章节 ID；不会据此重新上传" disabled={locked} onChange={event => setReconcileIds(previous => ({ ...previous, [item.id]: event.target.value.trim() }))} />
+                      {t("第 {number} 章缺少远端 ID：从官方后台该章编辑链接复制章节 ID（不是作品 ID）", { number: item.snapshot.number })}<input value={reconcileIds[item.id] || ''} placeholder={t("准确的远端章节 ID；不会据此重新上传")} disabled={locked} onChange={event => setReconcileIds(previous => ({ ...previous, [item.id]: event.target.value.trim() }))} />
                     </label>
                   ))}
-                  <p className="platform-help">仅核对这批历史快照，不能用当前改稿替代。账号、作品、分卷、标题及完整正文必须一致；不存在或不同仍保持未知，不会重发。若旧稿已被人工删除，此入口不能证明原操作结果。</p>
+                  <p className="platform-help">{t("仅核对这批历史快照，不能用当前改稿替代。账号、作品、分卷、标题及完整正文必须一致；不存在或不同仍保持未知，不会重发。若旧稿已被人工删除，此入口不能证明原操作结果。")}</p>
                   <button className="button secondary" disabled={locked || needsRefresh} onClick={() => void post(`/${encodeURIComponent(batch.id)}/reconcile`, { candidates: Object.fromEntries(batch.items.filter(item => item.state === 'unknown' && reconcileIds[item.id]).map(item => [item.id, reconcileIds[item.id]])) }, crypto.randomUUID())}>
-                    只读核对远端结果（不重发）
-                  </button>
+                    {t("只读核对远端结果（不重发）")}</button>
                 </div>
+              )}
+              {!uncertain(batch) && cancellable.includes(`${batch.id}:${batch.preview.hash}`) && (
+                <button className="button secondary" type="button" disabled={locked || needsRefresh} onClick={() => void cancel(batch)}>{t('安全取消未写入批次')}</button>
               )}
               {active(batch) && (
                 <button
@@ -616,78 +623,72 @@ function ProjectPublicationPanel({
                   disabled={locked || batch.pauseRequested || needsRefresh}
                   onClick={() => void post(`/${encodeURIComponent(batch.id)}/pause`, {}, crypto.randomUUID())}
                 >
-                  当前一章后暂停
-                </button>
+                  {t("当前一章后暂停")}</button>
               )}
             </div>
           </article>
         ))}
       </div>}
-      {step === 'review' && !selected && <p className="platform-empty">请先在“选择章节”步骤准备批次；完整预览生成后，才能逐章核对并批准。</p>}
-      {step === 'results' && selected && <button className="button secondary" type="button" onClick={onPreviewReady}>查看所选批次完整快照</button>}
+      {step === 'review' && !selected && <p className="platform-empty">{t("请先在“选择章节”步骤准备批次；完整预览生成后，才能逐章核对并批准。")}</p>}
+      {step === 'results' && selected && <button className="button secondary" type="button" onClick={onPreviewReady}>{t("查看所选批次完整快照")}</button>}
       {step === 'review' && selected && (
         <div className="platform-form">
-          <h3>完整预览 · {actionLabel(selected.preview.action)}</h3>
+          <h3>{t("完整预览 ·")}{actionLabel(selected.preview.action)}</h3>
           <p>
-            平台：{selected.preview.target.providerId}
+            {t("平台：")}{selected.preview.target.providerId}
             <br />
-            账号：{selected.preview.target.accountName}（{selected.preview.target.accountId}）<br />
-            作品：{selected.preview.target.workTitle}（{selected.preview.target.remoteWorkId}）<br />
-            项目 ID：{selected.preview.target.projectId}
+            {t("账号：")}{selected.preview.target.accountName}（{selected.preview.target.accountId}）<br />
+            {t("作品：")}{selected.preview.target.workTitle}（{selected.preview.target.remoteWorkId}）<br />
+            {t("项目 ID：")}{selected.preview.target.projectId}
             <br />
-            连接 ID：{selected.preview.target.connectionId}
+            {t("连接 ID：")}{selected.preview.target.connectionId}
             <br />
-            绑定 ID：{selected.preview.target.linkId}
+            {t("绑定 ID：")}{selected.preview.target.linkId}
             <br />
-            作品版本：{selected.preview.target.workRevision}
+            {t("作品版本：")}{selected.preview.target.workRevision}
           </p>
           {selected.preview.action === 'submit_review' && (
             <p className="platform-notice">
-              本批送审声明 · 是否使用AI：
-              {selected.preview.useAi === 1
-                ? '是'
+              {t("本批送审声明 · 是否使用AI：")}{selected.preview.useAi === 1
+                ? t("是")
                 : selected.preview.useAi === 2
-                  ? '否'
-                  : '未选择（禁止送审，请重新准备）'}
-              。此声明与预览哈希绑定。
-            </p>
+                  ? t("否")
+                  : t("未选择（禁止送审，请重新准备）")}
+              {t("。此声明与预览哈希绑定。")}</p>
           )}
-          {selected.approval?.mode === 'automatic' && <p className="platform-notice">本批次属于自动审批记录；切换为手动模式不会将它变为人工核对的预览。</p>}
+          {selected.approval?.mode === 'automatic' && <p className="platform-notice">{t("本批次属于自动审批记录；切换为手动模式不会将它变为人工核对的预览。")}</p>}
           <p className="platform-help">
-            预览 ID：{selected.preview.id} · 快照生成时间：
-            {new Date(selected.preview.createdAt).toLocaleString('zh-CN')} · 批准哈希：{selected.preview.hash}
+            {t("预览 ID：")}{selected.preview.id} {t("· 快照生成时间：")}{formatDateTime(selected.preview.createdAt)} {t("· 批准哈希：")}{selected.preview.hash}
           </p>
           {[...selected.preview.chapters]
             .sort((a, b) => a.number - b.number)
             .map((snapshot) => (
               <div className="platform-form" key={snapshot.chapterId}>
                 <h4>
-                  第 {snapshot.number} 章 · 已保存版本 {snapshot.revision}
+                  {t("第 {number} 章 · 已保存版本 {revision}", { number: snapshot.number, revision: snapshot.revision })}
                 </h4>
                 {selected.preview.remotePlan?.filter((plan) => plan.chapterId === snapshot.chapterId).map((plan) => (
                   <p className="platform-notice" key={plan.chapterId}>
-                    分卷：{plan.volumeName}（{plan.volumeId}） · 操作：{plan.mode === 'overwrite' ? '覆盖已有草稿' : plan.mode === 'reuse' ? '复用已一致草稿' : '新建草稿'}
-                    {plan.mode !== 'create' && <> · 远端章节 ID：{plan.remoteDraftId} · 覆盖前指纹：{plan.expectedRemoteFingerprint}</>}
+                    {t("分卷：")}{plan.volumeName}（{plan.volumeId}{t("） · 操作：")}{plan.mode === 'overwrite' ? t("覆盖已有草稿") : plan.mode === 'reuse' ? t("复用已一致草稿") : t("新建草稿")}
+                    {plan.mode !== 'create' && <> {t("· 远端章节 ID：")}{plan.remoteDraftId} {t("· 覆盖前指纹：")}{plan.expectedRemoteFingerprint}</>}
                   </p>
                 ))}
                 <label>
-                  完整标题
-                  <input readOnly value={snapshot.title} />
+                  {t("完整标题")}<input readOnly value={snapshot.title} />
                 </label>
                 <label>
-                  完整正文
-                  <textarea rows={18} readOnly value={snapshot.content} />
+                  {t("完整正文")}<textarea rows={18} readOnly value={snapshot.content} />
                 </label>
                 <p className="platform-help">
-                  章节 ID：{snapshot.chapterId} · 内容 SHA-256：{snapshot.contentHash}
+                  {t("章节 ID：")}{snapshot.chapterId} {t("· 内容 SHA-256：")}{snapshot.contentHash}
                 </p>
               </div>
             ))}
-          {targetChanged && <p className="platform-notice" role="alert">预览目标与本次所选作品不同。此处仅供核对历史快照；如需继续，请回到作品步骤重新确认目标。</p>}
+          {targetChanged && <p className="platform-notice" role="alert">{t("预览目标与本次所选作品不同。此处仅供核对历史快照；如需继续，请回到作品步骤重新确认目标。")}</p>}
           {(selected.state === 'preview' || selected.state === 'paused') && !uncertain(selected) && (
             <>
               {reviewBlocked && (
-                <p className="platform-notice">官方提交确认未核验或缺少明确 AI 声明，禁止启动或恢复送审。</p>
+                <p className="platform-notice">{t("官方提交确认未核验或缺少明确 AI 声明，禁止启动或恢复送审。")}</p>
               )}
               {!selected.preview.autoApprove && <label>
                 <input
@@ -696,9 +697,7 @@ function ProjectPublicationPanel({
                   disabled={locked || needsRefresh || hasUnknown || reviewBlocked}
                   onChange={(event) => setApproval(event.target.checked ? approvalKey : '')}
                 />
-                我已逐章核对上述账号、目标作品、章节顺序、全部标题与完整正文，明确批准本批次
-                {actionLabel(selected.preview.action)}；不会自动同意任何 AI 或原创性声明。
-              </label>}
+                {t("我已逐章核对上述账号、目标作品、章节顺序、全部标题与完整正文，明确批准本批次{action}；不会自动同意任何 AI 或原创性声明。", { action: actionLabel(selected.preview.action) })}</label>}
               <button
                 className="button primary"
                 disabled={
@@ -713,7 +712,7 @@ function ProjectPublicationPanel({
                 }
                 onClick={() => execute(selected, selected.state === 'paused' ? 'resume' : 'start')}
               >
-                {selected.preview.autoApprove ? (selected.state === 'paused' ? '自动批准并恢复剩余队列' : '自动批准并启动此批次') : (selected.state === 'paused' ? '人工批准恢复剩余队列' : '人工批准并启动此批次')}
+                {selected.preview.autoApprove ? (selected.state === 'paused' ? t("自动批准并恢复剩余队列") : t("自动批准并启动此批次")) : (selected.state === 'paused' ? t("人工批准恢复剩余队列") : t("人工批准并启动此批次"))}
               </button>
             </>
           )}

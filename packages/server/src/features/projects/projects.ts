@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { MAX_WORLD_STAGES, worldStageNameSchema } from '../../../../../shared/world-stages.js';
-import { createProjectOperations } from './project-operations.js';
+import { createProjectOperations, inputError } from './project-operations.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -34,19 +34,31 @@ export const projectsService: FeatureService = {
     });
     app.get('/api/projects/:projectId', (_req, res) => res.json(res.locals.project));
     app.delete('/api/projects/:projectId', async (req, res) => {
+      const input = z.object({ confirmed: z.literal(true), preservePlatformRecords: z.literal(true) }).strict().optional().parse(req.body);
       const p = res.locals.project as Project;
       if (store.projects.length <= 1) return res.status(400).json({ error: '至少保留一个作品。' });
+      if (p.chapterAnalyses?.some(a => a.status === 'running'))
+        return res.status(409).json({ code: 'ANALYSIS_BUSY', error: '作品解析中，请等待完成后删除。' });
       if (p.run?.status === 'running')
         return res.status(409).json({ error: '作品正在运行，请先停止工作流再删除。' });
       platformRuntime.assertProjectIdle(p.id);
-      await platformRuntime.removeProject(p.id);
-      const original = store.projects;
-      store.projects = store.projects.filter((item) => item.id !== p.id);
-      try {
-        store.save();
-      } catch (error) {
-        store.projects = original;
-        throw error;
+      const deleteCore = () => {
+        // Platform cleanup may await: recheck the current canonical project at the commit boundary.
+        if (store.get(p.id)?.chapterAnalyses?.some(a => a.status === 'running'))
+          throw inputError(409, 'ANALYSIS_BUSY', '作品解析中，请等待完成后删除。');
+        const original = store.projects;
+        store.projects = store.projects.filter((item) => item.id !== p.id);
+        try {
+          store.save();
+        } catch (error) {
+          store.projects = original;
+          throw error;
+        }
+      };
+      if (input?.preservePlatformRecords) await platformRuntime.removeProjectPreservingRecords(p.id, deleteCore);
+      else {
+        await platformRuntime.removeProject(p.id);
+        deleteCore();
       }
       for (const asset of p.assets) {
         if (asset.url) fs.rmSync(path.join(dir, 'uploads', path.basename(asset.url)), { force: true });
