@@ -123,7 +123,7 @@ test('local administrator ignores forwarded identity and rejects LAN, DNS rebind
 test('LAN requests cannot obtain management token or profile data even with forwarded claims', async () => {
   const s = await setup(false, '192.168.1.22');
   try {
-    for (const route of ['/session', '/status', '/storage', '/users', '/maintenance']) {
+    for (const route of ['/session', '/status', '/storage', '/users', '/maintenance', '/site-appearance']) {
       const response = await s.request(`/api/admin${route}`, 'GET', undefined, {
         'x-forwarded-for': '127.0.0.1',
         'x-forwarded-host': 'localhost',

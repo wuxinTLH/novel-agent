@@ -6,9 +6,13 @@ This English counterpart separates implemented local behavior, historical test r
 
 Current deployment rules are in [CoreModel local/server modes](deployment-modes.md): native local is loopback-only; server requires auth/hardened/audit and a same-origin real HTTPS proxy. Gateway records below apply only to local. Historical test counts are unchanged.
 
-## v0.0.4a current change scope
+## v0.0.5a site appearance documentation increment
 
-World-stage organization (no automatic generation filtering), revision-pinned atomic local chapter bulk deletion, 20/50/100 paging, relocated shell controls, family-matching workflow creation, window reuse, local-only idle synchronization, strict works-list readiness and exact-ID auto-verification are documented in the [user guide](user-guide.md). Current test/build/package outcomes belong to [release validation](../release-validation-v0.0.4a.md); historical totals below do not establish this release's acceptance. No real remote deletion or retry of an unknown write is added.
+[Site appearance](site-appearance.md) covers separate Header/Footer, admin/superadmin `appearance.manage`, bounded colors/font size/padding, empty-default company name, fixed © SakuraMikku project link and global `DATA_DIR/site-appearance.json` API/backup boundaries. The [MIT English original](../../LICENSE) and [Chinese reference translation](../../LICENSE.zh-CN.md) carry 2026-2099 SakuraMikku copyright. The version remains `v0.0.5a` / `0.0.5-a`; same-tag/asset replacement is explicitly authorized, making old downloads/checksums obsolete—download and verify replacements again. See [current release validation](../release-validation-v0.0.5a.md) for actual test/build/replacement evidence; this section does not claim a full test run by the documentation update.
+
+## v0.0.4a historical change scope
+
+World-stage organization (no automatic generation filtering), revision-pinned atomic local chapter bulk deletion, 20/50/100 paging, relocated shell controls, family-matching workflow creation, window reuse, local-only idle synchronization, strict works-list readiness and exact-ID auto-verification are documented in the [user guide](user-guide.md). Test/build/package outcomes at that stage belong to [historical release validation](../release-validation-v0.0.4a.md); historical totals below do not establish the current release's acceptance. No real remote deletion or retry of an unknown write is added.
 
 ## P1 authoring protections
 

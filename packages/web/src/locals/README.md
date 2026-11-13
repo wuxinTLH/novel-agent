@@ -48,6 +48,10 @@ System-name display matching has a narrow ambiguity: an author deliberately choo
 
 In the authoring shell, `LanguageSwitcher` sits in the top bar immediately left of the theme control. Mode/account status is below the sidebar logo and permission-gated administration below the guide. Standalone authentication screens may render their own language selector. Placement does not change `novel-locale` or identity-cache preservation.
 
+## Navigation and appearance copy
+
+`navigation.ts` supplies Chinese/English Header/Footer appearance editor labels and feedback through the existing catalog composition. `NavigationHeader` retains the language/theme controls; `NavigationFooter` retains literal © SakuraMikku attribution and the project link regardless of locale. Company names remain user-supplied plain text, never translated. Site appearance is application-global, unlike `novel-locale` and browser theme preferences. See [site appearance](../../../../docs/en/site-appearance.md).
+
 ## Themed language menu
 
 `LanguageSwitcher` uses a custom trigger button and `role="menu"` with `menuitemradio` buttons, not a native `<select>`. It shows 中文 / English and the current choice, focuses the selected option when opened, supports Up/Down and Home/End navigation, closes on Escape (restoring trigger focus), outside pointer input or focus leaving the widget, and restores trigger focus after selection. The trigger exposes `aria-haspopup`, `aria-expanded` and the open menu relationship.

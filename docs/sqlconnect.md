@@ -121,6 +121,8 @@ npm run maintenance -- restore --source <PATH> --data-dir <NEW> --confirm
 npm run maintenance -- restore --source <PATH> --database-config <EXPLICIT_TARGET_PROFILES> --data-dir <NEW> --confirm
 ```
 
+Site appearance is intentionally outside tenant SQL business storage: the application-global control-plane file `DATA_DIR/site-appearance.json` must be preserved with the local data tree when created. SQL migration does not turn it into a tenant document, and database-only backup/restore cannot recover it. Public appearance reads expose no SQL credentials; management requires `appearance.manage` (admin/superadmin). See [site appearance](en/site-appearance.md).
+
 A backup contains the safe complete data tree (binary files and empty directories included), plus all configured v3 repositories' owners, documents, reconstructed entities, revisions and receipts. **It is not an entire database dump**: unrelated tables, DB users / grants and server configuration are outside scope. At every tree level it excludes `.instance.lock`, `.instance.lock.recovery`, `admin-backups`, `.maintenance-journal.json`, `*.tmp` and `.maintenance-*`; symlinks, hardlinks and unsafe paths are rejected. External environment secrets `MODEL_SECRETS_KEY` / `PLATFORM_SECRETS_KEY` are not included: retain and supply them securely. Local secrets and browser state inside the backup still require strict ACLs.
 
 A legacy version 1 SQL activation manifest is explicitly unsupported by maintenance backup: independently use `pg_dump` plus the entire local data directory and external keys. The old partial `admin-backups` facility is not a replacement.

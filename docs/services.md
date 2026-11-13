@@ -40,7 +40,7 @@
 
 local 认证与 Turnstile 默认关闭；server 必须先离线启用认证。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。首次超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建，没有 HTTP 管理员引导；可选邮箱确认注册仅创建普通用户，默认关闭。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
 
-管理界面分“用户、数据库、备份与维护、系统与安全”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，local 无 LAN 直连，server 必须认证。认证开启后按[显式角色权限矩阵](roles-permissions.md)逐接口授权，写入另需认证 CSRF；具备管理权限也不能据此浏览其他租户业务或秘密。
+管理界面按权限提供“工作台、用户、数据库、备份与维护、系统与安全、Token 统计、站点外观”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，local 无 LAN 直连，server 必须认证。认证开启后按[显式角色权限矩阵](roles-permissions.md)逐接口授权，写入另需认证 CSRF；具备管理权限也不能据此浏览其他租户业务或秘密。
 
 身份只来自服务端验证会话，不接受 `X-User-Id`、查询参数或客户端自报 owner。legacy owner 沿用原目录，其余用户使用 `DATA_DIR/users/<SHA-256(user UUID)>`；SQL 按 owner 隔离。每个租户 Worker 有固定 owner 的 Store、Runner、密钥、平台浏览器、队列及上传。未认证请求失败关闭，不回落共享目录。最多保留 32 个租户运行时，达到容量返回 `TENANT_RUNTIME_CAPACITY`，不是自动无界扩容。
 
@@ -51,6 +51,14 @@ server 新设密码至少 15 个 Unicode 字符、最多 1024 字节，拒绝有
 API 摘要：`POST /api/auth/password`、`GET/DELETE /api/auth/sessions`、`DELETE /api/auth/sessions/:sessionId`；管理面 `GET/POST /api/admin/users`、`PATCH /api/admin/users/:id`、`POST /api/admin/users/:id/password`、`GET/DELETE /api/admin/users/:id/sessions`、`DELETE /api/admin/users/:id/sessions/:sessionId`。会话列表仅显示不可逆标识、到期时间等元数据，不返回 token。业务写入继续校验 `X-Platform-CSRF`，认证开启时还需 `X-CSRF-Token`。
 
 Turnstile 管理默认关闭；secret 加密保存，仅返回 hasSecret。启用须真实 site key / secret、匹配 action / hostname 及联网 siteverify 验证；网络失败或不匹配拒绝登录，离线桩不证明真实 Cloudflare 验收。认证状态本地使用 `auth.json`，SQL 激活后在全局 owner 文档保存；`auth.key` 保留本地，POSIX `0600` 不代替 Windows ACL。默认 local 仅监听 `127.0.0.1`；server 监听 `0.0.0.0`，强制认证 / hardened / 审计并仅通过同源真实 HTTPS 代理访问。见[部署模式](deployment-modes.md)。
+
+## 全局站点外观 API
+
+`NavigationHeader` / `NavigationFooter` 消费同一全局外观文档。`GET /api/site-appearance`（含 HEAD）在认证前提供非秘密外观，仍经过 Host / Origin / 限流与安全头；不开放写入、子路径或其他匿名业务。管理面 `GET /api/admin/site-appearance`、`PUT /api/admin/site-appearance` 均需 `appearance.manage`（仅 admin/superadmin），写入保留原有管理 / 会话 CSRF 校验。
+
+PUT 是严格完整替换 `{ expectedRevision, companyName, header, footer }`，GET / PUT 成功均直接返回 `SiteAppearance`，无额外 envelope，使用 `no-store`。字段只允许安全的有界样式，公司名称默认空，固定 © SakuraMikku 项目链接不可配置。400 / 409 / 503 分别表示非法请求 / 修订冲突 / 存储不可用；冲突不自动覆盖。详细契约见[站点外观](site-appearance.md)与[管理模块](../packages/server/src/features/administration/README.md)。
+
+主进程拥有 `DATA_DIR/site-appearance.json`，不是每租户配置或 SQL 回退；单实例临时文件、fsync 与 rename 提交，错误失败关闭。完整数据树备份包含该文件（已创建时），恢复需停服并保留控制面文件，不能只恢复业务 SQL。
 
 ## v3 关系存储与运行边界
 

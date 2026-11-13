@@ -36,6 +36,12 @@
 - 应用根目录通过向上查找包含 `workspaces` 且名称为 `novel-agent` 的根清单定位；生产部署需保留根清单。不要仅凭当前目录推断数据位置。
 - 管理与维护操作仍通过根目录命令 `npm run admin -- ...`、`npm run maintenance -- ...` 执行；目录整理不改变认证、数据格式或发布安全边界。
 
+## 站点外观控制面
+
+[站点外观](../../docs/site-appearance.md)由 administration 装配一个全局文件存储。公开 `GET /api/site-appearance`（含 HEAD）只返回非秘密样式；管理面 GET / PUT `/api/admin/site-appearance` 均需 `appearance.manage`（admin/superadmin），保留管理 / 会话 CSRF。严格有界样式与完整修订替换契约位于 `shared/site-appearance.ts`，不接受任意 CSS / HTML / URL。公司名称默认空，固定 © SakuraMikku 项目链接不属于可写字段。
+
+`DATA_DIR/site-appearance.json` 即使在 SQL 模式也保留本地，是应用全局控制面而非租户业务回退。单实例 fsync / rename 持久化、409 冲突拒绝覆盖、损坏 / 写失败关闭；完整数据树备份须保留此文件，恢复仍停服。API 字段和错误码见[管理模块](src/features/administration/README.md)。项目 [MIT](../../LICENSE) 版权为 2026-2099 SakuraMikku，附[中文参考译文](../../LICENSE.zh-CN.md)。
+
 ## 运行日志时区
 
 后端运行日志默认使用 `Asia/Shanghai`（UTC+8），时间格式为 `yyyy:mm:dd HH:mm`，不显示时区后缀。例如 `[2026:11:07 13:03] [INFO] ...`。可通过部署环境变量 `LOG_TIME_ZONE` 配置 IANA 时区，例如 `LOG_TIME_ZONE=UTC` 或 `LOG_TIME_ZONE=America/New_York`；也可在应用根目录的环境配置中设置，重启后生效。无效时区以 `LOG_TIME_ZONE_INVALID` 在监听与数据写入前拒绝启动。

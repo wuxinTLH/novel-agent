@@ -43,6 +43,14 @@ APIs include `POST /api/auth/password`, `GET/DELETE /api/auth/sessions`, `DELETE
 
 Turnstile stores an encrypted secret and exposes only `hasSecret`; enabled login requires real online success/action/hostname validation and fails closed on network errors. Local auth data becomes a global owner document after SQL activation, but `auth.key` stays local. POSIX `0600` does not configure Windows ACLs. Local binds only `127.0.0.1`; server binds `0.0.0.0`, requires auth/hardened/audit and a same-origin real HTTPS proxy, never direct exposure. See [deployment modes](deployment-modes.md).
 
+## Global site appearance API
+
+`NavigationHeader` / `NavigationFooter` consume one application-global appearance document. `GET /api/site-appearance` (including HEAD) exposes nonsecret appearance before authentication, behind Host/Origin/rate/security-header protections. It does not expose writes, subpaths or other anonymous business APIs. Administrative `GET /api/admin/site-appearance` and `PUT /api/admin/site-appearance` both require `appearance.manage` (admin/superadmin only), with existing administration/session CSRF on writes.
+
+PUT strictly replaces `{ expectedRevision, companyName, header, footer }`; successful GET/PUT directly return `SiteAppearance`, not an envelope, with `no-store`. Only bounded safe styles are accepted; company name defaults empty and the fixed © SakuraMikku project link is not configurable. 400/409/503 mean invalid request/revision conflict/storage unavailable. Never silently overwrite a conflict. See [site appearance](site-appearance.md) and [administration internals](../../packages/server/src/features/administration/README.md).
+
+The main process owns `DATA_DIR/site-appearance.json`, not tenant settings or SQL fallback. Single-instance writes commit with a temporary file, fsync and rename; errors fail closed. Full data-tree backups include the file when created; stopped-service restore must preserve this control-plane state, not restore business SQL alone.
+
 ## v3 storage, concurrency and single-instance limits
 
 [Profiles](../sqlconnect.md#v3-storage-profiles) configure multiple MySQL/PostgreSQL/SQL Server connections, default and explicit owner bindings. MySQL/SQL Server have mocked coverage only; live vendor compatibility is unproven. Migration is stopped-service `maintenance migrate-all`; legacy SQLconnect save/initialize is not migration. Active configuration is not edited online and failures never revert to stale JSON.

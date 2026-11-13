@@ -1,0 +1,26 @@
+.main:has(> .navigation-footer) { display: flex; flex-direction: column; min-height: 100dvh; }
+.main:has(> .navigation-footer) > .page-content { width: 100%; flex: 1 0 auto; }
+.navigation-footer, .appearance-preview {
+  background: var(--navigation-background, var(--panel));
+  color: var(--navigation-text, var(--text));
+  border-color: var(--navigation-border, var(--border));
+  font-size: var(--navigation-font-size, 14px);
+  padding-block: var(--navigation-padding-y, 12px);
+}
+// Keep native theme surfaces when colors are empty; explicit colors beat theme selectors.
+:root .app-shell .topbar.navigation-header {
+  color: var(--navigation-text, var(--text));
+  font-size: var(--navigation-font-size, 14px);
+  padding-block: var(--navigation-padding-y, 12px);
+  height: auto;
+  min-height: 64px;
+}
+:root .app-shell .topbar.navigation-header[data-custom-background='true'] { background: var(--navigation-background); }
+:root .app-shell .topbar.navigation-header[data-custom-border='true'] { border-color: var(--navigation-border); }
+.navigation-header .breadcrumbs, .navigation-header .save-indicator { color: inherit; font-size: inherit; }
+.navigation-header .breadcrumbs button, .navigation-header .breadcrumbs strong, .navigation-header .icon-button { color: inherit; }
+.navigation-header .breadcrumbs button:hover { color: var(--navigation-accent, var(--accent)); }
+.navigation-footer { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px 24px; padding-inline: 20px; border-top: 1px solid var(--navigation-border, var(--border)); overflow-wrap: anywhere; }
+.navigation-footer a, .appearance-preview a { color: var(--navigation-accent, var(--accent)); }
+.navigation-footer a:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+@media (max-width: 1000px) { .topbar.navigation-header { min-height: 58px; } }

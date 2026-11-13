@@ -25,6 +25,7 @@ Weights are display/sort metadata, **not permission inheritance**. Operations ha
 | `storage.manage`, `sql.initialize` | ✓ | ✓ | — | — |
 | `maintenance.read`, `maintenance.backup`, `maintenance.validate` | ✓ | ✓ | ✓ | — |
 | `maintenance.restorePlan`, `maintenance.cancel`, `maintenance.commands` | ✓ | ✓ | — | — |
+| `appearance.manage` (Header / Footer site appearance) | ✓ | ✓ | — | — |
 | `usage.read` (aggregate Token usage metadata only) | ✓ | ✓ | — | — |
 | `security.read` | ✓ | ✓ | — | — |
 | `security.manage` | ✓ | — | — | — |
@@ -36,6 +37,10 @@ Super administrators can manage known target roles. Administrators can manage wr
 Legacy `user` normalizes to `writer`, without privilege escalation. Native local authentication defaults off; server requires offline-enabled auth (see [deployment modes](deployment-modes.md)). Existing explicit CLI activation remains; role migration neither enables it nor adds an environment switch. Unauthenticated local management keeps its socket/Host/Origin/credential/CSRF checks.
 
 The online-maintenance component's optional `role` supports local/legacy superadmin display only when literally omitted (`undefined`). Authenticated parents must pass the verified actual role; omission is not an authentication fallback and other unknown values reject. Frontend hides unauthorized actions and rechecks submission, but the server authorizes every request independently; hidden buttons are not a security boundary.
+
+## Site appearance and public reads
+
+`appearance.manage` protects both administrative appearance reads and writes, for `superadmin` / `admin` only. `GET /api/site-appearance` (including HEAD) intentionally exposes nonsecret appearance, not anonymous management privileges or any relaxation of other APIs' session/tenant boundaries. Settings are application-global: operations/writers can see saved navigation appearance, but cannot manage it. See [site appearance](site-appearance.md) for fields and backup rules.
 
 ## Maintenance boundaries
 

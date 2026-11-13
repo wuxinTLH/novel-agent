@@ -36,6 +36,12 @@ Workspace package: `space.syjx.agent.novel.server`. Source lives in `src/`; inst
 - Root discovery walks upward for a manifest named `novel-agent` containing `workspaces`. Retain that root manifest in production; do not infer data paths from the current directory alone.
 - Administration and maintenance still use root commands `npm run admin -- ...` and `npm run maintenance -- ...`. The layout does not change authentication, data formats or publication safety boundaries.
 
+## Site appearance control plane
+
+[Site appearance](../../docs/en/site-appearance.md) uses one global file store assembled by administration. Public `GET /api/site-appearance` (including HEAD) returns nonsecret appearance only. Administrative GET/PUT `/api/admin/site-appearance` both require `appearance.manage` (admin/superadmin) and retain administration/session CSRF. `shared/site-appearance.ts` defines bounded styles and complete revision-checked replacement, not arbitrary CSS/HTML/URLs. Company name defaults empty; the fixed © SakuraMikku project link is not writable.
+
+`DATA_DIR/site-appearance.json` remains local even with SQL storage: global control-plane state, not tenant business fallback. Single-instance fsync/rename persistence rejects conflicts with 409 and fails closed on corruption/write errors. Full data-tree backups must retain this file; restore remains offline. See [administration internals](src/features/administration/README.md) for fields/errors. The [MIT license](../../LICENSE) carries 2026-2099 SakuraMikku copyright, with a [Chinese reference translation](../../LICENSE.zh-CN.md).
+
 ## Workflow defaults and concurrency
 
 New chapter templates keep three creative nodes: planning (`plan`) → writing (`draft`, kind `writer`) → consistency review (`review`, kind `audit`), between system start/end nodes. Worldbuilding and outlining remain available separately. Optional author-added nodes do not change this default.

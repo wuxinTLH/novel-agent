@@ -4,6 +4,17 @@
 
 发布标签 `v0.0.5a`；npm/package SemVer `0.0.5-a`。本次汇总 v0.0.4a 之后的当前工作树更新，旧版说明和测试数字保留为历史记录。
 
+### v0.0.5a 同版本更新 / Same-version refresh
+
+经用户明确确认，现有 v0.0.5a 标签移动至本次提交，并替换 Release 说明与同名归档、校验和；其他版本保持不变。先前下载的 v0.0.5a 不是本次产物，必须重新下载并核对新校验和。
+
+- Header / Footer 拆为独立组件，保留顶栏原有操作；未配置背景时保留主题渐变。
+- 管理员和超级管理员通过 `appearance.manage` 配置安全颜色、字号、间距及可选公司名称（默认空），支持预览、持久化、修订 CAS 和冲突重新载入。公共显示配置只读，不暴露秘密；拒绝任意 CSS/HTML/脚本。
+- 页脚固定 © SakuraMikku 项目新窗口链接及安全 rel 属性，可选公司版权不替换署名。新增 2026–2099 英文 MIT 与中文参考译文。
+- 双语使用、部署、权限、安全、备份和 API 文档按当前实现复核；最新验证见本版本报告，原始发布测试记录作为历史保留。
+
+**English:** With explicit approval, this same-version refresh moves the v0.0.5a tag and replaces its release notes/archive/checksum assets; earlier downloads must be replaced and re-verified. Independent Header/Footer components preserve existing controls and theme defaults. Manager-only `appearance.manage` grants safe, revision-protected, persistent presentation settings with optional company attribution. The mandatory © SakuraMikku project link remains; bilingual MIT materials cover 2026–2099 (English governs). Operational documentation and validation are refreshed without implying real external-service acceptance.
+
 - **章节解析：** 手动指定起止章或选择最近 N 章，显式调用所选模型分析写法、节奏、剧情布局、人物、伏笔与跨章衔接；独立保存调用状态、来源修订和报告，可重复查看，不改写正文。不自动重试未知模型请求，不静默截断超限正文。
 - **连续性：** 独立前章结尾锚点传递至规划、写作和审校；要求状态过渡及两侧证据。保存或恢复前章使相关后续节点上下文失效；现有正文和历史输出不自动覆盖。模型判断不保证文字质量。
 - **审阅与国际化：** 生成进度、预览和候选使用更大的阅读区域，支持展开全文与窄屏排列。系统文案集中到双语词典并加入静态及浏览器回归；用户正文、名称、模型返回和未知服务端错误不擅自翻译。已删除正文的历史生成结果明确标记并默认折叠，而非误报已保存。

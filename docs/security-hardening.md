@@ -92,7 +92,7 @@ docker compose up -d
 
 默认数据卷 `/app/data`、独立备份卷 `/app/.data-managed-backups` 和 `/tmp` 可写；镜像为两个持久目录预设 UID 1000 所有权。自定义 bind mount 必须自行配置 UID / ACL 并测试，否则维护会失败，不能改成根文件系统可写来掩盖。离线维护备份目的地也须显式提供独立可写挂载，且位于数据目录外；备份含秘密、不可使用 `docker compose down -v` 删除唯一数据卷。镜像无 Chromium，默认不支持远程容器中番茄首次交互登录。
 
-本轮检查环境仅有 Docker CLI 29.3.1，Docker Engine pipe 不存在，**未实际构建镜像或运行容器**。主实施者确认 `docker compose config --quiet` 通过；静态检查 / 应用测试不是 Node 22 容器、宿主隔离或真实 TLS 的验证。本次预发布标签为 `v0.0.4a`，npm/package SemVer 为 `0.0.4-a`；实际发布状态由发布者确认，不将预发布视为合规证明。计划提供源码归档与含编译产物的归档，仅在本次构建、隔离验证和资产检查完成后发布，结果见[本次发布验证](release-validation-v0.0.4a.md)；拟排除 node_modules、真实 `.env`、数据、凭据及浏览器登录态，并提供来源 manifest 与 SHA256 校验信息。以最终资产清单为准，不预先声称已打包或验证。若资产实际包含已编译产物，核对校验信息后，从解压根目录使用 Node `^22.23.4 || ^24.22.2` 执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再 `node build/packages/server/src/index.js`；纯源码资产须先安装开发依赖并构建。编译产物不代表已安装依赖或完成容器验收。见[本次发布说明](../RELEASE_NOTES.md)。
+本轮检查环境仅有 Docker CLI 29.3.1，Docker Engine pipe 不存在，**未实际构建镜像或运行容器**。主实施者确认 `docker compose config --quiet` 通过；静态检查 / 应用测试不是 Node 22 容器、宿主隔离或真实 TLS 的验证。当前维护的预发布标签仍为 `v0.0.5a`，npm/package SemVer 为 `0.0.5-a`（同标签 / 资产替换已获明确授权；旧下载与校验值已过时，须重新下载并核对替换资产）；实际发布状态由发布者确认，不将预发布视为合规证明。发布资产为 `novel-agent-v0.0.5a.tar.gz`（单个归档同时含跟踪源码、本次 Web / Server 编译产物及提交 manifest）和 `SHA256SUMS.txt`，不是两个源码 / 编译归档。归档排除 node_modules、真实 `.env`、数据、凭据、Token 账本、个人截图、浏览器登录态和本地记忆。实际构建、隔离验证及资产身份校验见[当前发布验证](release-validation-v0.0.5a.md)；[旧发布验证](release-validation-v0.0.4a.md)仅为历史记录，不预先声称上传验证完成。核对新的 SHA-256 和提交 manifest 后，从解压根目录使用 Node `^22.23.4 || ^24.22.2` 执行 `npm ci --omit=dev --ignore-scripts`、`npm rebuild sharp`，再 `node build/packages/server/src/index.js`。GitHub 自动生成的源码归档不含编译产物，须另行安装开发依赖并构建。编译产物不代表已安装依赖或完成容器验收。见[本次发布说明](../RELEASE_NOTES.md)。
 
 ## 6. 交付验收清单
 

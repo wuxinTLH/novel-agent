@@ -13,10 +13,16 @@
 - `OnlineMaintenance.tsx`：创建全应用备份 → 选择成功备份并校验 → 按权限生成离线恢复计划；运维仅可备份及校验，不可取消任务或生成恢复计划。详细安全边界和 CLI 命令使用原生 details 分层，不移除停服要求。
 - 成功备份从最近任务选择；旧备份可在高级输入填写 UUID，前端格式检查不代替服务端受管目录及完整性校验。任务提交超时不自动重试，提交阶段不能取消。
 
+## 站点外观
+
+`SiteAppearancePanel.tsx` 仅由 `appearance.manage`（admin/superadmin）开放，运维和作家不能读取管理接口或保存。Header / Footer 分别预览并配置四种颜色、整数 12–24 px 字号及 0–32 px 上下内边距；空色继承主题，拒绝任意 CSS / HTML / URL。公司名称默认空、最多 120 字符，按纯文本显示；固定 © SakuraMikku 项目链接不可删除。
+
+重置只改草稿，保存才提交；载入失败不伪造已保存状态，保存失败保留编辑，409 要求重新载入人工核对，不自动覆盖。会话切换 / 过期后停止当前请求并要求重新打开面板。详细 API、固定链接及全局 `DATA_DIR/site-appearance.json` 备份规则见[站点外观](../../../../../docs/site-appearance.md)。这不是租户设置或浏览器主题偏好。
+
 ## 安全边界
 
 local 认证默认关闭，server 必须先离线启用认证；首次管理员仍需离线 CLI 引导。在线备份必须确认全部租户短暂停顿和敏感材料，不开放任意路径或备份下载。校验仅证明完整性，计划绝不执行恢复；恢复与迁移必须停服。服务端权限、CSRF、全局静默屏障以及任务管理实现保持不变。
 
 ## 验证
 
-在仓库根目录运行 `npm run build`、`npm test`；构建后运行 `node scripts/smoke-administration-ui.mjs` 验收隔离数据目录中的管理导航、备份、校验、计划和响应式布局，不访问真实用户数据。
+在仓库根目录运行 `npm run build`、`npm test`；构建后运行 `node scripts/smoke-administration-ui.mjs` 验收隔离数据目录中的管理导航、备份、校验、计划和响应式布局，不访问真实用户数据。站点外观另有 `node scripts/smoke-site-appearance.mjs`；先检查脚本隔离目录与副作用保护。以上为验证指引，本次文档更新未据此声称执行或通过完整测试。

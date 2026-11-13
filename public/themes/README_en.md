@@ -38,6 +38,10 @@ Development reads this source directory directly. `npm run build:web` (or a full
 
 `packages/web/src/lib/themes/themes-load.ts` provides `themesLoad`, registry validation and concurrency-safe switching. Legacy saved values `system/light/dark/mtf` migrate to `theme-xxx`. Removed or unknown selections fall back to `defaultTheme`. Invalid registries do not replace the current list or appearance. CSS is trusted local content; do not register unreviewed third-party styles.
 
+## Site appearance versus themes
+
+Theme selection is a browser-local preference. Header/Footer appearance configured by admin/superadmin through `appearance.manage` is application-global control-plane state in `DATA_DIR/site-appearance.json`. Empty navigation colors inherit the theme; explicit colors override corresponding theme colors. The administration form does not accept arbitrary CSS, URLs or fonts like trusted resources in this directory. Company name defaults empty and the fixed [© SakuraMikku](https://github.com/wuxinTLH/novel-agent) link cannot be configured away. Check overrides, light/dark modes and link contrast when adding themes; do not hide attribution. See [site appearance](../../docs/en/site-appearance.md) for fields and backups.
+
 ## Bundled resources and scope
 
 - `theme-light.css`: minimal white palette and the light basis for `theme-system`.

@@ -78,5 +78,5 @@ test('admin security settings remain read-only and existing dirty-close guards s
   assert.equal(hasPermission('admin', 'security.manage'), false);
   assert.match(administration, /writable && \([\s\S]*?<AccountAdminSettings/);
   assert.match(administration, /if \(!writable\) return/);
-  assert.match(administration, /dirty=\{databaseDirty \|\| securityDirty\}/);
+  assert.match(administration, /dirty=\{databaseDirty \|\| securityDirty \|\| appearanceDirty\}/);
 });

@@ -8,7 +8,25 @@
 - 当前增量：国际化、项目卡删除、历史章节状态和折叠、安全取消/保留平台记录本地删除、Token 管理统计、审阅工作台、前端 UTC+8、可配日志时区与章节连续性。
 - 不覆盖私有本地 `.mnemon/`、个人截图、Token 账本、真实配置或业务数据；不执行真实付费模型、平台、短信或邮件操作。
 
-## 当前结果 / Results
+## 同版本更新验证 / Same-version refresh validation
+
+在用户明确授权后，现有 v0.0.5a 标签、说明和同名资产将更新至本次提交，npm 版本仍为 0.0.5-a；其他历史版本不变。先前下载的归档与校验和对应旧提交，不代表本次产物，必须重新下载校验。发布前保留原始归档用于追溯。
+
+新增范围为独立 Header / Footer、管理员站点外观、可选公司名称、固定作者链接及 2026–2099 双语 MIT 许可。显示设置限制为安全颜色与数字；匿名只读仅暴露站点显示配置，修改仍受权限、CSRF 和修订 CAS 保护。完整备份包含站点外观配置；其他客户端不会自动实时同步已打开页面。
+
+| 本次更新检查 / Refresh check | 结果 / Result |
+| --- | --- |
+| Full tests | final: 763/763 passed, 0 failures/skips/cancels, 298030.55 ms. First run: 762/763; the unchanged workflow API readiness assertion reached its 6-second startup deadline with empty logs. The focused unchanged workflow suite then passed 7/7, followed by this complete serialized rerun. No timeout or safety assertion was relaxed; intermittent startup root cause is not claimed fixed |
+| Typecheck and web/server build | passed after documentation and theme README refresh; Web and Server compiled artifacts included only after clean-commit packaging |
+| Navigation/administration/tenancy/locale focused regressions | 54/54 passed before documentation refresh |
+| Site appearance isolated browser | passed against a disposable backend: real persistence, 409 conflict, restart, fixed attribution, theme defaults, bilingual 390px; no live-site writes |
+| Broader browser regression | all 18 suites passed across serialized disposable-root runs. Initial unified run: 17/18; administration UI still expected 6 tabs and the former last tab. Updated only smoke assertions to require all 7 tabs, the new appearance tab and correct End/arrow wraparound while retaining focus, ARIA, visibility and overflow checks. Final administration rerun passed (5519 ms); no product behavior or safety guard was loosened. All suites use isolated data and sanitized environments, not live user data |
+| Dependency, locale, documentation and privacy checks | official npm audit: 0 vulnerabilities, 451 dependencies (248 production, 176 development, 97 optional; categories overlap). Locale AST: 67 files, 2044 literal calls, 2106 merged keys, 0 violations; 321 expressions reviewed contextually (not blanket exemptions). Documentation: 70 Markdown files, 568 relative inline links and 51 heading anchors, 0 missing within checked scope. Privacy/credential-marker check: 457 files passed, private local files excluded. Docker Compose configuration passed; Docker image/runtime not validated because Engine is unavailable |
+| Archive and GitHub identity/digests | gated on clean commit and post-commit verification; final receipt reported separately |
+
+## 原始发布结果（历史） / Original publication results (historical)
+
+以下是更新前 v0.0.5a 的结果，不替代上方本次验证。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -29,4 +47,4 @@
 
 已知历史源码 Worker 与 API 测试启动存在间歇时限失败；本次若出现，须保留失败和复测原因，不放宽断言、跳过测试或声称永久修复。账本是有界的单写者本地遥测，不是 SQL 故障回退或计费凭证。完整备份须涵盖该账本并停止写入；恢复仍须停服。保留平台证据删除仅移除本地作品，不是完全抹除；未知远端目标的写入阻止必须继续生效。
 
-Release assets must exclude dependencies, secrets, live data, local telemetry, personal screenshots, browser profiles and local memory. The archive must match the committed tracked source and include non-empty compiled web/server output and a commit manifest. Historical tags/releases are preserved.
+Release assets must exclude dependencies, secrets, live data, local telemetry, personal screenshots, browser profiles and local memory. The archive must match the committed tracked source and include non-empty compiled web/server output and a commit manifest. Other historical tags/releases are preserved; the explicitly authorized same-version v0.0.5a refresh replaces that tag and its same-named assets.

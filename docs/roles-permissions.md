@@ -27,6 +27,7 @@
 | `storage.manage`、`sql.initialize`                                      |     ✓      |   ✓    |     —      |  —   |
 | `maintenance.read`、`maintenance.backup`、`maintenance.validate`        |     ✓      |   ✓    |     ✓      |  —   |
 | `maintenance.restorePlan`、`maintenance.cancel`、`maintenance.commands` |     ✓      |   ✓    |     —      |  —   |
+| `appearance.manage`（Header / Footer 站点外观）                        |     ✓      |   ✓    |     —      |  —   |
 | `usage.read`（Token 使用统计，仅汇总运维元数据）                         |     ✓      |   ✓    |     —      |  —   |
 | `security.read`                                                         |     ✓      |   ✓    |     —      |  —   |
 | `security.manage`                                                       |     ✓      |   —    |     —      |  —   |
@@ -40,6 +41,10 @@
 - 认证关闭时保留原有本机管理员使用方式，但不是取消原有本机访问、管理员凭证或 CSRF 边界。
 - 在线维护组件的可选 `role` 属性仅在未传入（`undefined`）时兼容本机/旧模式，以超级管理员能力展示。认证模式下父组件必须传入实际已认证角色，不能以省略角色作为鉴权回退；其它未知值应拒绝。
 - 前端隐藏无权限的步骤与按钮，并在提交函数中再次校验；最终授权始终由服务端逐次执行，隐藏按钮不构成安全边界。
+
+## 站点外观与公开读取
+
+`appearance.manage` 同时保护管理面外观读取与写入，仅 `superadmin` / `admin` 获得。`GET /api/site-appearance`（含 HEAD）是有意公开的非秘密外观读取，不代表匿名管理权限，不改变其他业务 API 的会话 / 租户边界。配置为全应用共享，运维与作家可看到已保存导航外观，但不能管理它。具体字段与备份见[站点外观](site-appearance.md)。
 
 ## 在线与离线维护边界
 

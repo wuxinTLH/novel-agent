@@ -120,6 +120,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
         route === '/uploads' ||
         route.startsWith('/uploads/')
       ) ||
+      ((req.method === 'GET' || req.method === 'HEAD') && /^\/api\/site-appearance\/?$/.test(route)) ||
       route === '/api/admin' ||
       route.startsWith('/api/admin/')
     )

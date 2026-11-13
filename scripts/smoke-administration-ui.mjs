@@ -152,7 +152,8 @@ try {
 
   stage = 'keyboard tab accessibility and unconfigured users explanation';
   const tabs = dialog.getByRole('tab');
-  assert.equal(await tabs.count(), 6);
+  assert.equal(await tabs.count(), 7);
+  await dialog.getByRole('tab', { name: '站点外观', exact: true }).waitFor();
   const checkTab = async (tab) => {
     assert.equal(await tab.getAttribute('aria-selected'), 'true');
     assert.equal(await tab.getAttribute('tabindex'), '0');
@@ -178,13 +179,16 @@ try {
     .waitFor();
   assert.equal(await dialog.getByRole('button', { name: '创建账号', exact: true }).count(), 0);
   await users.press('End');
+  const appearance = dialog.getByRole('tab', { name: '站点外观', exact: true });
+  await checkTab(appearance);
+  await appearance.press('ArrowLeft');
   const system = dialog.getByRole('tab', { name: '系统与安全', exact: true });
   await checkTab(system);
   await system.press('Home');
   await checkTab(overview);
   await overview.press('ArrowLeft');
-  await checkTab(system);
-  await system.press('ArrowRight');
+  await checkTab(appearance);
+  await appearance.press('ArrowRight');
   await checkTab(overview);
 
   stage = 'maintenance consent and real local backup';

@@ -6,6 +6,10 @@ A local-first novel-writing workbench, deployment-mode prerelease `v0.0.5a`. It 
 
 Target release tag: `v0.0.5a`; npm/package SemVer: `0.0.5-a`. See [bilingual release notes](../RELEASE_NOTES.md). Source and compiled-output archives require this release's build, isolated validation and asset checks before publication; no build or external-service acceptance is preclaimed. The [v0.0.4a validation report](../docs/release-validation-v0.0.4a.md) is historical evidence, not acceptance of this release. Project Skills are described in the [agent capability guide](../docs/agent-capabilities.md); the optional Playwright MCP bundle is **not installed, not running and not an application dependency**.
 
+## Header / Footer and license
+
+NavigationHeader and NavigationFooter separately own the top bar and global footer. Administrators may configure independent colors, font size, padding and an optional company copyright name (hidden by default). The footer retains the fixed © SakuraMikku project link. See [site appearance](../docs/en/site-appearance.md). This project uses the [MIT License](../LICENSE), copyright 2026-2099 SakuraMikku, with a [Chinese reference translation](../LICENSE.zh-CN.md).
+
 ## Quick start
 
 Use patched Node.js **22.23.4+ within 22.x or 24.22.2+ within 24.x** (24.22.2 recommended; see `.node-version` / `.nvmrc`), and run commands from the repository root. Older patches and other majors are unsupported; restart services after upgrading. See the [Node.js security baseline](../docs/node-security.md).

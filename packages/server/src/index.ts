@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import express from 'express';
 import { createAdministrationRouter } from './features/administration/administration.js';
+import { SiteAppearanceStore, appearanceHandler } from './features/administration/appearance.js';
 import { createIsolatedTenantApplication } from './core/tenancy/isolated-tenant-application.js';
 import { acquireDataLock, appRoot } from './core/local-runtime.js';
 import { trustedPublicOrigin } from './core/trusted-origin.js';
@@ -69,6 +70,7 @@ const auth = new AuthService({
 });
 if (mode.enabled && !auth.hasSuperadmin()) throw new Error('AUTH_BOOTSTRAP_REQUIRED');
 const sqlconnect = new SQLConnectService({ dataDir: dir, appRoot });
+const appearance = new SiteAppearanceStore(dir);
 const onlineMaintenance = new OnlineMaintenanceManager({
   dataDir: dir,
   acquireQuiescence: (signal) => tenants.acquireQuiescence(signal),
@@ -126,6 +128,7 @@ const services: IsolatedTenantService[] = [
 services.unshift({
   close: () => onlineMaintenance.close(),
   register(application) {
+    application.get('/api/site-appearance', appearanceHandler(appearance));
     application.use(
       '/api/admin',
       createAdministrationRouter({
@@ -133,6 +136,7 @@ services.unshift({
         auth,
         tenantCount: () => tenants.contexts.size,
         onlineMaintenance,
+        appearance,
       }),
     );
   },

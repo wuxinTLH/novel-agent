@@ -88,7 +88,10 @@ import '../components/projects/project-deletion-blockers.scss';
 import WorldStagePanel from '../components/projects/WorldStagePanel';
 import KnowledgePanel from '../components/knowledge/KnowledgePanel';
 import '../styles/workspace-navigation.scss';
-import { LanguageSwitcher, useLocale, translate } from '../locals';
+import { useLocale, translate } from '../locals';
+import NavigationHeader from '../components/navigation/NavigationHeader';
+import NavigationFooter from '../components/navigation/NavigationFooter';
+import '../components/navigation/navigation.scss';
 import { useChapterEditor } from '../hooks/chapters/useChapterEditor';
 import ChapterHistory from '../components/chapters/ChapterHistory';
 import ChapterCatalog from '../components/chapters/ChapterCatalog';
@@ -1524,8 +1527,14 @@ export default function App() {
         </div>
       </aside>
       <main className="main">
-        <header className="topbar">
-          <nav className="breadcrumbs" aria-label={t('当前位置')}>
+        <NavigationHeader
+          themeControl={<ThemeSwitcher />}
+          running={running}
+          avatarUrl={avatarUrl}
+          onSettings={() => { void navigate('settings'); }}
+          onHelp={() => setHelp(true)}
+          onProfile={() => setProfileSettings(true)}
+          breadcrumbs={<>
             <button
               type="button"
               onClick={() => void navigate('projects')}
@@ -1592,54 +1601,8 @@ export default function App() {
                 )}
               </>
             )}
-          </nav>
-          <div className="topbar-right">
-            <LanguageSwitcher />
-            <ThemeSwitcher />
-            <button
-              type="button"
-              className="icon-button quick-settings"
-              aria-label={t('模型设置')}
-              onClick={() => navigate('settings')}
-            >
-              <Settings2 size={18} />
-            </button>
-            <span className="save-indicator">
-              <span className="green-dot" />
-              {running ? t('工作流运行中') : t('已保存至本地')}
-            </span>
-            <button
-              type="button"
-              className="icon-button help-trigger"
-              aria-label={t('使用指南')}
-              aria-haspopup="dialog"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setHelp(true);
-              }}
-            >
-              <CircleHelp size={18} />
-            </button>
-            <button
-              type="button"
-              className="top-avatar-button"
-              aria-label={t("自定义本地头像")}
-              aria-haspopup="dialog"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setProfileSettings(true);
-              }}
-            >
-              {avatarUrl ? (
-                <img className="top-avatar" src={avatarUrl} alt={t("本地头像")} />
-              ) : (
-                <span className="top-avatar">N</span>
-              )}
-            </button>
-          </div>
-        </header>
+          </>}
+        />
         <div className="page-content">
           {page !== 'projects' && (
             <section className="page-heading">
@@ -3030,6 +2993,7 @@ export default function App() {
             />
           )}
         </div>
+        <NavigationFooter />
       </main>
       {toast && (
         <div className="toast" role="status">

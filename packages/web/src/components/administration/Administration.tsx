@@ -16,6 +16,7 @@ import { formatDateTime } from '../../lib/dateTime';
 import { api } from '../../services/api';
 import Modal from '../common/Modal';
 import OnlineMaintenance from './OnlineMaintenance';
+import SiteAppearancePanel from './SiteAppearancePanel';
 import { AccountAdminSettings } from '../account/AccountAdminSettings';
 import { useConfirm } from '../common/AppDialog';
 import type {
@@ -91,6 +92,7 @@ const tabPermissions: Record<Tab, Permission> = {
   database: 'storage.read',
   backup: 'maintenance.read',
   system: 'security.read',
+  appearance: 'appearance.manage',
 };
 const tabs = [
   { id: 'overview', label: '工作台', icon: LayoutDashboard },
@@ -99,6 +101,7 @@ const tabs = [
   { id: 'database', label: '数据库', icon: Database },
   { id: 'backup', label: '备份与维护', icon: HardDrive },
   { id: 'system', label: '系统与安全', icon: ShieldCheck },
+  { id: 'appearance', label: '站点外观', icon: LayoutDashboard },
 ] as const;
 type Tab = (typeof tabs)[number]['id'];
 const errorMessage = (error: unknown, t: Translator) => (error instanceof Error ? error.message : t("请求失败，请重试。"));
@@ -1291,6 +1294,9 @@ export default function Administration({ close, mode }: { close: () => void; mod
   const [busy, setBusy] = useState(false);
   const [databaseDirty, setDatabaseDirty] = useState(false);
   const [securityDirty, setSecurityDirty] = useState(false);
+  const [appearanceDirty, setAppearanceDirty] = useState(false);
+  const [appearanceOpened, setAppearanceOpened] = useState(false);
+  useEffect(() => { if (tab === 'appearance') setAppearanceOpened(true); }, [tab]);
   const id = useId();
   const status = resource.value;
   const keydown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -1317,7 +1323,7 @@ export default function Administration({ close, mode }: { close: () => void; mod
       wide
       close={close}
       busy={busy}
-      dirty={databaseDirty || securityDirty}
+      dirty={databaseDirty || securityDirty || appearanceDirty}
     >
       <div className="administration-mode">
         <span className="administration-badge">{mode === 'local' ? t('本机管理模式') : t('管理员模式')}</span>
@@ -1456,6 +1462,11 @@ export default function Administration({ close, mode }: { close: () => void; mod
                     onBusy={setBusy}
                     onDirty={setSecurityDirty}
                   />
+                )}
+              </section>
+              <section role="tabpanel" id={`${id}-panel-appearance`} aria-labelledby={`${id}-tab-appearance`} hidden={tab !== 'appearance'} tabIndex={0}>
+                {appearanceOpened && allowed('appearance.manage') && (
+                  <SiteAppearancePanel key={`${mode}:${actor}:${session.value?.user?.id ?? 'local'}`} onBusy={setBusy} onDirty={setAppearanceDirty} />
                 )}
               </section>
             </div>

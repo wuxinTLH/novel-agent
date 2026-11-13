@@ -4,10 +4,15 @@
 
 Use this index for English operational instructions and technical references. English documentation does **not** mean that the whole UI is translated or that external services have passed acceptance. Native execution defaults to `CoreModel=local`, listening only on `127.0.0.1` with optional authentication off. Server requires auth, hardened/audit and a same-origin real HTTPS proxy, not direct LAN access. Commands run from the repository root unless a guide says otherwise.
 
+## Header / Footer and license
+
+[Site appearance](site-appearance.md) ([中文](../site-appearance.md)) documents separate navigation modules, bounded administrator styling, optional company copyright and fixed author attribution. [MIT License](../../LICENSE) / [Chinese reference translation](../../LICENSE.zh-CN.md) carry 2026-2099 SakuraMikku copyright.
+
 ## User and operator guides
 
 | English guide                                                     | Chinese source / coverage                                                                                                                                                                                     |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Site appearance](site-appearance.md) | [站点外观](../site-appearance.md): separate Header/Footer, safe styles, optional company name, fixed author link, global control-plane API and backups. |
 | [Deployment modes](deployment-modes.md) | [本机与服务端部署](../deployment-modes.md): exact CoreModel values, listeners, mandatory controls, Docker defaults and container-local limitations. |
 | [User guide](user-guide.md)                                       | [使用手册](../使用手册.md): installation, all authoring routes, workflow/model/node setup, manual TXT chapters, exports/DOCX reading, publication, identity/account features, migration, backup and recovery. |
 | [Chapter analysis](chapter-analysis.md) | [章节解析](../chapter-analysis.md): explicit live-model requests, ranges/latest N, persistent read-only reports, limits and API contract. |

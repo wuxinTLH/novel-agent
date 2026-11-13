@@ -2,6 +2,37 @@
 
 Administration routes and their tests live here.
 
+## Global safe site appearance
+
+`GET /api/site-appearance` (also HEAD) is available before authentication, behind the unchanged
+HTTP Host/Origin/rate-limit/security boundary. It returns only `SiteAppearance` from
+`shared/site-appearance.ts`, never accounts, sessions or credentials. Exact path matching is
+case-insensitive with an optional trailing slash; other methods and subpaths are not public.
+`GET /api/admin/site-appearance` and `PUT /api/admin/site-appearance` require the explicit
+`appearance.manage` permission (superadmin/admin, not operations/writer). Local auth-off mode
+retains strict socket-loopback + Host/Origin checks and `x-admin-csrf` for PUT.
+
+GET and successful PUT return the appearance document directly. Version is 1; initial revision
+is 0. PUT accepts **only** `{expectedRevision, companyName, header, footer}`, with both complete
+styles. Stale revisions return 409; malformed/unknown fields return 400. Company name is plain
+text, trimmed, at most 120 characters and rejects C0/C1 control characters before trimming.
+Each navigation style contains only `backgroundColor`, `textColor`, `accentColor`, `borderColor`
+(empty string means inherit theme, otherwise strict `#RRGGBB`), integer `fontSize` 12–24 and
+integer `paddingY` 0–32. Defaults are all empty colors, fontSize 14, paddingY 16 and empty company.
+No arbitrary CSS/HTML/URL/JavaScript/font-family, visibility or copyright controls exist; fixed
+product attribution/copyright is not configurable or hideable through this contract.
+
+One control-plane store shared by public/admin routes owns `DATA_DIR/site-appearance.json`,
+independent of tenant or SQL storage. Tenant Workers do not write it. Under the existing single
+application data lock, a synchronous exclusive temporary-file write, file fsync and atomic rename
+complete before revision/state advances. Save failures return sanitized 503 and preserve the
+previous committed file/state. Missing first-use files return defaults without writing; corrupt,
+unsafe, oversized or unexpectedly removed committed files fail closed with 503, never silently
+reset/overwrite. Restart reloads the committed revision. Reads revalidate disk to fail closed on
+external corruption; this is not multi-process/distributed CAS. Normal full-application backup's
+file inventory already includes this file; `.tmp` files remain excluded. No backup/storage format
+or security boundary is relaxed.
+
 ## Persistent model Token usage
 
 `GET /api/admin/token-usage?from=YYYY-MM-DD&to=YYYY-MM-DD&model=optional-exact-name`

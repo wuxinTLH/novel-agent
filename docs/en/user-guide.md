@@ -37,6 +37,14 @@ A separate static process is not a second backend or a public-Internet safety gu
 
 Refresh preserves the route. Unknown routes show a 404 and return after five seconds. Workflow arrangement (layered, horizontal, vertical or grid) changes positions only, not dependencies or execution semantics. Project settings edit title, type, synopsis and a PNG/JPEG/WebP cover up to 4 MiB. Avatars are cropped and stored only in the current browser after server-side file checking.
 
+### Header / Footer and site appearance
+
+`NavigationHeader` and the global `NavigationFooter` are separate; the footer is not the workflow action bar. Administration → Site appearance requires `appearance.manage` (admin/superadmin only). Preview and save independent background/text/accent/border colors, font size and vertical padding. Colors accept only empty or `#RRGGBB`, font size is an integer 12–24 px and padding an integer 0–32 px. No arbitrary CSS, HTML, scripts or URLs are accepted. Empty colors inherit the theme; explicit colors override the corresponding navigation theme colors.
+
+Company name is optional and empty by default, omitting its copyright line; configured names are plain text. The footer always retains the fixed [© SakuraMikku](https://github.com/wuxinTLH/novel-agent) author link, not removable through configuration. Reset changes the draft only; save commits. On conflict, reload/review manually without automatic overwrite or write replay. This application-global control-plane configuration lives in `DATA_DIR/site-appearance.json`, not browser preferences or tenant settings, even with SQL business storage. Include it in full backups/stopped-service restores. See [site appearance](site-appearance.md) for complete steps, fields, APIs and errors.
+
+The project uses the [MIT License](../../LICENSE), copyright `2026-2099 SakuraMikku`. The [Chinese reference translation](../../LICENSE.zh-CN.md) defers to English for ambiguity. Dependencies retain their own licenses.
+
 ### v0.0.5a analysis and current increment
 
 - **Chapter analysis:** from manuscripts, choose a manual chapter-number range or the latest N saved chapters, select a live model and explicitly start analysis. Independently persisted reports can be reopened without another model call. Analysis never edits canonical text, history or candidates, or triggers publication. Save manuscript edits first; see [chapter analysis](chapter-analysis.md) for limits, statuses and APIs.
@@ -187,6 +195,8 @@ npm run maintenance -- restore --source <PATH> --data-dir <NEW> --confirm
 npm run maintenance -- restore --source <PATH> --database-config <EXPLICIT_TARGET_PROFILES> --data-dir <NEW> --confirm
 ```
 
+Include the global control-plane `DATA_DIR/site-appearance.json` when created: it remains a local file, not a tenant SQL document. Business-database-only backups or browser theme preferences cannot restore site appearance. After a stopped-service restore, inspect Header/Footer, company name and the fixed author link; online snapshots still require global quiescence.
+
 A full application backup includes safe local binaries/empty directories and all configured v3 repository owners/documents/entities/revisions/receipts, **not a whole database dump**. It excludes `.instance.lock`, `.instance.lock.recovery`, `admin-backups`, `.maintenance-journal.json`, `*.tmp`, `.maintenance-*`; unsafe paths, symbolic/hard links are rejected. Environment-only `MODEL_SECRETS_KEY` / `PLATFORM_SECRETS_KEY` must be saved separately. Legacy version-1 SQL activation is unsupported here: use separate `pg_dump` plus the complete local tree and keys.
 
 Restore requires new/empty files and v3 application targets. SQL target profiles must explicitly cover source IDs/mappings; source database addresses are never trusted. Local rollback copies do not provide atomic cross-database rollback. A failure journal blocks startup: reconcile actual committed states and backups, never just delete the journal. Restore revokes auth sessions and never replays remote publication. There is no scheduled backup or distributed maintenance guarantee.
@@ -195,6 +205,6 @@ Legacy `npm run admin -- migrate-sql --owner <UUID> --confirm` remains single-ow
 
 ## Interface and verification
 
-Language selection (`zh-CN` / `en`) is browser-local under `novel-locale`; coverage remains partial, especially authoring/platform/backend messages. Themes are light, dark, system and blue/pink/white. The separate theme menu reloads registry/CSS; failure preserves the active theme or uses initial light fallback. Hashed CSS/JS/fonts may cache one year; HTML uses `no-cache`. See the [theme guide](../../public/themes/README.md).
+Language selection (`zh-CN` / `en`) is browser-local under `novel-locale`; fixed UI copy spans authoring, accounts, platforms and administration, while user content and unknown/external diagnostics remain verbatim; this is not proof that every runtime response is translated. Themes are light, dark, system and blue/pink/white. The separate theme menu reloads registry/CSS; failure preserves the active theme or uses initial light fallback. Hashed CSS/JS/fonts may cache one year; HTML uses `no-cache`. See the [theme guide](../../public/themes/README.md).
 
 Run `npm run typecheck`, `npm test` and `npm run build` for local validation. Tests use temporary directories/stubs, not real paid models or platform accounts. Browser smoke and historic counts are described in the [acceptance record](acceptance-checklist.md); historical results do not prove the present working tree or external services. The [storage report](../../scripts/benchmark-storage-report.md) is simulated, not live SQL performance. Live DB scripts require explicit disposable credentials and opt-in; read their instructions before running. No external acceptance is claimed by this translation.

@@ -6,6 +6,10 @@
 
 本次发布目标标签为 `v0.0.5a`，npm/package SemVer 为 `0.0.5-a`；见[双语发布说明](../RELEASE_NOTES.md)。源码与编译产物归档须完成本次构建、隔离验证及资产检查后才发布；不预先声明构建或外部服务验收通过。[v0.0.4a 验证报告](../docs/release-validation-v0.0.4a.md)仅为历史记录，不是本次验收结果。项目 Skills 见[代理能力指南](../docs/agent-capabilities.md)；可选 Playwright MCP 配置 bundle **未安装、未运行，也不是应用依赖**。
 
+## Header / Footer 与许可证
+
+顶栏和全局页脚独立为 NavigationHeader / NavigationFooter；管理员可分别配置颜色、字号、内边距及可选公司版权名称，默认不显示公司名称。Footer 固定保留 © SakuraMikku 项目链接。见[站点外观说明](../docs/site-appearance.md)。项目采用 [MIT License](../LICENSE)，版权为 2026-2099 SakuraMikku；[中文参考译文](../LICENSE.zh-CN.md)。
+
 ## 快速开始
 
 需要已修复安全漏洞的 Node.js **22.23.4+（22.x）或 24.22.2+（24.x）**，推荐 24.22.2（见 `.node-version` / `.nvmrc`）。旧补丁版本及其他主版本不在支持范围；升级后须重启服务。详见 [Node.js 安全基线](../docs/node-security.md)。
