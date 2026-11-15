@@ -17,6 +17,7 @@ import { api } from '../../services/api';
 import Modal from '../common/Modal';
 import OnlineMaintenance from './OnlineMaintenance';
 import SiteAppearancePanel from './SiteAppearancePanel';
+import OperationalLogsPanel from './OperationalLogsPanel';
 import { AccountAdminSettings } from '../account/AccountAdminSettings';
 import { useConfirm } from '../common/AppDialog';
 import type {
@@ -88,6 +89,7 @@ const roleLabel = (role: AuthRole, t: Translator) => t('{role}（权重 {weight}
 const tabPermissions: Record<Tab, Permission> = {
   overview: 'admin.status.read',
   usage: 'usage.read',
+  logs: 'logs.read',
   users: 'users.read',
   database: 'storage.read',
   backup: 'maintenance.read',
@@ -97,6 +99,7 @@ const tabPermissions: Record<Tab, Permission> = {
 const tabs = [
   { id: 'overview', label: '工作台', icon: LayoutDashboard },
   { id: 'usage', label: 'Token 使用统计', icon: LayoutDashboard },
+  { id: 'logs', label: '日志与告警', icon: Terminal },
   { id: 'users', label: '用户', icon: Users },
   { id: 'database', label: '数据库', icon: Database },
   { id: 'backup', label: '备份与维护', icon: HardDrive },
@@ -1295,6 +1298,9 @@ export default function Administration({ close, mode }: { close: () => void; mod
   const [databaseDirty, setDatabaseDirty] = useState(false);
   const [securityDirty, setSecurityDirty] = useState(false);
   const [appearanceDirty, setAppearanceDirty] = useState(false);
+  const [logsDirty, setLogsDirty] = useState(false);
+  const [logsOpened, setLogsOpened] = useState(false);
+  useEffect(() => { if (tab === 'logs') setLogsOpened(true); }, [tab]);
   const [appearanceOpened, setAppearanceOpened] = useState(false);
   useEffect(() => { if (tab === 'appearance') setAppearanceOpened(true); }, [tab]);
   const id = useId();
@@ -1323,7 +1329,7 @@ export default function Administration({ close, mode }: { close: () => void; mod
       wide
       close={close}
       busy={busy}
-      dirty={databaseDirty || securityDirty || appearanceDirty}
+      dirty={databaseDirty || securityDirty || appearanceDirty || logsDirty}
     >
       <div className="administration-mode">
         <span className="administration-badge">{mode === 'local' ? t('本机管理模式') : t('管理员模式')}</span>
@@ -1463,6 +1469,9 @@ export default function Administration({ close, mode }: { close: () => void; mod
                     onDirty={setSecurityDirty}
                   />
                 )}
+              </section>
+              <section role="tabpanel" id={`${id}-panel-logs`} aria-labelledby={`${id}-tab-logs`} hidden={tab !== 'logs'} tabIndex={0}>
+                {logsOpened && allowed('logs.read') && <OperationalLogsPanel key={`${mode}:${actor}:${session.value?.user?.id ?? 'local'}`} writable={allowed('alerts.manage')} onBusy={setBusy} onDirty={setLogsDirty} />}
               </section>
               <section role="tabpanel" id={`${id}-panel-appearance`} aria-labelledby={`${id}-tab-appearance`} hidden={tab !== 'appearance'} tabIndex={0}>
                 {appearanceOpened && allowed('appearance.manage') && (

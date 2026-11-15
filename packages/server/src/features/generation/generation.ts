@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isLocalWorkflowStep } from '../../../../../shared/workflow-templates.js';
 import { archiveChapterRevision } from '../../../../../shared/chapter-history.js';
 import {
   chapterRequirementsSchema,
@@ -154,6 +155,7 @@ export function isWriter(step: Step): boolean {
   return step.kind === 'writer' || step.id === 'draft';
 }
 export function settingsForStep(step: Step, settings: RuntimeSettings): RuntimeSettings {
+  if (isLocalWorkflowStep(step)) return settings;
   const chosen = step.modelId
     ? settings.modelProfiles?.find((profile) => profile.id === step.modelId)
     : settings;

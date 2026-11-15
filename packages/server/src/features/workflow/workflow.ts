@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { WORKFLOW_PRESETS } from '../../../../../shared/workflow-templates.js';
 import { z } from 'zod';
 import { NODE_PRESETS } from '../../../../../shared/node-presets.js';
 import { SYSTEM_END_NODE_ID, SYSTEM_START_NODE_ID, type Project } from '../../../../../shared/types.js';
 import {
   createCharacterWorkflowGraph,
+  createSuperNovelWorkflowGraph,
   createWorkflowGraph,
   createWorldWorkflowGraph,
   normalizeWorkflow,
@@ -120,6 +122,8 @@ export const workflowService: FeatureService = {
               'audit',
               'writer',
               'custom',
+              'world-import',
+              'context-retrieval',
               'world',
               'outline',
               'plan',
@@ -241,14 +245,16 @@ export const workflowService: FeatureService = {
         .object({
           name: z.string().trim().min(1).max(80).default('新工作流'),
           template: z.boolean().optional(),
-          preset: z.enum(['chapter', 'world', 'character', 'blank']).default('chapter'),
+          preset: z.enum(WORKFLOW_PRESETS).default('chapter'),
         })
         .strict()
         .parse(req.body || {});
       const p = res.locals.project as Project;
       syncActiveWorkflow(p);
       const graph =
-        v.preset === 'world'
+        v.preset === 'super-novel'
+          ? createSuperNovelWorkflowGraph(v.name)
+          : v.preset === 'world'
           ? createWorldWorkflowGraph(v.name)
           : v.preset === 'character'
             ? createCharacterWorkflowGraph(v.name)

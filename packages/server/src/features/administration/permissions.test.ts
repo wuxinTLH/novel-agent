@@ -51,8 +51,18 @@ test('management endpoint permission matrix denies operations high-risk requests
       assert.equal((await request(role, '/status')).status, 200);
       assert.equal((await request(role, '/storage')).status, 200);
     }
-    for (const route of ['/users', '/turnstile', '/account/config', '/maintenance'])
+    for (const route of ['/users', '/turnstile', '/account/config', '/maintenance', '/logs', '/log-alerts'])
       assert.equal((await request('operations', route)).status, 403);
+    for (const role of ['superadmin', 'admin']) {
+      assert.equal((await request(role, '/logs')).status, 200);
+      assert.equal((await request(role, '/log-alerts')).status, 200);
+      assert.equal((await request(role, '/log-alerts', 'PUT', {}, 'invalid')).status, 403);
+    }
+    for (const role of ['operations', 'writer', 'user', 'garbage']) {
+      assert.equal((await request(role, '/LOGS/')).status, 403);
+      assert.equal((await request(role, '/LOG-ALERTS/')).status, 403);
+      assert.equal((await request(role, '/log-alerts', 'PUT', {})).status, 403);
+    }
     assert.equal((await request('operations', '/storage', 'PUT', {})).status, 403);
     assert.equal(
       (await request('operations', '/online-maintenance/tasks', 'POST', { kind: 'restore-plan' })).status,

@@ -1,3 +1,5 @@
+import { isLocalWorkflowStep } from '../../../../../shared/workflow-templates.js';
+import { executeLocalWorkflowStep } from './local-workflow.js';
 import { readSafeImage } from '../file-sandbox/safe-read.js';
 import { archiveChapterRevision } from '../../../../../shared/chapter-history.js';
 import { initialScheduleState, planWorkflowSchedule, readyScheduleNodes } from '../../../../../shared/workflow-scheduler.js';
@@ -565,6 +567,9 @@ export async function generate(
   generationContext: GenerationContext = defaultContext(p),
   onText?: (delta: string) => void,
 ): Promise<string> {
+  signal.throwIfAborted();
+  const step = p.steps.find(item => item.id === id);
+  if (step && isLocalWorkflowStep(step)) return executeLocalWorkflowStep(p, step, generationContext);
   if (settings.mode === 'demo') {
     await delay(900, undefined, { signal });
     return demo(p, id, generationContext);

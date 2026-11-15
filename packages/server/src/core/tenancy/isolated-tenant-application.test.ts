@@ -6,6 +6,7 @@ import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createHash } from 'node:crypto';
 import express from 'express';
+import { installOperationalLogSink } from '../logger.js';
 import sharp from 'sharp';
 import { AuthService } from '../../features/auth/auth.js';
 import {
@@ -390,6 +391,12 @@ test('online maintenance barrier drains workers, gates auth/business and resumes
   const old = f.tenant.contexts.get('root')!;
   const lease = await f.tenant.acquireQuiescence();
   lease.assertHeld();
+  const telemetry: string[] = [];
+  const uninstall = installOperationalLogSink(code => telemetry.push(code));
+  try {
+    assert.equal((await f.request('GET', '/api/health', undefined, { origin: 'https://evil.example' })).status, 403);
+    assert.deepEqual(telemetry, [], 'held backup lease cannot mutate logs through rejected traffic');
+  } finally { uninstall(); }
   assert.equal(old.worker.threadId, -1);
   assert.equal(f.tenant.contexts.size, 0);
   assert.equal((await f.request('GET', '/api/auth/session')).status, 503);

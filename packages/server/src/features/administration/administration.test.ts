@@ -7,6 +7,7 @@ import express, { type Request } from 'express';
 import { AuthService } from '../auth/auth.js';
 import { createAdministrationRouter, isLocalAdministrator } from './administration.js';
 import { readStorageProfiles } from '../../infrastructure/storage/storage-config.js';
+import { operationalLogs } from './operational-logs.js';
 
 const password = 'strong administration password 123!';
 function mockRequest(address: string, headers: Record<string, string | undefined> = {}): Request {
@@ -123,7 +124,7 @@ test('local administrator ignores forwarded identity and rejects LAN, DNS rebind
 test('LAN requests cannot obtain management token or profile data even with forwarded claims', async () => {
   const s = await setup(false, '192.168.1.22');
   try {
-    for (const route of ['/session', '/status', '/storage', '/users', '/maintenance', '/site-appearance']) {
+    for (const route of ['/session', '/status', '/storage', '/users', '/maintenance', '/site-appearance', '/logs', '/log-alerts']) {
       const response = await s.request(`/api/admin${route}`, 'GET', undefined, {
         'x-forwarded-for': '127.0.0.1',
         'x-forwarded-host': 'localhost',
@@ -269,4 +270,21 @@ test('authenticated administration requires acting admin password for resets, no
   } finally {
     await s.close();
   }
+});
+
+test('log endpoints validate filters/config and preserve local CSRF',async()=>{
+ const s=await setup();try{
+ operationalLogs(s.dir).record('HTTP_INTERNAL_ERROR');
+ const response=await s.request('/api/admin/logs?level=error&limit=1');assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');assert.equal((await response.json()).items[0].code,'HTTP_INTERNAL_ERROR');
+ for(const query of ['limit=999','limit=1&limit=2','offset=-1','secret=x','level=debug','from=nope'])assert.equal((await s.request('/api/admin/logs?'+query)).status,400);
+ const alerts=await s.request('/api/admin/log-alerts').then(r=>r.json());assert.equal(alerts.config.enabled,false);assert.ok(alerts.providers.every((p:{available:boolean})=>!p.available));
+ const {revision,...config}=alerts.config;const body={...config,expectedRevision:revision};
+ assert.equal((await s.request('/api/admin/log-alerts','PUT',body)).status,403);
+ const {csrfToken}=await s.request('/api/admin/session').then(r=>r.json());const headers={'x-admin-csrf':csrfToken};
+ assert.equal((await s.request('/api/admin/log-alerts','PUT',{...body,url:'https://example.com'},headers)).status,400);
+ assert.equal((await s.request('/api/admin/log-alerts','PUT',body,headers)).status,200);
+ assert.equal((await s.request('/api/admin/log-alerts','PUT',body,headers)).status,409);
+ assert.equal((await s.request('/api/admin/log-alerts','PUT',{...body,expectedRevision:1},{...headers,origin:'http://evil.example'})).status,403);
+ fs.writeFileSync(path.join(s.dir,'operational-logs.json'),'private corrupt payload');const failed=await s.request('/api/admin/logs');assert.equal(failed.status,503);assert.ok(!(await failed.text()).includes('private'));
+ }finally{await s.close();}
 });

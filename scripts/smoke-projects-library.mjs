@@ -61,7 +61,7 @@ try {
     stdio: 'ignore',
   });
   let ready = false;
-  for (let attempt = 0; attempt < 150; attempt++) {
+  for (let attempt = 0; attempt < 300; attempt++) {
     try {
       ready = (await fetch(`${base}/api/auth/session`)).ok;
     } catch {}
@@ -122,7 +122,12 @@ try {
     localStorage.setItem('novel-theme', 'mtf');
   }, first.id);
   await page.goto(`${base}/projects`);
-  await page.getByRole('heading', { name: /^全部作品/ }).waitFor();
+  try { await page.getByRole('heading', { name: /^全部作品/ }).waitFor(); }
+  catch (error) {
+    await page.screenshot({ path: path.join(screenshots, 'boot-failure.png'), fullPage: true });
+    console.error('Browser boot diagnostics:', JSON.stringify(errors));
+    throw error;
+  }
   await page.getByRole('button', { name: '管理控制台', exact: true }).waitFor();
   await page.getByLabel('排序', { exact: true }).selectOption('title');
   await page.getByLabel('排序', { exact: true }).selectOption('updated');
@@ -145,12 +150,42 @@ try {
   await page.getByRole('button', { name: '编辑作品设置：星海回函验收', exact: true }).click();
   await page.waitForURL(`${base}/project-settings`);
   assert.equal(await page.evaluate(() => localStorage.getItem('novel-project')), first.id);
+  // Project titles return to the novel workspace, including from settings.
+  const projectBreadcrumb = page.locator('.breadcrumbs').getByRole('button', { name: first.title, exact: true });
+  await projectBreadcrumb.click();
+  await page.waitForURL(`${base}/workflow`);
+  assert.equal(await page.evaluate(() => localStorage.getItem('novel-page')), 'workflow');
+  await page.goto(`${base}/assets`);
+  await projectBreadcrumb.click();
+  await page.waitForURL(`${base}/workflow`);
+  await projectBreadcrumb.click();
+  await page.waitForURL(`${base}/workflow`);
+  assert.equal(await page.evaluate(() => localStorage.getItem('novel-project')), first.id);
   await page.locator('.breadcrumbs').getByRole('button', { name: '全部作品', exact: true }).click();
   await page.getByRole('heading', { name: /^全部作品/ }).waitFor();
   await page.getByRole('button', { name: '新建作品', exact: true }).click();
   await page.getByPlaceholder('为你的故事起个名字').fill('新增作品验收');
   await page.getByRole('dialog').getByRole('button', { name: '创建小说', exact: true }).click();
   await page.waitForURL(`${base}/workflow`);
+  // Opt-in preset creation must preserve the default graph and never invoke a provider.
+  const createdProjectId = await page.evaluate(() => localStorage.getItem('novel-project'));
+  await page.getByRole('button', { name: '创建小说流', exact: true }).click();
+  const workflowDialog = page.getByRole('dialog');
+  await workflowDialog.locator('input[name="preset"][value="super-novel"]').check();
+  await workflowDialog.getByLabel('工作流名称', { exact: true }).fill('超级小说验收');
+  const createdWorkflowResponse = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/projects/${createdProjectId}/workflows`));
+  await workflowDialog.getByRole('button', { name: '创建', exact: true }).click();
+  const workflowResponse = await createdWorkflowResponse;
+  assert.equal(workflowResponse.status(), 201);
+  const superProject = await workflowResponse.json();
+  const superGraph = superProject.workflows.find(workflow => workflow.name === '超级小说验收');
+  assert.ok(superGraph);
+  assert.deepEqual(superGraph.steps.filter(step => step.kind !== 'start' && step.kind !== 'end').map(step => step.kind), ['world-import', 'context-retrieval', 'outline', 'conflict', 'foreshadow', 'plan', 'writer', 'audit']);
+  assert.equal(superGraph.workflow.autoGenerate, false);
+  assert.equal(superGraph.workflow.autoPublish, false);
+  assert.ok(superProject.workflows.some(workflow => workflow.id !== superGraph.id), 'default graph remains');
+  await workflowDialog.waitFor({ state: 'detached' });
+  await page.screenshot({ path: path.join(screenshots, 'super-workflow-desktop.png'), fullPage: true });
   await page.locator('.workspace-library-link').click();
   await page.reload();
   await page.getByRole('heading', { name: /^全部作品/ }).waitFor();

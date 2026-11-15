@@ -1,6 +1,7 @@
 import express, { type Request } from 'express';
 import { tokenUsageLedger, usageRange } from './token-usage.js';
 import { SiteAppearanceStore, appearanceHandler } from './appearance.js';
+import { operationalLogs, operationalLogsHandler } from './operational-logs.js';
 import { hasPermission, type Permission } from '../../../../../shared/permissions.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AuthService } from '../auth/auth.js';
@@ -72,6 +73,8 @@ export function createAdministrationRouter(options: {
     const route = req.path.toLowerCase().replace(/\/$/, '') || '/';
     let permission: Permission | undefined;
     if (route === '/site-appearance' && (read || req.method === 'PUT')) permission = 'appearance.manage';
+    else if (route === '/logs' && read) permission = 'logs.read';
+    else if (route === '/log-alerts' && (read || req.method === 'PUT')) permission = 'alerts.manage';
     else if (route === '/token-usage' && read) permission = 'usage.read';
     else if (route === '/status') permission = 'admin.status.read';
     else if (route === '/storage') permission = read ? 'storage.read' : 'storage.manage';
@@ -97,6 +100,10 @@ export function createAdministrationRouter(options: {
         .json({ code: 'ADMIN_PERMISSION_REQUIRED', error: '此角色没有执行该操作的权限。' });
     next();
   });
+  const logs = operationalLogs(options.dir);
+  router.get('/logs', operationalLogsHandler(logs, 'logs'));
+  router.get('/log-alerts', operationalLogsHandler(logs, 'alerts'));
+  router.put('/log-alerts', operationalLogsHandler(logs, 'update'));
   const appearance = options.appearance ?? new SiteAppearanceStore(options.dir);
   router.get('/site-appearance', appearanceHandler(appearance));
   router.put('/site-appearance', appearanceHandler(appearance, true));

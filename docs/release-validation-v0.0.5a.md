@@ -8,7 +8,22 @@
 - 当前增量：国际化、项目卡删除、历史章节状态和折叠、安全取消/保留平台记录本地删除、Token 管理统计、审阅工作台、前端 UTC+8、可配日志时区与章节连续性。
 - 不覆盖私有本地 `.mnemon/`、个人截图、Token 账本、真实配置或业务数据；不执行真实付费模型、平台、短信或邮件操作。
 
-## 同版本更新验证 / Same-version refresh validation
+## 本轮超级工作流与守护验证 / Current super-workflow and supervisor validation
+
+本轮包含超级小说模板、本地世界观导入与正式历史上下文、生产核心守护、管理员日志与告警预留接口、作品标题工作流跳转、文档与 Docker 入口。保持 v0.0.5a / 0.0.5-a，不修改其他历史 Release。以下历史数字不是本轮验收。
+
+| 本轮检查 / Current check | 结果 / Result |
+| --- | --- |
+| Full tests / build | Final serialized full suite: 800 tests, 799 passed, 0 failed/cancelled, 1 POSIX-only skip on Windows; 314132.4204 ms. Final root typecheck, server build (4 SQL resources) and web production build passed. Only existing Zod annotation and large-chunk build warnings remain |
+| Isolated browser | Projects library passed: real super-template creation and exact ordered node kinds, default template retained, auto-generate/publish off, title navigation and 1440/1100/768/390 widths. Administration passed: log filters, alert CAS/reserved channels, keyboard, backup/restore-plan and 1440/768/390 widths. Temporary data only, no paid/provider calls |
+| Guardian fixtures | Windows focused run: 12 passed, 0 failed, 1 POSIX-only test skipped. Isolated compiled real core passed ready IPC, HTTP health, graceful IPC shutdown, data-lock release and no restart. Linux/POSIX restart and descendant cleanup are not runtime-validated here. Windows intentionally fails closed on crash and does not auto-restart |
+| Locale / dependencies / privacy | Locale AST: 69 files, 2092 literal calls, 0 violations; 353 remaining literals/expressions require contextual review (not blanket exemptions). Eleven locale tests passed. Official npm registry production audit: 0 vulnerabilities (configured mirror returned unsupported POST 405, not an advisory result). Release filename/credential scan passed 473 files; private local artifacts excluded |
+| Docker | Compose configuration passed. Docker Engine named pipe unavailable; image build/container runtime not performed. Core/supervisor/container shutdown budgets are 20/25/30 seconds; outer restart disabled |
+| Archive / GitHub | Pending clean commit, source-byte/digest verification and explicit publication receipt; no future upload is self-certified by this report |
+
+第一次并发全量测试遇到既有 workflow API 6 秒就绪和数据库 Worker 5 秒时限失败；对应未改动的定向 14 项复测通过。随后串行测试的 TEMP 误设于仓库隐藏目录，导致根发现测试继承真实仓库祖先、静态托管因隐藏路径返回 404，同时 workflow 就绪仍超时；改用仓库外非隐藏临时目录再跑全量，不放宽断言或声称永久修复。构建时曾捕获新守护测试策略的字面量类型不匹配，已修正为受验证的数值策略类型，须以最终构建结果为准。
+
+## 上次同版本更新验证（历史） / Previous same-version refresh validation (historical)
 
 在用户明确授权后，现有 v0.0.5a 标签、说明和同名资产将更新至本次提交，npm 版本仍为 0.0.5-a；其他历史版本不变。先前下载的归档与校验和对应旧提交，不代表本次产物，必须重新下载校验。发布前保留原始归档用于追溯。
 

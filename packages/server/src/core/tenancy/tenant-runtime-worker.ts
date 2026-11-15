@@ -1,4 +1,5 @@
 import { isMainThread, parentPort, workerData } from 'node:worker_threads';
+import { installOperationalLogSink } from '../logger.js';
 import { installTokenUsageWorker } from '../../features/administration/token-usage-channel.js';
 import { closeChapterAnalyses } from '../../features/chapters/chapter-analysis.js';
 import http from 'node:http';
@@ -78,6 +79,7 @@ async function run(data: RuntimeData) {
     binding = activateScopedStorage(data.root, data.dir, data.ownerId);
     installPlatformAccountLockClient(createWorkerPlatformAccountLockClient(parentPort!, data.platformAccountLocks));
     installTokenUsageWorker(parentPort!);
+    installOperationalLogSink(code => parentPort!.postMessage({ type: 'operational-log', code }));
     context = createServiceContext(data.dir, data.inheritEnvironment);
     const app = createApplication(context, {
       port: data.port,

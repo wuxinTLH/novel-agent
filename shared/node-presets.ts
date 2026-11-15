@@ -1,5 +1,13 @@
 /** Defaults for newly created nodes only; never replace an author's saved prompt. */
 export const NODE_PRESETS: Record<string, { title: string; subtitle: string; prompt: string }> = {
+  'world-import': {
+    title: '世界观导入', subtitle: '本地读取已有世界观，不调用模型',
+    prompt: '读取当前作品的世界观资料；配置资料范围时仅导入所选世界观。只传递已保存原文，不修改设定、不读取外部地址。',
+  },
+  'context-retrieval': {
+    title: '上下文检索', subtitle: '本地检索目标章之前的已保存书稿',
+    prompt: '',
+  },
   world: {
     title: '资料解析', subtitle: '提炼可复用的设定与约束',
     prompt: '整理所选资料中的地理、时代、规则、势力与人物关系，提炼已确认事实、约束和待补充信息。以可复用的设定正文输出，不编写章节，不把推测当成事实；资料不足时明确标为待补充。',

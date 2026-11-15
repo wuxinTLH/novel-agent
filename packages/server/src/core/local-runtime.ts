@@ -115,7 +115,7 @@ export function acquireDataLock(dir: string) {
       if (owner.token === token) fs.unlinkSync(file);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-        logger.error('无法释放数据目录锁，请在进程结束后检查锁文件。');
+        logger.error('无法释放数据目录锁，请在进程结束后检查锁文件。', 'DATA_LOCK_RELEASE_FAILED');
     }
   };
 }

@@ -69,6 +69,8 @@ export interface Step {
     | 'audit'
     | 'writer'
     | 'custom'
+    | 'world-import'
+    | 'context-retrieval'
     | 'world'
     | 'outline'
     | 'plan'

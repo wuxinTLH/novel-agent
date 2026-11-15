@@ -39,8 +39,9 @@ services:
     pids_limit: 256
     mem_limit: 2g
     cpus: 2
-    stop_grace_period: 20s
-    restart: unless-stopped
+    stop_grace_period: 30s
+    # The internal supervisor owns bounded runtime retries; do not loop invalid startup.
+    restart: "no"
     logging:
       driver: json-file
       options:

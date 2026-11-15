@@ -471,11 +471,11 @@ test(
       );
       assert.equal((await request(url, 'PATCH', { workflow: { chapterCount: 101 } })).status, 400);
       // Every creatable kind must also survive edit and graph restoration validation.
-      for (const kind of ['agent', 'audit', 'writer', 'custom', 'world', 'outline', 'plan', 'expand', 'character', 'dialogue', 'scene', 'continuity', 'conflict', 'foreshadow', 'twist', 'climax']) {
+      for (const kind of ['agent', 'audit', 'writer', 'custom', 'world-import', 'context-retrieval', 'world', 'outline', 'plan', 'expand', 'character', 'dialogue', 'scene', 'continuity', 'conflict', 'foreshadow', 'twist', 'climax']) {
         response = await request(`${url}/nodes`, 'POST', { id: `config-${kind}`, title: kind, kind });
         assert.equal(response.status, 201, `${kind} creation`);
         p = await response.json() as Project;
-        assert.ok(p.steps.find(s => s.id === `config-${kind}`)!.prompt.length > 0);
+        assert.equal(typeof p.steps.find(s => s.id === `config-${kind}`)!.prompt, 'string');
         response = await request(url, 'PATCH', { steps: [{ id: `config-${kind}`, kind, prompt: `saved-${kind}` }] });
         assert.equal(response.status, 200, `${kind} editing`);
       }

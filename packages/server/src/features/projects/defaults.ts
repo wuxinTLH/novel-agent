@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { SUPER_NOVEL_STAGES } from '../../../../../shared/workflow-templates.js';
 import { NODE_PRESETS } from '../../../../../shared/node-presets.js';
 import {
   SYSTEM_END_NODE_ID,
@@ -177,6 +178,21 @@ export function createWorkflowGraph(name = '默认工作流', template = false):
   workflow.edges = template ? linearEdges(steps.map((step) => step.id)) : boundaryEdges();
   return { id: workflow.id!, name, steps, workflow, createdAt: now, updatedAt: now };
 }
+/** Rich opt-in chapter graph; the ordinary three-stage default stays unchanged. */
+export function createSuperNovelWorkflowGraph(name = '超级小说工作流'): WorkflowGraph {
+  const now = new Date().toISOString();
+  const steps: Step[] = [createSystemStep('start'), ...SUPER_NOVEL_STAGES.map(({ id, kind }, index) => ({
+    id, kind, ...NODE_PRESETS[kind], status: 'idle' as const, output: '', enabled: true,
+    position: { x: 250 + index * 280, y: 170 },
+  })), createSystemStep('end')];
+  steps.at(-1)!.position = { x: 250 + SUPER_NOVEL_STAGES.length * 280, y: 170 };
+  const workflow = createWorkflow(linearEdges(steps.map(step => step.id)), name);
+  workflow.outputWriterNodeId = 'draft';
+  workflow.auditNodeId = 'review';
+  workflow.maxParallelNodes = 1;
+  return { id: workflow.id!, name, steps, workflow, createdAt: now, updatedAt: now };
+}
+
 export function syncActiveWorkflow(p: Project) {
   const graphs = (p.workflows ||= []);
   if (!graphs.length) {

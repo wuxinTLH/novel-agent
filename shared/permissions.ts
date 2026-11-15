@@ -25,6 +25,7 @@ export const PERMISSION_MODULES = {
   security: { 'security.read': managers, 'security.manage': ['superadmin'] },
   usage: { 'usage.read': managers },
   appearance: { 'appearance.manage': managers },
+  logs: { 'logs.read': managers, 'alerts.manage': managers },
 } as const satisfies Record<string, Record<string, readonly RoleId[]>>;
 type Values<T> = T[keyof T];
 export type Permission = Values<{

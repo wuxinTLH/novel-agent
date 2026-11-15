@@ -1,7 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLogTime, logger, readLogTimeZone } from './logger.js';
+import { formatLogTime, logger, readLogTimeZone, installOperationalLogSink, emitBoundaryEvent } from './logger.js';
 
+test('operational sink receives only explicit codes, never runtime text, and failure does not replay business work', context => {
+  context.mock.method(console, 'error', () => {});
+  const events: string[] = [];
+  const remove = installOperationalLogSink(code => { events.push(code); });
+  try {
+    logger.error('private token and project text must not be forwarded');
+    logger.error('another private detail', 'HTTP_INTERNAL_ERROR');
+    assert.deepEqual(events, ['HTTP_INTERNAL_ERROR']);
+    emitBoundaryEvent('ORIGIN_REJECTED');
+    emitBoundaryEvent('ORIGIN_REJECTED');
+    assert.equal(events.filter(code => code === 'ORIGIN_REJECTED').length, 1);
+  } finally { remove(); }
+  const failing = installOperationalLogSink(() => { throw new Error('disk failure'); });
+  try { assert.doesNotThrow(() => logger.error('safe', 'HTTP_INTERNAL_ERROR')); }
+  finally { failing(); }
+});
 test('logs default to UTC+8 minute format without timezone suffix', () => {
   assert.equal(readLogTimeZone({}), 'Asia/Shanghai');
   assert.equal(formatLogTime(new Date('2026-11-07T05:03:04Z'), readLogTimeZone({})), '2026:11:07 13:03');

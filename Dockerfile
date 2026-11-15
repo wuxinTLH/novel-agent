@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Pin this tag to an independently verified digest in your deployment pipeline.
-FROM node:22.23.4-bookworm-slim AS build
+FROM node:24.22.2-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/server/package.json packages/server/package.json
@@ -13,7 +13,7 @@ COPY scripts ./scripts
 COPY public ./public
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
-FROM node:22.23.4-bookworm-slim AS runtime
+FROM node:24.22.2-bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="Novel Agent" \
       org.opencontainers.image.version="0.0.5a" \
       org.opencontainers.image.source="https://github.com/wuxinTLH/novel-agent"
@@ -33,4 +33,4 @@ USER node
 EXPOSE 3001
 VOLUME ["/app/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node", "--input-type=module", "-e", "const r=await fetch('http://127.0.0.1:3001/api/services/user');if(!r.ok)process.exit(1)"]
-CMD ["node", "build/packages/server/src/index.js"]
+CMD ["node", "build/packages/server/src/supervisor.js"]

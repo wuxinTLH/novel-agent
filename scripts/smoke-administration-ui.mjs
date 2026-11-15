@@ -152,12 +152,12 @@ try {
 
   stage = 'keyboard tab accessibility and unconfigured users explanation';
   const tabs = dialog.getByRole('tab');
-  assert.equal(await tabs.count(), 7);
+  assert.equal(await tabs.count(), 8);
   await dialog.getByRole('tab', { name: '站点外观', exact: true }).waitFor();
   const checkTab = async (tab) => {
     assert.equal(await tab.getAttribute('aria-selected'), 'true');
     assert.equal(await tab.getAttribute('tabindex'), '0');
-    assert.equal(await tab.evaluate((element) => document.activeElement === element), true);
+    await page.waitForFunction(element => document.activeElement === element, await tab.elementHandle());
     const panelId = await tab.getAttribute('aria-controls');
     assert.ok(panelId);
     const panel = page.locator(`[id="${panelId}"]`);
@@ -173,6 +173,9 @@ try {
   await overview.press('ArrowDown');
   await checkTab(usage);
   await usage.press('ArrowDown');
+  const logs = dialog.getByRole('tab', { name: '日志与告警', exact: true });
+  await checkTab(logs);
+  await logs.press('ArrowDown');
   await checkTab(users);
   await dialog
     .getByText('完成 CLI 引导后，刷新状态即可管理用户。登录认证仍保持原有设置。', { exact: true })
@@ -190,6 +193,36 @@ try {
   await checkTab(appearance);
   await appearance.press('ArrowRight');
   await checkTab(overview);
+
+  stage = 'operational logs and reserved alert policy';
+  await logs.click();
+  const logPanel = dialog.getByTestId('operational-logs-panel');
+  await logPanel.getByText('SERVICE_STARTED', { exact: true }).waitFor();
+  await logPanel.getByRole('combobox', { name: /^日志级别/ }).selectOption('warning');
+  await logPanel.getByRole('button', { name: '查询日志', exact: true }).click();
+  await logPanel.getByText('当前筛选下暂无日志。', { exact: true }).waitFor();
+  await logPanel.getByRole('combobox', { name: /^日志级别/ }).selectOption('');
+  await logPanel.getByRole('button', { name: '查询日志', exact: true }).click();
+  await logPanel.getByText('SERVICE_STARTED', { exact: true }).waitFor();
+  await logPanel.getByLabel('冷却时间（秒）', { exact: true }).fill('301');
+  await logPanel.getByRole('button', { name: '保存告警配置', exact: true }).click();
+  await page.waitForFunction(async base => (await (await fetch(base + '/api/admin/log-alerts')).json()).config.cooldownSeconds === 301, base);
+  const alertState = await (await fetch(`${base}/api/admin/log-alerts`)).json();
+  assert.equal(alertState.config.enabled, false);
+  assert.ok(alertState.providers.every(provider => provider.available === false));
+  for (const width of [1440, 768, 390]) {
+    await noOverflow(width, 'operational logs');
+    const geometry = await logPanel.evaluate(panel => {
+      const right = panel.getBoundingClientRect().right;
+      return { overflow: panel.scrollWidth - panel.clientWidth, controlsFit: [...panel.querySelectorAll('.operational-log-filters input, .operational-log-filters select, .operational-log-filters button')].every(el => el.getBoundingClientRect().right <= right + 1), checksFit: [...panel.querySelectorAll('input[type=checkbox]')].every(el => parseFloat(getComputedStyle(el).width) <= 16 && parseFloat(getComputedStyle(el).height) <= 16), checkWidths: [...panel.querySelectorAll('input[type=checkbox]')].map(el => ({rect: el.getBoundingClientRect().width, width: getComputedStyle(el).width, min: getComputedStyle(el).minWidth, max: getComputedStyle(el).maxWidth, padding: getComputedStyle(el).padding, box: getComputedStyle(el).boxSizing})) };
+    });
+    assert.ok(geometry.overflow <= 1 && geometry.controlsFit && geometry.checksFit, `log panel controls fit at ${width}: ${JSON.stringify(geometry)}`);
+  }
+  await page.screenshot({ path: path.join(screenshots, 'logs-mobile.png'), fullPage: true });
+  await logPanel.getByRole('button', { name: '保存告警配置', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(screenshots, 'alerts-mobile.png'), fullPage: true });
+  await noOverflow(1440, 'operational logs');
+  await page.screenshot({ path: path.join(screenshots, 'logs-desktop.png'), fullPage: true });
 
   stage = 'maintenance consent and real local backup';
   await backup.click();
@@ -299,7 +332,7 @@ try {
     'no browser runtime/console errors',
   );
   console.log(
-    'PASS: local toolbar, overview/sidebar, keyboard tabs, unconfigured users, consent gate, real backup → UI polling → known success selection → validation → offline restore-plan, collapsed/expanded CLI, 1440/768/390 overflow, unchanged auth/session, no browser runtime errors.',
+    'PASS: local toolbar, overview/sidebar, keyboard tabs, logs/filter/CAS policy/reserved channels/responsive geometry, unconfigured users, consent gate, real backup → UI polling → known success selection → validation → offline restore-plan, collapsed/expanded CLI, 1440/768/390 overflow, unchanged auth/session, no browser runtime errors.',
   );
   console.log(`Screenshots: ${screenshots}`);
 } catch (error) {

@@ -1,5 +1,20 @@
 # 更新记录
 
+## v0.0.5a 本轮更新：超级小说工作流、核心守护与运行日志
+
+- 新增可选超级小说模板：世界观导入、上下文获取、大纲、冲突、伏笔、章节规划、正文生成与一致性审校；前两个本地节点不调用模型，原有三阶段默认模板与已保存图不迁移。
+- 生产启动和 Docker 入口接入有界核心守护：启动错误不重试，运行崩溃退避且受滚动预算限制，正常停止不拉起；不删除锁、不重放生成或发布。
+- Docker 两阶段升级推荐 Node 24.22.2；Compose 外层不无限重启。作品标题点击进入小说工作流，更新日志集中到 CHANGELOG 与 GitHub Release。
+- 本轮保持 v0.0.5a / 0.0.5-a，仅替换该 Release 和对应标签/资产；验证和部署限制见[当前验证记录](docs/release-validation-v0.0.5a.md)。
+
+**English:** This refresh adds an opt-in super novel workflow (two local import/retrieval stages plus six model stages), bounded production core supervision, administrator-only operational logs and reserved warning/error alert adapters. Existing workflows and publishing approval boundaries remain unchanged. Docker uses Node 24.22.2, and project-title navigation opens the novel workflow. Only v0.0.5a is replaced; see the current validation report for platform and test limitations.
+
+### 运行日志与分级告警
+
+- 管理员、超级管理员新增运行日志查看入口，支持级别、类别、时间、关键字筛选和分页；不向运维管理员、作家开放。仅采集固定事件摘要，不保存正文、密钥、请求详情或租户身份。
+- 告警分为 warning / error，包含报错、中危、高危、系统错误、系统故障类别；支持修订冲突保护、等级阈值、类别和冷却时间。预留微信、飞书、钉钉、企业微信适配接口，默认关闭且不可用，不宣称已接通真实推送。
+
+
 ## v0.0.5a — 章节解析、用量统计与连续性 / Chapter analysis, usage analytics and continuity
 
 发布标签 `v0.0.5a`；npm/package SemVer `0.0.5-a`。本次汇总 v0.0.4a 之后的当前工作树更新，旧版说明和测试数字保留为历史记录。
@@ -40,7 +55,7 @@
 
 ## v0.0.3a — 完整工作树预发布 / Full-working-tree prerelease
 
-发布标签 `v0.0.3a`；npm/package SemVer `0.0.3-a`。本节汇总用户授权的完整工作树，以下旧版本、未发布增量及验证数字保留为历史记录，不当作本次全树验证结果。完整双语说明见 [RELEASE_NOTES](RELEASE_NOTES.md)。
+发布标签 `v0.0.3a`；npm/package SemVer `0.0.3-a`。本节汇总用户授权的完整工作树，以下旧版本、未发布增量及验证数字保留为历史记录，不当作本次全树验证结果。完整双语说明见 [更新记录](CHANGELOG.md) / [GitHub Releases](https://github.com/wuxinTLH/novel-agent/releases)。
 
 - server 注册先验证手机再确认邮箱，每次密码登录强制绑定手机短信验证，已启用 TOTP 时仍须额外完成；未绑定账号失败关闭。支持 Alibaba / Tencent 配置，停服 CLI `--phone` 引导及 `set-phone` 迁移；配置 Turnstile 时注册、登录和短信发放均服务端校验。
 - access 60 分钟、轮换 refresh 7 天、拒绝 refresh 重用、持久空闲上限 30 天；离线 8 天无法刷新。客户端只重试符合条件的读取，不自动重放写入；local 默认不变。
@@ -53,6 +68,14 @@
 [English unreleased summary](#english-unreleased-summary) · [English documentation index](docs/en/README.md)
 
 ## English unreleased summary
+
+- **Current v0.0.5a refresh:** optional super novel chain adds local world import/context retrieval and explicit outline/conflict/foreshadow/planning/writer/review stages without migrating defaults. Production/Docker use bounded core supervision, no startup-error loop, lock deletion or business replay; Compose avoids unlimited outer restarts. Only v0.0.5a is replaced, keeping package 0.0.5-a and every other release untouched. See the current validation report for actual checks and limitations.
+
+- **Operational logs and alerts:** administrator/superadmin-only sanitized log viewer, severity/category/time/search filters and pagination. Revision-protected alert policy supports warning/error thresholds, categories and cooldown; reserved WeChat/Feishu/DingTalk/WeCom adapters are disabled/unavailable by default, with no real vendor delivery claim.
+
+- **Release-log consolidation:** version history and release notes are maintained only in this CHANGELOG and [GitHub Releases](https://github.com/wuxinTLH/novel-agent/releases); README entries retain feature/usage guidance without version-grouped duplicate logs, and obsolete standalone release-note links are replaced.
+- **Docker runtime update:** both build and runtime stages move to the recommended Node.js 24.22.2, retaining non-root execution and CoreModel security boundaries.
+- **Project navigation:** clicking a project name opens its novel workflow by default.
 
 This is a maintained English summary of unreleased changes, not a translation of every historical release entry. Chinese entries and their original historical evidence remain below. Historical test counts are not refreshed by documentation work; no new real-service acceptance is claimed here.
 
@@ -73,6 +96,10 @@ This is a maintained English summary of unreleased changes, not a translation of
 **Validation boundaries:** local tests and browser stubs do not establish real paid-provider, platform review, SMTP/OIDC/Turnstile, proxy or vendor-database acceptance. MySQL/SQL Server are simulated-only; historical PostgreSQL v2 success is not v3 proof. The [benchmark report](scripts/benchmark-storage-report.md) retains historical simulated four-permit results (eight owners about 254–261 vs 64–66 ops/s; no SQL/network/disk evidence). Single-instance/local-loopback-or-server-HTTPS restrictions, partial localization, absent OS-level file isolation and non-atomic cross-database recovery remain explicit. See the [English acceptance record](docs/en/acceptance-checklist.md).
 
 ## 未发布
+
+- **更新日志集中**：版本更新记录与发布说明仅保留在本 CHANGELOG 与 [GitHub Releases](https://github.com/wuxinTLH/novel-agent/releases)；README 入口保留功能使用说明，不再按版本重复展示更新日志，移除独立发布说明并修复引用。
+- **Docker 更新**：构建与运行阶段统一使用项目推荐的 Node.js 24.22.2，保留非 root 运行及 CoreModel 安全边界。
+- **作品导航**：点击作品名称默认进入该作品的小说工作流。
 
 - **服务端手机与短信会话接入（进行中）**：server 启动前须配置 Alibaba China Dysmsapi/2017-05-25 或 Tencent SMS v20210111；CLI 管理员引导须提供 E.164 `--phone`，旧用户停服离线 `set-phone`，未绑定拒绝密码登录。注册须手机验证后邮箱确认，每次密码登录须短信验证（已启用 TOTP 还须额外通过）；已配置 Turnstile 对注册 / 登录 / 短信发放服务端校验。access 60 分钟、轮换 refresh 7 天、持久空闲上限 30 天；离线 8 天无法刷新，客户端仅重试可安全读取，不自动重放写操作。本机旧行为不变；真实短信送达、供应商接入和部署未验收，不作等保认证或公网生产保证。见[认证契约](packages/server/src/features/auth/README.md)、[部署指南](docs/deployment-modes.md)和[安全差距](docs/security-hardening.md)。
 

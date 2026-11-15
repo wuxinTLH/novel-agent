@@ -1,4 +1,4 @@
-import { logger } from './logger.js';
+import { logger, emitBoundaryEvent } from './logger.js';
 import express from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
@@ -15,8 +15,10 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext 
   installSecurityKernel(app, securityKernel);
   const originAllowed = createOriginPolicy(port, undefined, aliasPorts);
   app.use((req, res, next) => {
-    if (!originAllowed(req))
+    if (!originAllowed(req)) {
+      emitBoundaryEvent('ORIGIN_REJECTED');
       return res.status(403).json({ error: '只允许本机或局域网来源访问。', code: 'LOCAL_ORIGIN_REJECTED' });
+    }
     const requestPath = req.path.toLowerCase();
     if (requestPath === '/api' || requestPath.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
@@ -34,11 +36,13 @@ export function installHttpPolicy(app: express.Express, context: ServiceContext 
   const requestLimiter = createRequestLimiter();
   app.use('/api', (req, res, next) => {
     const result = requestLimiter.check(req.ip || 'local');
-    if (!result.allowed)
+    if (!result.allowed) {
+      emitBoundaryEvent('REQUEST_RATE_LIMITED');
       return res
         .status(429)
         .setHeader('Retry-After', String(result.retryAfter))
         .json({ error: '请求过于频繁，请稍后重试。', code: 'RATE_LIMITED', retryable: true });
+    }
     next();
   });
   app.use(express.json({ limit: '16mb' }));
@@ -103,7 +107,7 @@ export function installHttpFallbacks(app: express.Express, root: string, options
         runId: detail.runId,
       });
     }
-    logger.error('服务操作失败，请检查数据目录可用性与配置。');
+    logger.error('服务操作失败，请检查数据目录可用性与配置。', 'HTTP_INTERNAL_ERROR');
     res.status(500).json({
       error: '服务操作未完成，请先查询当前状态，再检查服务日志。',
       code: 'INTERNAL_ERROR',

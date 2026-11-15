@@ -1,3 +1,4 @@
+import { isLocalWorkflowStep, type WorkflowPreset } from '../../../../shared/workflow-templates';
 import { formatDateTime } from '../lib/dateTime';
 import ManualChapterModal from '../components/chapters/ManualChapterModal';
 import { ThemeLoader, themesLoad, resolveTheme, type ThemeRegistry } from '../lib/themes/themes-load';
@@ -142,7 +143,6 @@ type Page =
   | 'project-settings'
   | 'character-workflow'
   | 'world-workflow';
-type WorkflowPreset = 'chapter' | 'blank' | 'character' | 'world';
 type PendingRunSubmission = { key: string; request: RunRequest; requestHash: string };
 const routePages: Page[] = [
   'projects',
@@ -1545,17 +1545,13 @@ export default function App() {
             {page !== 'projects' && (
               <>
                 <ChevronRight size={14} aria-hidden="true" />
-                {page === 'project-settings' ? (
-                  <span aria-current="page">{project.title}</span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => void navigate('project-settings')}
-                    title={t('查看当前作品设置')}
-                  >
-                    {project.title}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => void navigate('workflow')}
+                  title={t('创作工作流')}
+                >
+                  {project.title}
+                </button>
                 <ChevronRight size={14} aria-hidden="true" />
                 {page === 'platforms' && selectedPlatform ? (
                   <>
@@ -2195,6 +2191,7 @@ export default function App() {
                               />
                             </div>
                           )}
+                          {isLocalWorkflowStep(step) ? <p role="note">{t("本地节点不调用模型；检索节点的任务文本用作检索词。")}</p> : <>
                           <label className="field-label">
                             {t("节点模型")}<span>{t("可为不同节点指定模型")}</span>
                           </label>
@@ -2221,7 +2218,8 @@ export default function App() {
                               </option>
                             ))}
                           </select>
-                          {step.kind !== 'writer' && step.id !== 'draft' && (
+                          </>}
+                          {!isLocalWorkflowStep(step) && step.kind !== 'writer' && step.id !== 'draft' && (
                             <label className="reuse-previous-output">
                               <input
                                 type="checkbox"
@@ -2244,7 +2242,7 @@ export default function App() {
                             </label>
                           )}
                           <label className="field-label">
-                            {t("关联设定")}<span>{t("留空则使用全部设定")}</span>
+                            {t("关联设定")}<span>{isLocalWorkflowStep(step) ? t("本地节点默认读取全部资料；修改后仅使用所选资料，清空选择表示不使用资料。") : t("留空则使用全部设定")}</span>
                           </label>
                           <select
                             className="node-setting-select asset-multi"
@@ -3448,6 +3446,14 @@ export default function App() {
                   onChange={() => setWorkflowCreatorPreset('chapter')}
                 />{' '}
                 {t("小说章节创作模板")}</label>
+              <label className="workflow-choice">
+                <input type="radio" name="preset" value="super-novel"
+                  checked={workflowCreatorPreset === 'super-novel'}
+                  onChange={() => setWorkflowCreatorPreset('super-novel')} />{' '}
+                {t("超级小说工作流模板")}
+              </label>
+              <p role="note">{t("可选增强模板：世界观导入 → 上下文检索 → 剧情编排 → 冲突设计 → 伏笔安排 → 章节规划 → 正文生成 → 一致性审校。")}</p>
+              <p role="note">{t("导入与检索在本地执行；其余六个节点在真实模式调用模型，增加耗时和费用。不会改动已有工作流或自动发布，候选仍需审校和作者确认。")}</p>
               <label className="workflow-choice">
                 <input
                   type="radio"

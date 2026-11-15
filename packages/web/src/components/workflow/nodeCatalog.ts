@@ -3,7 +3,7 @@ import { createTranslator, type TranslationKey } from '../../locals/core';
 import { getLocale } from '../../locals/store';
 export const NODE_CATEGORIES = [
   { title: '设定与人物', groups: [
-    { title: '世界设定', kinds: ['world', 'expand'] },
+    { title: '世界设定', kinds: ['world-import', 'world', 'expand'] },
     { title: '人物塑造', kinds: ['character'] },
   ] },
   { title: '剧情设计', groups: [
@@ -12,7 +12,7 @@ export const NODE_CATEGORIES = [
     { title: '高潮节拍', kinds: ['climax'] },
   ] },
   { title: '章节创作', groups: [
-    { title: '规划与成稿', kinds: ['plan', 'writer'] },
+    { title: '规划与成稿', kinds: ['context-retrieval', 'plan', 'writer'] },
     { title: '文本润色', kinds: ['dialogue', 'scene'] },
   ] },
   { title: '审校与扩展', groups: [

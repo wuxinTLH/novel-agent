@@ -13,7 +13,7 @@ test('appearance tab and component are explicitly permission gated with local su
   assert.equal(hasPermission('operations', 'appearance.manage'), false);
   assert.equal(hasPermission('writer', 'appearance.manage'), false);
   assert.match(administration, /mode === 'local'\s*\? 'superadmin'/);
-  assert.match(administration, /dirty=\{databaseDirty \|\| securityDirty \|\| appearanceDirty\}/);
+  assert.match(administration, /dirty=\{databaseDirty \|\| securityDirty \|\| appearanceDirty \|\| logsDirty\}/);
 });
 test('CAS conflict retains edits, blocks resubmission and requires explicit confirmed reload', () => {
   assert.match(source, /expectedRevision: draft.revision/);

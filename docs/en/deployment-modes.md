@@ -28,6 +28,15 @@ npm start
 
 Use `http://127.0.0.1:3001`. Local anonymous use grants no remote management rights; Host/Origin/Cookie/CSRF checks remain. Additional loopback gateways are local-only, do not expose LAN access and do not create independent data instances. Native local is recommended for desktop users, especially for first interactive Chromium platform login.
 
+
+## Core process supervision
+
+Production `npm start` and the Docker entrypoint launch the core through an independent Node.js supervisor; development hot reload is unchanged. Readiness requires the HTTP listener and optional gateway. Configuration/auth/lock/port failures before readiness are not retried; startup has a 60-second deadline. Unexpected post-ready exits use 1, 2, 4, 8 and 16-second backoff with at most five restarts in a rolling five-minute window, then exit for operator investigation. Normal shutdown, SIGINT/SIGTERM and parent disconnect do not restart the core. Shutdown uses private IPC for cleanup before the core’s 20-second cleanup deadline and supervisor force termination after 25 seconds.
+
+Automatic crash restart is supported on Linux/POSIX using an independent process group for old-generation cleanup. Windows has no native Job Object containment here; because crashed descendants cannot be proven gone, unexpected exit fails closed for operator investigation instead of restarting. Normal shutdown still uses IPC.
+
+This is not a health probe, OS service or HA implementation. It never deletes data locks or maintenance journals, or replays model/platform writes. Unknown outcomes still require reconciliation. Replacement waits for core exit and descendant cleanup. Containers retain init and a 30-second stop grace period; Compose uses `restart: "no"` so an outer infinite loop cannot bypass the internal budget. Avoid unbounded outer service restarts. Inspect exit diagnostics, locks and maintenance recovery before manually restarting; never delete a lock to force startup.
+
 ## Server: offline bootstrap before startup
 
 1. Stop the service and protect data, databases and external keys; the CLI also takes the data-directory lock.
@@ -55,4 +64,4 @@ The [Dockerfile](../../Dockerfile) defaults to build argument `ARG CoreModel=ser
 
 **Container local binds only container-internal `127.0.0.1`. Published host ports cannot reach that listener. Do not describe local plus port mapping as a usable local Docker deployment.** Prefer native local for desktop use; a browser outside the container needs server with every prerequisite and a real HTTPS proxy.
 
-No usable Docker Engine was available in the implementation environment: image build/run were not performed. Static configuration checks do not establish target-host acceptance. Chromium is not included. Mode checks, HTTP defenses and bounded local audit are not OS-kernel protection, immutable centralized audit, certification or public-production assurance. Single-instance/non-HA limits and independent external-service acceptance remain. The maintained prerelease remains `v0.0.5a` (package SemVer `0.0.5-a`), without a new version. Same-tag/asset replacement is explicitly authorized; old downloads/checksums do not identify the replacement assets. Download again and consult [release notes](../../RELEASE_NOTES.md) and [current validation](../release-validation-v0.0.5a.md); historical reports are not current acceptance.
+No usable Docker Engine was available in the implementation environment: image build/run were not performed. Static configuration checks do not establish target-host acceptance. Chromium is not included. Mode checks, HTTP defenses and bounded local audit are not OS-kernel protection, immutable centralized audit, certification or public-production assurance. Single-instance/non-HA limits and independent external-service acceptance remain. The maintained prerelease remains `v0.0.5a` (package SemVer `0.0.5-a`), without a new version. Same-tag/asset replacement is explicitly authorized; old downloads/checksums do not identify the replacement assets. Download again and consult [CHANGELOG](../../CHANGELOG.md) / [GitHub Releases](https://github.com/wuxinTLH/novel-agent/releases) and [current validation](../release-validation-v0.0.5a.md); historical reports are not current acceptance.

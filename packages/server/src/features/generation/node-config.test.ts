@@ -22,7 +22,7 @@ function useGraph(p: ReturnType<typeof createProject>, graph: ReturnType<typeof 
 }
 
 test('new defaults share task-specific presets without changing saved prompts or templates', () => {
-  assert.deepEqual(Object.keys(NODE_PRESETS).sort(), ['world', 'expand', 'outline', 'plan', 'writer', 'audit', 'custom', 'character', 'dialogue', 'scene', 'continuity', 'conflict', 'foreshadow', 'twist', 'climax'].sort());
+  assert.deepEqual(Object.keys(NODE_PRESETS).sort(), ['world-import', 'context-retrieval', 'world', 'expand', 'outline', 'plan', 'writer', 'audit', 'custom', 'character', 'dialogue', 'scene', 'continuity', 'conflict', 'foreshadow', 'twist', 'climax'].sort());
   const p = createProject('默认值');
   assert.equal(p.steps.find(s => s.id === 'draft')!.prompt, NODE_PRESETS.writer.prompt);
   assert.doesNotMatch(NODE_PRESETS.writer.prompt, /1500|2500/);

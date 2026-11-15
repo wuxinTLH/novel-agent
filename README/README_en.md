@@ -4,7 +4,7 @@ Language / 语言: [简体中文 (default)](README_zhCN.md) · [English](README_
 
 A local-first novel-writing workbench, deployment-mode prerelease `v0.0.5a`. It supports multiple projects and workflows, worldbuilding, character generation, chapter editing and generation, reference assets, model profiles, themes, and persistent data. The default remains single-user access without login. Authentication and tenant isolation require explicit local administration. **This is not a production deployment solution for the public Internet.**
 
-Target release tag: `v0.0.5a`; npm/package SemVer: `0.0.5-a`. See [bilingual release notes](../RELEASE_NOTES.md). Source and compiled-output archives require this release's build, isolated validation and asset checks before publication; no build or external-service acceptance is preclaimed. The [v0.0.4a validation report](../docs/release-validation-v0.0.4a.md) is historical evidence, not acceptance of this release. Project Skills are described in the [agent capability guide](../docs/agent-capabilities.md); the optional Playwright MCP bundle is **not installed, not running and not an application dependency**.
+Version history and release notes are maintained only in the [CHANGELOG](../CHANGELOG.md) and [GitHub Releases](https://github.com/wuxinTLH/novel-agent/releases). Project Skills are described in the [agent capability guide](../docs/agent-capabilities.md); the optional Playwright MCP bundle is **not installed, not running and not an application dependency**.
 
 ## Header / Footer and license
 
@@ -29,6 +29,8 @@ npm run build
 npm start
 ```
 
+Production `npm start` and Docker use bounded core supervision: no retries for startup errors, at most five crash restarts per five minutes, and no business-request replay. See [core supervision](../docs/en/deployment-modes.md#core-process-supervision).
+
 The production UI is served at `http://127.0.0.1:3001` by default. `CoreModel` accepts only local/server (unset: local; invalid: fail). Local binds only `127.0.0.1`, without LAN access. Server binds `0.0.0.0`, requires offline-enabled auth, forces hardened/audit and must be reached only through a same-origin real HTTPS proxy. See [deployment modes](../docs/en/deployment-modes.md), [security-hardening gaps](../docs/en/security-hardening.md) and the [auth contract](../packages/server/src/features/auth/README.md). Server requires an SMS provider before startup, verifies phone possession before registration, and requires bound-phone SMS on every password login; configured Turnstile is enforced on registration, login and SMS issuance. Access lasts 60 minutes, rotating refresh seven days with a persisted 30-day idle cap (eight days offline cannot refresh); unbound accounts fail closed. Native local defaults remain unchanged. The client refreshes eligible reads without automatically replaying writes; real vendor delivery and deployment still require independent acceptance. Fanqie login requires an interactive desktop on the machine running the backend to operate the isolated Chromium window; a headless remote server cannot complete the first manual login.
 
 Build separately with root `npm run build:web` and `npm run build:server` (including backend Workers/SQL assets). `SERVE_WEB` defaults to `true`; `false` runs APIs/uploads without a web build, HTML, themes or SPA fallback. When hosting, `WEB_DIST_DIR` chooses a trusted static output directory, default application-root `dist`; relative paths also resolve from the application root. A separate static server must proxy `/api` and `/uploads` on the same browser origin to one backend, without enabling cross-origin business CORS or removing Cookie/Origin/CSRF checks. HTTPS additionally requires an explicit trusted origin. See [separate deployment](../docs/en/user-guide.md#separate-builds-and-same-origin-deployment).
@@ -51,6 +53,13 @@ Aliases are entrances to the same application, not separate users or data instan
 The [hardening and Level 4 MLPS gap guide](../docs/en/security-hardening.md) ([中文](../docs/security-hardening.md)) distinguishes application controls from OS/network, Chinese cryptography/HSM, centralized tamper-resistant audit, dual control and assessment prerequisites. **There is no Level 4 compliance or certification claim.** Shared HTTP defenses, bounded audit chaining and limited `SECURITY_PROFILE=hardened` startup checks do not change single-instance/non-HA restrictions; native local authentication defaults off; server requires it enabled.
 
 The [Dockerfile](../Dockerfile) and [Compose example](../compose.yaml) provide non-root/read-only/minimal-capability settings with separate data/backup volumes. Build/runtime both use `${CoreModel:-server}`: default server forces hardened/audit and requires offline compiled-CLI auth bootstrap and actual HTTPS origin/independent keys before first startup behind a real TLS proxy. Explicit standard or disabled audit fails. Host ports default to loopback; container local binds only internal loopback and is unreachable through published ports. Prefer native local for desktop use. No Chromium is included, so first interactive Fanqie login is unsupported in the default remote container. Compose static validation passed, but Docker Engine was unavailable: image build/run were not verified. GitHub prerelease publication is not production or compliance acceptance.
+
+
+## Super novel workflow
+
+Choose the optional super novel preset when creating a novel workflow. Existing graphs and the default three-stage chapter template remain unchanged. The expanded chain is world import → context retrieval → outline → conflict → foreshadow → chapter planning → prose generation → consistency review. The first two stages assemble local project material/canonical earlier chapters without model calls; the remaining authoring stages use configured models and add cost. Explicit node asset selections restrict setting inputs. Future chapters and unadopted candidates must not become established historical facts.
+
+Prepare settings and canonical chapters, create the preset, then inspect assets, models and prompts. Import is execution input, not an asset/manuscript mutation. Context has finite size limits, not unlimited memory. Editing earlier manuscripts still invalidates dependent outputs. Demo or partial execution does not bypass review, adoption revisions or publication approval.
 
 ## Documentation
 
@@ -79,22 +88,22 @@ Use the [English documentation index](../docs/en/README.md) for all guides, pack
 - Workflow nodes can use the global model or an explicit model. Missing, disabled, or deleted explicit models require configuration repair rather than a silent fallback. Character nodes support templates and a count of 1–100.
 - Manual regeneration produces a candidate that must be adopted explicitly. Automatic mode may adopt the result only after review, hard validation, and original-version checks; failure stops the batch and preserves recovery material.
 
-### v0.0.5a current increment
+### Analysis, review and project management
 
 - **Chapter analysis:** explicitly choose a live model and request a chapter-number range or the latest N saved chapters. Reports persist independently for repeated reading, without changing manuscripts, history or candidates, or publishing anything. Reopening a report does not call the model. See [chapter analysis](../docs/en/chapter-analysis.md).
 - **Project deletion:** library cards delete the specified project without first activating it. Last-project, running-workflow and platform-busy safeguards remain. When the server permits it, a separately confirmed local-only deletion can preserve unknown platform records and duplicate-prevention evidence; it neither deletes remote content nor clears uncertainty or permits resending. See [platform guidance](../docs/en/fanqie-integration.md).
 - **Usage, review and continuity:** [Token statistics](../docs/en/token-usage.md) are admin/superadmin-only (strict local administration still applies without auth). The review workbench collapses and supports full-length reading. Editing/restoring a canonical chapter invalidates generation contexts for that chapter onward, requiring relevant upstream dependencies to be regenerated; later manuscripts are not automatically rewritten.
 - **Language and time:** fixed interface copy covers authoring, accounts, platforms and administration; user text, names, prompts, model output and unknown diagnostics remain unchanged. Timestamp display is fixed UTC+8 without changing API/storage timestamps. Application logs default to Asia/Shanghai; `LOG_TIME_ZONE` accepts a valid IANA zone. Usage date buckets remain UTC-based.
 
-This scope does not claim live-model, platform, database or other external-service acceptance.
+Feature availability does not establish live-model, platform, database or other external-service acceptance.
 
-### v0.0.4a authoring and shell updates
+### World stages and chapter management
 
 - **World stages:** create, rename and filter groups for worldbuilding text, uploaded references and map images; move records between a stage and Ungrouped. Existing assets remain ungrouped. Grouping organizes the library only: it does not filter generation context, and an empty node asset selection still references all assets. Choose explicit node references to limit context. Only empty stages can be deleted.
 - **Chapter paging and bulk deletion:** choose 20 / 50 / 100 chapters per page. Bulk mode defaults off, requires its explicit button, and resets on project switch/unmount. Select-all affects the current page only; explicitly selected chapters remain selected across pages with a total count, never an implicit whole-project selection. Selections pin revisions. Save or discard unsaved drafts for every selected chapter, including cached drafts, before deleting. The server atomically checks permissions, running state and all revisions; stale items reject the whole batch without partial deletion. Each batch permits at most 500 chapters. Deletion removes local canonical chapters and their embedded history, invalidates related workflow output, and preserves the chapter-number high-water mark: survivors are not renumbered and deleted numbers are not automatically reused. It never deletes remote platform text or withdraws in-flight remote requests.
 - **Shell and workflow families:** mode/account status sits below the sidebar logo; the permission-gated administration entry sits below the guide. Language is left of the theme control in the top bar. Creation buttons and dialogs match the current novel/character/worldbuilding family (创建小说流 / 创建人物流 / 创建世界观流), preserving matching templates and active family selections. Shared dialogs animate entry, exit and resize, respecting reduced motion while retaining focus, busy-state and dirty-edit safeguards.
 
-### Current platform state and automatic verification
+### Platform state and automatic verification
 
 An explicitly selected account may reuse its login window still owned by this backend; new connections remain separate and restart never adopts orphaned browsers. Idle polling/focus synchronization reads local connections, receipts and queue records only, not remote works, reconciliation or writes. Author identity readiness is separate from works-list readiness: require independent list-loading evidence; failure/incomplete loading is not an empty list.
 

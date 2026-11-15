@@ -1,9 +1,10 @@
-import { logger, readLogTimeZone } from './core/logger.js';
+import { logger, readLogTimeZone, installOperationalLogSink } from './core/logger.js';
 import { assertSupportedNodeVersion } from '../../../shared/node-runtime.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import express from 'express';
 import { createAdministrationRouter } from './features/administration/administration.js';
+import { operationalLogs } from './features/administration/operational-logs.js';
 import { SiteAppearanceStore, appearanceHandler } from './features/administration/appearance.js';
 import { createIsolatedTenantApplication } from './core/tenancy/isolated-tenant-application.js';
 import { acquireDataLock, appRoot } from './core/local-runtime.js';
@@ -53,6 +54,8 @@ const smsTransport = createSmsTransport();
 if (coreModel === 'server' && !smsTransport) throw new Error('SERVER_SMS_PROVIDER_REQUIRED');
 const releaseDataLock = acquireDataLock(dir);
 process.once('exit', releaseDataLock);
+const logStore = operationalLogs(dir);
+installOperationalLogSink(code => { logStore.record(code); });
 const securityAudit = securityProfile.audit ? new SecurityAuditLog(path.join(dir, 'security-audit')) : undefined;
 securityAudit?.write({ event: 'service.starting' });
 const manifest = readStorageManifest(dir);
@@ -155,6 +158,7 @@ const tenants = createIsolatedTenantApplication({
   waitForControlPlaneIdle: async () => {
     await auth.waitForIdle();
     await sqlconnect.waitForIdle();
+    await logStore.waitForIdle();
   },
 });
 const app = tenants.app;
@@ -164,26 +168,33 @@ let closing = false;
 let exitCode = 0;
 let gatewayStartup: Promise<void> = Promise.resolve();
 const server = app.listen(port, bindHost, () => {
-  logger.info(`Novel Agent API (${coreModel}): http://${bindHost}:${port}`);
+  logger.info(`Novel Agent API (${coreModel}): http://${bindHost}:${port}`, 'SERVICE_STARTED');
   if (closing) return;
   gatewayStartup = (async () => {
     try {
       gateway = await startLocalGateway(gatewayConfig);
+      if (!closing) notifySupervisor('novel-agent:ready');
       if (gateway.addresses.length)
-        logger.info(`Novel Agent local gateway: ${gateway.addresses.map(({ host, port: value }) => `http://${host}:${value}`).join(', ')}`);
+        logger.info(`Novel Agent local gateway: ${gateway.addresses.map(({ host, port: value }) => `http://${host}:${value}`).join(', ')}`, 'GATEWAY_STARTED');
     } catch {
       exitCode = 1;
-      logger.error('本机网关无法启动，请检查配置和端口是否被占用。');
+      logger.error('本机网关无法启动，请检查配置和端口是否被占用。', 'GATEWAY_FAILED');
       void shutdown();
     }
   })();
 });
 configureHttpServer(server);
+function notifySupervisor(type: 'novel-agent:ready' | 'novel-agent:stopping') {
+  if (process.connected && process.send) {
+    try { process.send({ type }, () => {}); } catch { /* Parent may already have exited. */ }
+  }
+}
 async function shutdown() {
   if (closing) return;
   closing = true;
+  notifySupervisor('novel-agent:stopping');
   server.close();
-  const deadline = setTimeout(() => process.exit(1), 10_000);
+  const deadline = setTimeout(() => process.exit(1), 20_000);
   deadline.unref();
   try {
     await gatewayStartup;
@@ -191,13 +202,23 @@ async function shutdown() {
     await onlineMaintenance.close();
     await closeRuntime();
     await authPersistence?.close?.();
+    await logStore.close();
     releaseDataLock();
     clearTimeout(deadline);
     process.exit(exitCode);
   } catch {
-    logger.error('关闭未完整完成，下次启动请检查任务和数据目录锁。');
+    logger.error('关闭未完整完成，下次启动请检查任务和数据目录锁。', 'SERVICE_SHUTDOWN_FAILED');
     process.exit(1);
   }
+}
+// Only the private child-process IPC channel can request supervised shutdown.
+if (process.send) {
+  process.once('disconnect', () => { void shutdown(); });
+  process.on('message', (message: unknown) => {
+    if (message && typeof message === 'object' && 'type' in message && 'signal' in message
+      && message.type === 'novel-agent:shutdown'
+      && (message.signal === 'SIGTERM' || message.signal === 'SIGINT')) void shutdown();
+  });
 }
 process.once('SIGINT', () => {
   void shutdown();
@@ -207,6 +228,6 @@ process.once('SIGTERM', () => {
 });
 server.on('error', () => {
   exitCode = 1;
-  logger.error('本机服务无法启动，请检查端口是否被占用。');
+  logger.error('本机服务无法启动，请检查端口是否被占用。', 'SERVICE_LISTEN_FAILED');
   void shutdown();
 });

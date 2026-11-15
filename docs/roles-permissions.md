@@ -29,6 +29,7 @@
 | `maintenance.restorePlan`、`maintenance.cancel`、`maintenance.commands` |     ✓      |   ✓    |     —      |  —   |
 | `appearance.manage`（Header / Footer 站点外观）                        |     ✓      |   ✓    |     —      |  —   |
 | `usage.read`（Token 使用统计，仅汇总运维元数据）                         |     ✓      |   ✓    |     —      |  —   |
+| `logs.read`、`alerts.manage`（运行日志与告警配置）                       |     ✓      |   ✓    |     —      |  —   |
 | `security.read`                                                         |     ✓      |   ✓    |     —      |  —   |
 | `security.manage`                                                       |     ✓      |   —    |     —      |  —   |
 

@@ -1,4 +1,6 @@
 import express from 'express';
+import { emitOperationalEvent, emitBoundaryEvent } from '../logger.js';
+import { OPERATIONAL_EVENT_CODES, type OperationalEventCode } from '../../../../../shared/operational-logs.js';
 import { bindTokenUsageWorker } from '../../features/administration/token-usage-channel.js';
 import { hasPermission } from '../../../../../shared/permissions.js';
 import http from 'node:http';
@@ -77,14 +79,18 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     // browser binding, PKCE and signed nonce before issuing a session.
     const oidcCallback = req.method === 'GET' && req.path === '/api/auth/account/oidc/callback';
     const localExtension = !options.enabled && /^\/api\/platform-extension(?:\/|$)/i.test(req.path) && req.get('host') === `127.0.0.1:${options.port}` && /^chrome-extension:\/\/[a-p]{32}$/.test(req.get('origin') || '') && !req.get('cookie');
-    if (!localExtension && !originAllowed(req, oidcCallback))
+    if (!localExtension && !originAllowed(req, oidcCallback)) {
+      if (!maintenance && !closing) emitBoundaryEvent('ORIGIN_REJECTED');
       return res.status(403).json({ code: 'LOCAL_ORIGIN_REJECTED', error: '只允许本机或局域网来源访问。' });
+    }
     if (req.path.toLowerCase().startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
       const quota = limiter.check(req.ip || 'local');
-      if (!quota.allowed)
+      if (!quota.allowed) {
+        if (!maintenance && !closing) emitBoundaryEvent('REQUEST_RATE_LIMITED');
         return res.status(429).setHeader('Retry-After', String(quota.retryAfter))
           .json({ code: 'RATE_LIMITED', retryable: true });
+      }
     }
     if (closing) return res.status(503).json({ code: 'TENANT_RUNTIME_CLOSING', retryable: false });
     const maintenanceStatus = /^\/api\/admin\/online-maintenance(?:\/|$)/i.test(req.path);
@@ -183,6 +189,15 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
       : new Worker(moduleUrl, { workerData, stdout: true, stderr: true });
     locks.bindWorker(worker, platformAccountLocks);
     bindTokenUsageWorker(worker, options.dir);
+    // Private worker channel accepts catalog codes only, never tenant text, paths or identity.
+    let logWindow = Date.now(), logCount = 0;
+    worker.on('message', (message: unknown) => {
+      if (!message || typeof message !== 'object' || !('type' in message) || message.type !== 'operational-log') return;
+      if (Date.now() - logWindow >= 60_000) { logWindow = Date.now(); logCount = 0; }
+      if (++logCount > 120 || !('code' in message) || typeof message.code !== 'string' ||
+          !(OPERATIONAL_EVENT_CODES as readonly string[]).includes(message.code)) return;
+      emitOperationalEvent(message.code as OperationalEventCode);
+    });
     // Worker/driver exceptions can contain credentials. Never forward their output.
     worker.stdout?.resume();
     worker.stderr?.resume();
@@ -199,6 +214,7 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     let poisonTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => fail(), 30_000);
     const fail = () => {
+      if (entry.state !== 'failed' && entry.state !== 'closed') emitOperationalEvent('TENANT_RUNTIME_FAILED');
       if (closing) shutdownFailures.add(entry);
       clearTimeout(timer);
       if (entry.state !== 'closed') entry.state = 'failed';
@@ -349,15 +365,6 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
           if (Date.now() > deadline) throw new Error('MAINTENANCE_DRAIN_TIMEOUT');
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
-        if (options.waitForControlPlaneIdle) {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            await Promise.race([
-              options.waitForControlPlaneIdle(),
-              new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('MAINTENANCE_CONTROL_DRAIN_TIMEOUT')), 30_000); }),
-            ]);
-          } finally { clearTimeout(timer); }
-        }
         for (const entry of contexts.values()) {
           if (entry.state === 'failed') throw new Error('MAINTENANCE_RUNTIME_UNHEALTHY');
           entry.state = 'closing';
@@ -373,6 +380,16 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
           if (!exited || entry.state !== 'closed') throw new Error('MAINTENANCE_RUNTIME_DRAIN_FAILED');
         }
         await Promise.allSettled([...active]);
+        // Final worker IPC may enqueue alerts; drain after every worker has exited.
+        if (options.waitForControlPlaneIdle) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              options.waitForControlPlaneIdle(),
+              new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('MAINTENANCE_CONTROL_DRAIN_TIMEOUT')), 30_000); }),
+            ]);
+          } finally { clearTimeout(timer); }
+        }
         if (shutdownFailures.size !== failedBefore.size) throw new Error('MAINTENANCE_RUNTIME_SHUTDOWN_FAILED');
         contexts.clear();
         capabilities.clear();

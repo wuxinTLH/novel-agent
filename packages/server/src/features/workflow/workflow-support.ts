@@ -47,6 +47,8 @@ export const editableStepSchema = z
         'audit',
         'writer',
         'custom',
+        'world-import',
+        'context-retrieval',
         'world',
         'outline',
         'plan',

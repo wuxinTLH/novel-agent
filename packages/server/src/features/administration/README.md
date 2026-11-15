@@ -1,5 +1,40 @@
 # Administration
 
+## Operational logs and reserved alert adapters
+
+`GET /api/admin/logs` requires `logs.read`; `GET/PUT /api/admin/log-alerts` requires
+`alerts.manage`. Both are limited to superadmin/admin, excluding operations/writer. Local
+auth-off retains strict loopback/Host/Origin checks and `x-admin-csrf` for writes; authenticated
+writes retain session CSRF. This is global sanitized control-plane metadata, not tenant content.
+
+Queries support exact level/category, canonical UTC ISO `from`/`to`, bounded text search,
+limit 1–200 (default 50), offset 0–10000. Levels are `info`, `warning`, `error` (canonical
+spelling, not `warnning`). Categories: runtime, error, medium-risk, high-risk, system-error,
+system-failure. Fixed event codes produce fixed messages: never arbitrary console/error text,
+request URLs, headers, account/tenant/project IDs, prompts, manuscripts or credentials. Startup,
+gateway, internal HTTP/workflow failures and tenant runtime faults are connected. Origin/rate
+rejections are sampled at most once per code per minute to bound hostile-request disk writes.
+Worker reports accept catalog codes only and are bounded to 120 events per minute per Worker.
+This is not complete forensic audit, historical backfill or outage delivery when the process is down.
+
+Alert GET/PUT returns `{config, providers}`; PUT accepts only `expectedRevision`, `enabled`,
+`minimumLevel` (warning/error), unique nonempty `categories`, `cooldownSeconds` (1–86400) and
+boolean `providers` (wechat/feishu/dingtalk/wecom). Defaults: disabled, warning threshold,
+300-second cooldown, five non-runtime categories, all providers disabled/unavailable. Revision
+conflicts return 409. Interfaces are injectable adapters, not implemented vendor clients. There
+are no webhook URL/secret fields and no actual external send with the shipped configuration.
+Delivery is bounded/deduplicated; uncertain outcomes are never blindly retried after failure/restart.
+`DATA_DIR/operational-logs.json` is independent of SQL and written only by the main process
+under the application data lock, with exclusive temporary files, fsync and atomic rename. Retention
+is a rolling 31 days, at most 10000 events, 1000 delivery records and 8 MiB; oldest entries are
+pruned. The pending adapter queue is at most 64, with bounded delivery timeouts. Corrupt, unsafe
+or unexpectedly deleted committed storage fails closed, never silently resets. Full-application
+backup includes this file; quiescence waits for the alert queue. This is a bounded synchronous
+local store, not a high-throughput collector or distributed durable delivery service.
+Telemetry failure must not turn successful business operations into retryable failures; the
+log viewer instead fails closed with sanitized 503. Existing security audit remains independent.
+
+
 Administration routes and their tests live here.
 
 ## Global safe site appearance

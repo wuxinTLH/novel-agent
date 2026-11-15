@@ -1,7 +1,9 @@
 import { appZhCN, appEn } from './app';
+import { superNovelZhCN, superNovelEn } from './super-novel';
 import { navigationZhCN, navigationEn } from './navigation';
 import { chapterAnalysisZhCN, chapterAnalysisEn } from './chapter-analysis';
 import { tokenUsageZhCN, tokenUsageEn } from './token-usage';
+import { operationalLogsZhCN, operationalLogsEn } from './operational-logs';
 import { reviewWorkspaceZhCN, reviewWorkspaceEn } from '../components/generation/reviewCopy';
 import { featuresZhCN, featuresEn } from './features';
 import { identityZhCN, identityEn } from './identity';
@@ -13,11 +15,13 @@ export const zhCN = {
   ...appZhCN,
   ...reviewWorkspaceZhCN,
   ...tokenUsageZhCN,
+  ...operationalLogsZhCN,
   ...featuresZhCN,
   ...identityZhCN,
   ...runtimeZhCN,
   ...accountPlatformZhCN,
   ...navigationZhCN,
+  ...superNovelZhCN,
   "把灵感，写成下一章": "把灵感，写成下一章",
   "生成、打磨、留存。在这里，让每一个字找到自己的位置。": "生成、打磨、留存。在这里，让每一个字找到自己的位置。",
   "文稿格式与阅读": "文稿格式与阅读",
@@ -288,11 +292,13 @@ export const en = {
   ...appEn,
   ...reviewWorkspaceEn,
   ...tokenUsageEn,
+  ...operationalLogsEn,
   ...featuresEn,
   ...identityEn,
   ...runtimeEn,
   ...accountPlatformEn,
   ...navigationEn,
+  ...superNovelEn,
   "把灵感，写成下一章": "Turn inspiration into your next chapter",
   "生成、打磨、留存。在这里，让每一个字找到自己的位置。": "Generate, refine and keep your writing. Give every word its place.",
   "文稿格式与阅读": "Document formatting & reading",

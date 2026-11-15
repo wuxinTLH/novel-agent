@@ -114,7 +114,7 @@ export const generationService: FeatureService = {
       };
       const handle = runner.start(p, runtime, request, key ? { key, requestHash } : undefined);
       void handle.promise.catch(() => {
-        logger.error('工作流执行或持久化失败；请检查数据目录和任务状态。');
+        logger.error('工作流执行或持久化失败；请检查数据目录和任务状态。', 'WORKFLOW_EXECUTION_FAILED');
       });
       res.setHeader('X-Run-Id', handle.run.id);
       res.status(202).json(p);
@@ -125,7 +125,7 @@ export const generationService: FeatureService = {
       const active = settings.activeModelId ? models.get(settings.activeModelId) : undefined;
       const runtime = { ...settings, ...(active || {}), mode: settings.mode, modelProfiles: Array.from(models.values()) };
       const handle = runner.start(p, runtime, {}, undefined, { runId: String(req.params.runId), fingerprint: body.snapshotFingerprint });
-      void handle.promise.catch(() => logger.error('恢复任务执行或持久化失败；请检查任务状态。'));
+      void handle.promise.catch(() => logger.error('恢复任务执行或持久化失败；请检查任务状态。', 'WORKFLOW_RECOVERY_FAILED'));
       res.setHeader('X-Run-Id', handle.run.id);
       res.status(202).json(p);
     });

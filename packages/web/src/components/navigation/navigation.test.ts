@@ -54,6 +54,13 @@ test('explicit header colors override theme specificity without erasing inherite
   assert.match(general, /font-size: var\(--navigation-font-size, 14px\)/);
   assert.match(general, /padding-block: var\(--navigation-padding-y, 12px\)/);
 });
+
+test('project breadcrumb opens the guarded novel workflow instead of settings', () => {
+  const app = readFileSync(new URL('../../app/App.tsx', import.meta.url), 'utf8');
+  const breadcrumbs = app.slice(app.indexOf('breadcrumbs={<>'), app.indexOf('<div className="page-content">'));
+  assert.match(breadcrumbs, /onClick=\{\(\) => void navigate\('workflow'\)\}[\s\S]*?\{project.title\}/);
+  assert.doesNotMatch(breadcrumbs, /navigate\('project-settings'\)/);
+});
 test('App retains guarded breadcrumb navigation, portal slots and all page-local footers', () => {
   const app = readFileSync(new URL('../../app/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /<NavigationHeader[\s\S]*?onSettings=\{\(\) => \{ void navigate\('settings'\)/);

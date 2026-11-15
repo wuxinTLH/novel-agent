@@ -27,6 +27,7 @@ Weights are display/sort metadata, **not permission inheritance**. Operations ha
 | `maintenance.restorePlan`, `maintenance.cancel`, `maintenance.commands` | ✓ | ✓ | — | — |
 | `appearance.manage` (Header / Footer site appearance) | ✓ | ✓ | — | — |
 | `usage.read` (aggregate Token usage metadata only) | ✓ | ✓ | — | — |
+| `logs.read`, `alerts.manage` (operational logs and alert configuration) | ✓ | ✓ | — | — |
 | `security.read` | ✓ | ✓ | — | — |
 | `security.manage` | ✓ | — | — | — |
 

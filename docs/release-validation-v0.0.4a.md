@@ -40,4 +40,4 @@ Completed checks:
 - MySQL/SQL Server simulated tests and historical PostgreSQL evidence are not current vendor-database acceptance.
 - Browser fixtures are synthetic and do not prove remote platform DOM stability. Unknown remote results remain protected from blind resend; local chapter deletion never deletes remote drafts.
 - Single-instance/non-HA, same-origin HTTPS server deployment, authentication/CSRF/tenant boundaries and independent external-key retention remain mandatory. This is a prerelease, not compliance certification or public-production readiness.
-- Archive delivery contains tracked source plus compiled web/server output and a commit manifest, but no installed dependencies or Chromium. Installation and upgrade instructions are in [release notes](../RELEASE_NOTES.md).
+- Archive delivery contains tracked source plus compiled web/server output and a commit manifest, but no installed dependencies or Chromium. Installation and upgrade instructions are in [CHANGELOG](../CHANGELOG.md) / [GitHub Releases](https://github.com/wuxinTLH/novel-agent/releases).
