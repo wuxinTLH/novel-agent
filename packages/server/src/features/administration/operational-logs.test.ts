@@ -42,15 +42,31 @@ test('reserved unavailable providers report unsupported without network; injecte
  const restarted=new OperationalLogsStore(f.dir,{now:()=>now,transports:{wechat:{send:async()=>{calls++;return 'failed';}}}});await restarted.waitForIdle();restarted.record('HTTP_INTERNAL_ERROR');await restarted.waitForIdle();assert.equal(calls,1);now+=400000;restarted.record('HTTP_INTERNAL_ERROR');await restarted.waitForIdle();assert.equal(calls,2);assert.equal(restarted.deliveries().at(-1)?.status,'failed');
  }finally{f.clean();}
 });
-test('timeout/exception are unknown, no retry; queue stays bounded and can close',async()=>{
+test('timeout/exception are unknown, no retry; queue stays bounded and unresolved close fails',async()=>{
  const f=fixture();try{let calls=0;let now=Date.now();const s=new OperationalLogsStore(f.dir,{now:()=>now,deliveryTimeoutMs:5,transports:{wechat:{send:async()=>{calls++;return await new Promise(()=>{});}}}});enabled(s);
  for(let i=0;i<MAX_ALERT_QUEUE+5;i++){now+=400000;s.record('HTTP_INTERNAL_ERROR');}
- await s.waitForIdle();assert.equal(calls,1);assert.ok(s.deliveries().every(d=>d.status==='unknown'));await s.close();assert.throws(()=>s.record('SERVICE_STARTED'),/UNAVAILABLE/);
+ await assert.rejects(s.waitForIdle(),/UNAVAILABLE/);assert.equal(calls,1);assert.ok(s.deliveries().every(d=>d.status==='unknown'));await assert.rejects(s.close(),/UNAVAILABLE/);
  }finally{f.clean();}
  const g=fixture();try{const s=new OperationalLogsStore(g.dir,{transports:{wechat:{send:async()=>{throw new Error('secret');}}}});enabled(s);s.record('HTTP_INTERNAL_ERROR');await s.waitForIdle();assert.equal(s.deliveries()[0].status,'unknown');assert.ok(!fs.readFileSync(g.file,'utf8').includes('secret'));}finally{g.clean();}
 });
 test('disabled config invalidates queued delivery before side effects',async()=>{
  const f=fixture();try{let calls=0;const s=new OperationalLogsStore(f.dir,{transports:{wechat:{send:async()=>{calls++;return 'sent';}}}});enabled(s);s.record('HTTP_INTERNAL_ERROR');const {revision,...config}=s.alerts().config;s.updateAlerts({...config,expectedRevision:revision,enabled:false});await s.waitForIdle();assert.equal(calls,0);assert.equal(s.deliveries()[0].status,'unknown');}finally{f.clean();}
+});
+
+test('timed-out transport must settle before quiescence or close can succeed',async()=>{
+ const f=fixture();let release!:()=>void;let aborted!:()=>void;
+ const timeoutObserved=new Promise<void>(resolve=>{aborted=resolve;});
+ const pending=new Promise<void>(resolve=>{release=resolve;});
+ const s=new OperationalLogsStore(f.dir,{deliveryTimeoutMs:5,transports:{wechat:{send:async(_event,signal)=>{signal.addEventListener('abort',aborted,{once:true});await pending;return 'sent';}}}});
+ try {
+  enabled(s);s.record('HTTP_INTERNAL_ERROR');await timeoutObserved;
+  await assert.rejects(s.waitForIdle(),/OPERATIONAL_LOGS_UNAVAILABLE/);
+  await assert.rejects(s.close(),/OPERATIONAL_LOGS_UNAVAILABLE/);
+  assert.equal(s.deliveries()[0].status,'unknown');
+  release();await pending;await new Promise<void>(resolve=>setImmediate(resolve));
+  await s.waitForIdle();await s.close();
+  assert.equal(s.deliveries()[0].status,'unknown');
+ }finally{release();f.clean();}
 });
 
 test('directory and hard-linked files cannot become the control-plane store',()=>{

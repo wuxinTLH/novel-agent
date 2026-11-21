@@ -16,6 +16,17 @@ import {
 
 const policyPort = 3001;
 
+test('normal initialization discovery is exact read-only and behind HTTP boundary without tenant startup', async t => {
+  const f = await fixture(t, true);
+  const response = await f.request('GET', '/api/init/status');
+  assert.equal(response.status, 200); assert.deepEqual(response.body, { required: false });
+  assert.equal(response.headers['cache-control'], 'no-store');
+  assert.equal((await f.request('GET', '/api/init/status', undefined, { origin: 'https://evil.example' })).status, 403);
+  for (const [method, route] of [['HEAD', '/api/init/status'], ['POST', '/api/init/status'], ['GET', '/API/init/status'], ['GET', '/api/init/config']])
+    assert.equal((await f.request(method, route)).status, 401);
+  assert.equal(f.tenant.contexts.size, 0);
+});
+
 test('explicit loopback aliases share outer and worker origin policy without weakening CSRF', async (t) => {
   const f = await fixture(t, false, [], [5174, 5175]);
   for (const port of [5174, 5175]) {
@@ -132,7 +143,7 @@ async function fixture(t: TestContext, enabled = false, services: IsolatedTenant
                 status: res.statusCode!,
                 bytes,
                 headers: res.headers,
-                body: res.headers['content-type']?.includes('application/json')
+                body: bytes.length > 0 && res.headers['content-type']?.includes('application/json')
                   ? JSON.parse(bytes.toString())
                   : undefined,
               });

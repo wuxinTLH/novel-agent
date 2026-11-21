@@ -26,6 +26,7 @@ import {
 } from '../generation/engine.js';
 import { Store } from '../projects/store.js';
 import type { Project } from '../../../../../shared/types.js';
+import { supervisorPolicy } from '../../core/supervisor.js';
 
 test('context includes assets, upstream results, and only the latest three chapters', () => {
   const p = starterProject();
@@ -85,7 +86,9 @@ test('interrupted runs recover on restart and cancellation preserves completed r
   }
 });
 
-test('model adapter sends context and handles provider failures without exposing response secrets', async () => {
+test('model adapter sends context and handles provider failures without exposing response secrets', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-model-adapter-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   let responseStatus = 200;
   let captured: Record<string, unknown> = {};
   const server = createHttpServer(async (req, res) => {
@@ -115,10 +118,11 @@ test('model adapter sends context and handles provider failures without exposing
   };
   try {
     assert.equal(
-      await generate(createProject('测试'), 'plan', config, '', new AbortController().signal),
+      await generate(createProject('测试'), 'plan', config, dir, new AbortController().signal),
       '模型测试输出',
     );
     assert.equal(captured.model, 'test-model');
+    assert.ok(fs.existsSync(path.join(dir, 'token-usage.json')));
     const selected = createProject('资料选择测试');
     selected.assets = [
       {
@@ -141,7 +145,7 @@ test('model adapter sends context and handles provider failures without exposing
       },
     ];
     selected.steps.find((step) => step.id === 'plan')!.assetIds = ['text'];
-    assert.equal(await generate(selected, 'plan', config, '', new AbortController().signal), '模型测试输出');
+    assert.equal(await generate(selected, 'plan', config, dir, new AbortController().signal), '模型测试输出');
     const userMessage = (captured.messages as { role: string; content: unknown }[]).find(
       (message) => message.role === 'user',
     )!;
@@ -150,7 +154,7 @@ test('model adapter sends context and handles provider failures without exposing
     assert.doesNotMatch(userMessage.content as string, /未选中的图片/);
     responseStatus = 401;
     await assert.rejects(
-      generate(createProject('测试'), 'plan', config, '', new AbortController().signal),
+      generate(createProject('测试'), 'plan', config, dir, new AbortController().signal),
       /HTTP 401/,
     );
   } finally {
@@ -241,7 +245,7 @@ test('protocol adapters build official requests and parse nested text without le
 
 test(
   'API supports projects, uploads, dependency checks, execution, editing and persistence',
-  { timeout: 25000 },
+  { timeout: supervisorPolicy.startupTimeoutMs + 25_000 },
   async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-api-'));
     const probe = createServer();
@@ -253,10 +257,11 @@ test(
       env: { ...process.env, PORT: String(port), DATA_DIR: dir, MODEL_API_KEY: '' },
       stdio: 'pipe',
     });
-    let logs = '';
-    child.stderr.on('data', (b) => {
-      logs += b.toString();
-    });
+    let stdoutBytes = 0, stderrBytes = 0;
+    let spawnErrorCode: string | undefined;
+    child.stdout.on('data', (b: Buffer) => { stdoutBytes += b.length; });
+    child.stderr.on('data', (b: Buffer) => { stderrBytes += b.length; });
+    child.on('error', (error: NodeJS.ErrnoException) => { spawnErrorCode = error.code; });
     let csrfToken = '';
     const request = async (
       url: string,
@@ -274,16 +279,28 @@ test(
       });
     try {
       let ready = false;
-      for (let i = 0; i < 60; i++) {
+      let lastStatus: number | undefined, lastFetchCode: string | undefined;
+      const readinessStarted = Date.now();
+      // Source startup includes cold tsx compilation; use the production readiness budget,
+      // not a cache-dependent six-second polling count. Business assertions remain unchanged.
+      while (Date.now() - readinessStarted < supervisorPolicy.startupTimeoutMs) {
         try {
-          if ((await request('/health')).ok) {
+          const health = await request('/health');
+          lastStatus = health.status;
+          await health.arrayBuffer();
+          if (health.ok) {
             ready = true;
             break;
           }
-        } catch {}
+        } catch (error) {
+          const cause = (error as { cause?: { code?: unknown } }).cause;
+          if (typeof cause?.code === 'string') lastFetchCode = cause.code;
+        }
         await delay(100);
       }
-      assert.ok(ready, logs);
+      // Counts and transport codes distinguish pre-listen failures without exposing runtime text.
+      assert.ok(ready, JSON.stringify({ elapsedMs: Date.now() - readinessStarted, lastStatus, lastFetchCode,
+        exitCode: child.exitCode, signalCode: child.signalCode, spawnErrorCode, stdoutBytes, stderrBytes }));
       csrfToken = (await (await request('/platforms/session')).json()).csrfToken;
       let response = await request('/projects', 'POST', {
         title: '自动化测试',

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, access } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -42,6 +43,29 @@ async function run(mode: string, onEvent?: (event: SupervisorEvent, signals: Eve
     return { code, starts, events, stopped };
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
+
+test('stop during starting notification never spawns an unowned child', async () => {
+  const signals = new EventEmitter();
+  const events: SupervisorEvent[] = [];
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'novel-supervisor-stop-'));
+  const entry = path.join(dir, 'fixture.mjs');
+  const marker = path.join(dir, 'spawned');
+  await writeFile(entry, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'spawned');`);
+  try {
+    const code = await supervise({
+      entry, signals, policy,
+      onEvent(event) {
+        events.push(event);
+        if (event.type === 'starting') signals.emit('SIGTERM');
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(events.map(event => event.type), ['starting', 'stopped']);
+    assert.equal(signals.listenerCount('SIGTERM'), 0);
+    await delay(500);
+    await assert.rejects(access(marker), {code: 'ENOENT'});
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
 
 test('production supervisor has immutable bounded defaults and validates injected policy', () => {
   assert.equal(Object.isFrozen(supervisorPolicy), true);

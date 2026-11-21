@@ -172,8 +172,30 @@ try {
   await overview.focus();
   await overview.press('ArrowDown');
   await checkTab(usage);
+  let releaseAlertRead;
+  const alertReadGate = new Promise(resolve => { releaseAlertRead = resolve; });
+  let alertReadStarted;
+  const alertReadObserved = new Promise(resolve => { alertReadStarted = resolve; });
+  const holdAlertRead = async route => {
+    alertReadStarted();
+    await alertReadGate;
+    await route.continue();
+  };
+  await page.route('**/api/admin/log-alerts', holdAlertRead);
   await usage.press('ArrowDown');
   const logs = dialog.getByRole('tab', { name: '日志与告警', exact: true });
+  try {
+    await alertReadObserved;
+    await page.waitForFunction(element => element.getAttribute('aria-busy') === 'true', await dialog.elementHandle());
+    await checkTab(logs);
+    await logs.press('ArrowDown');
+    assert.equal(await logs.getAttribute('aria-selected'), 'true', 'busy keyboard navigation stays locked');
+    await users.evaluate(element => element.click());
+    assert.equal(await logs.getAttribute('aria-selected'), 'true', 'busy pointer activation stays locked');
+    assert.equal(await dialog.getByRole('button', { name: '关闭弹窗', exact: true }).isDisabled(), true, 'busy close remains locked');
+  } finally { releaseAlertRead(); }
+  await page.waitForFunction(element => element.getAttribute('aria-busy') === 'false', await dialog.elementHandle());
+  await page.unroute('**/api/admin/log-alerts', holdAlertRead);
   await checkTab(logs);
   await logs.press('ArrowDown');
   await checkTab(users);

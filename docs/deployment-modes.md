@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | Node HTTP 监听 | 仅 `127.0.0.1` | `0.0.0.0` |
 | 访问方式 | 仅本机；不能通过局域网直接访问 | 仅通过受控的同源真实 HTTPS 反向代理；防火墙阻断后端直连 |
-| 认证 | 可选，默认关闭 | 必须先离线启用，未启用则启动失败 |
+| 认证 | 可选，默认关闭 | 业务运行必须已启用；仅全新目录可进入隔离 Init |
 | 安全策略 | 默认 `standard`，可显式选择 `hardened` | 强制 `hardened`，显式 `SECURITY_PROFILE=standard` 拒绝启动 |
 | 审计 | standard 默认关闭，可显式开启 | 强制开启，显式 `SECURITY_AUDIT=false` 拒绝启动 |
 | 本机网关 | 默认关闭，可显式开启回环别名 | 必须关闭 |
@@ -37,7 +37,36 @@ npm start
 
 守护不会删除数据锁、清空维护日志、重放模型请求或平台写入，也不是健康探针、操作系统服务或高可用方案。未知生成/发布结果仍须人工核对；核心退出并清理其子进程后才允许启动替代实例。容器保留 init 和 30 秒停止宽限，Compose 使用 `restart: "no"`，防止外层无限重启绕过内部预算。部署为系统服务时同样不要配置无上限的外层重启。故障后先检查退出信息、数据锁与维护恢复状态，再人工启动；不得直接删除锁文件。
 
-## 服务端：先离线引导，再启动
+## 初始化临时测试页面
+
+在正常 Web 服务或前端开发服务打开 `/init-test`（例如 `http://127.0.0.1:3001/init-test`）。该页使用虚构配置和页面内存模拟，供测试读取配置、缺失项校验与完成提示；不调用真实初始化 API、不读取 Docker 环境、不保存配置或创建管理员。请只填写测试数据。可重置再测，刷新会丢弃所有测试状态；模拟成功无需重启服务。全新 Server 的受限 Init 服务不会开放该测试路由，请使用正常 Web / 开发入口；真实初始化仍访问 `/init`。
+
+## Server Core 首次启动 Init
+
+全新 `CoreModel=server` 数据目录可先进入独立 Init 页面：只提供初始化页面与受保护的配置接口，不加载业务、租户或普通管理 API。已有数据目录不重新引导；认证或存储配置损坏仍须停服检查，不能用向导接管已有实例。local 模式不显示此页面。
+
+- 页面自动识别当前进程环境，包括 Compose 注入的 HTTPS origin、模型 / 平台加密密钥及短信提供商配置；不访问 Docker socket，也不读取宿主机任意文件。非秘密值预填，秘密仅显示“已配置”，未配置项留空并提示添加。非空环境配置优先于向导保存值。
+- 操作者必须持有 `NOVEL_INIT_TOKEN`（至少 32 字符）或从受控数据卷中的 `.init-token` 读取自动生成令牌。令牌不打印到日志，不进入 URL 或浏览器持久存储；保护数据卷与主机权限。Compose 可通过同名环境变量注入令牌，不要提交真实令牌。
+- 未配置 HTTPS origin 时，仅通过受控宿主回环地址 / 隧道访问 Init；不要开放后端端口到公网。配置 origin 时保留精确 Host / Origin，并通过真实 HTTPS 代理访问。初始化页面不能安装证书，也不使 HTTP 业务安全可用。
+- 补齐精确 HTTPS origin、两个独立且各至少 32 字符的高熵密钥、所选短信提供商的完整配置，以及首个超级管理员的用户名、手机号和强密码。手机号选择区号后只输入本地号码：`+86` 为中国大陆 11 位手机号，`+1` 为符合 NANP 规则的 10 位号码；提交时组合成 E.164，当前 Init 不声称支持所有国家地区。配置检测不会发送真实短信。
+- 数据库步骤显式选择本地 JSON（立即作为默认业务存储）或 SQL 连接配置（MySQL / PostgreSQL / SQL Server）。SQL 选择仅离线保存待用连接配置：**不会连接数据库、建表、迁移或启用 SQL 业务存储**，重启后仍为 JSON。后续须由管理员停服、备份并单独确认离线初始化与激活；数据库应提前创建，不要把保存配置当作初始化成功。`/init-test` 中数据库选择也仅在内存模拟，不连接真实数据库。
+- 完成后保留初始化配置与认证数据，界面要求人工重启（Compose：`docker compose restart`）；不会自动登录、开放业务或无限重启。重启仍执行原有 hardened / 审计、HTTPS、认证与短信配置检查。初始化配置含秘密，必须随数据卷保护与备份，不能作为静态资源。
+
+数据库环境变量仅用于首次 Init 快照：`NOVEL_INIT_DB_MODE`（`local-json` / `sql-later`）、`NOVEL_INIT_DB_DRIVER`、`NOVEL_INIT_DB_HOST`、`NOVEL_INIT_DB_PORT`、`NOVEL_INIT_DB_DATABASE`、`NOVEL_INIT_DB_USER`、`NOVEL_INIT_DB_PASSWORD`、`NOVEL_INIT_DB_TLS`（默认 `verify`）、`NOVEL_INIT_DB_TIMEOUT_MS`。非空环境字段优先并锁定，密码仅显示已配置；缺失字段仍可填写。SQL 连接在受保护的 `storage-profiles.json` 中保存为 v3 待用 profile，不产生启用标记；初始化完成后不根据这些变量自动覆盖运行期数据库设置。TLS 关闭仅允许明确回环主机。离线初始化/激活步骤见[数据库说明](sqlconnect.md#v3-storage-profiles)，不得删除 journal 或手写激活标记绕过核验。
+
+首次容器启动可按以下顺序操作（仅受控宿主机终端；令牌输出不得复制到工单或日志）：
+
+```bash
+docker compose up -d --build
+# 未注入 NOVEL_INIT_TOKEN 时，在受控终端读取生成令牌：
+docker compose exec novel-agent node -e "process.stdout.write(require('node:fs').readFileSync('/app/data/.init-token', 'utf8'))"
+# 浏览器打开默认回环入口 http://127.0.0.1:3001/init，完成配置后：
+docker compose restart
+```
+
+若预先配置了可信 HTTPS origin，须改用对应真实 HTTPS 代理入口；HTTP 回环入口不再匹配。如果使用非默认端口，须保持访问 Host 端口与服务监听端口一致，或使用配置好的精确 HTTPS 代理来源。
+
+## 服务端：已有数据或离线引导，再启动
 
 1. 停止服务并保护数据、数据库及外部密钥；CLI 也持有数据目录锁。
 2. 在 CLI 进程显式设置 `$env:CoreModel='server'`（CLI 不自动加载 `.env`），安全注入 `NOVEL_BOOTSTRAP_PASSWORD`，离线执行 `npm run admin -- bootstrap-admin --username admin --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm`。现有未绑定用户需停服后用 `npm run admin -- set-phone --username <USERNAME> --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm` 离线迁移；该操作撤销其既有会话。号码须符合 `+` 加国家码的 E.164 形式；备份包含敏感手机号。
@@ -60,7 +89,7 @@ Header / Footer 分离和管理员站点外观不改变部署模式、同源或�
 
 [Dockerfile](../Dockerfile) 的构建参数默认 `ARG CoreModel=server`，构建只接受 local/server；镜像通过 `ENV CoreModel` 保留所选默认值。运行时可覆盖，但启动仍重新校验。例：`docker build --build-arg CoreModel=local -t novel-agent:local .` 只改变镜像默认模式，**不让本机模式可通过端口映射访问**。
 
-[Compose](../compose.yaml) 的 build arg 与运行时环境均使用 `${CoreModel:-server}`，因此 Compose 默认为 server，不是原生运行的默认 local。server 必须在首次服务启动前完成离线 CLI 引导与 HTTPS / 密钥配置；首次直接 `docker compose up` 不能代替引导。编译后 CLI 命令、非 root / 只读根与权限要求见[安全指南](security-hardening.md#本机-docker-操作与离线引导)。使用独立命名数据卷和备份卷，不能删除唯一副本。
+[Compose](../compose.yaml) 的 build arg 与运行时环境均使用 `${CoreModel:-server}`，因此 Compose 默认为 server，不是原生运行的默认 local。全新 server 数据卷首次 `docker compose up` 可进入隔离 Init；必须完成持有者令牌验证和配置、人工重启后才启用正常业务。已有数据继续使用离线 CLI，不自动认领或迁移。编译后 CLI 命令、非 root / 只读根与权限要求见[安全指南](security-hardening.md#本机-docker-操作与离线引导)。使用独立命名数据卷和备份卷，不能删除唯一副本。
 
 **容器 local 仅监听容器内部 `127.0.0.1`。宿主机发布端口不能访问该监听地址；不要把 `CoreModel=local` 加端口映射宣传为可用的本机 Docker 方案。** 建议本机用户原生 local；需要容器外浏览器入口时使用符合全部前置条件的 server 与真实 HTTPS 代理。
 

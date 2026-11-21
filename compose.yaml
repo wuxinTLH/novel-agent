@@ -14,6 +14,18 @@ services:
       DATA_DIR: /app/data
       CoreModel: ${CoreModel:-server}
       SECURITY_AUDIT: "true"
+      # Optional owner-held first-start token; otherwise generated inside the data volume.
+      NOVEL_INIT_TOKEN: ${NOVEL_INIT_TOKEN:-}
+      # First-start only; sql-later saves profiles but never contacts or activates a database.
+      NOVEL_INIT_DB_MODE: ${NOVEL_INIT_DB_MODE:-}
+      NOVEL_INIT_DB_DRIVER: ${NOVEL_INIT_DB_DRIVER:-}
+      NOVEL_INIT_DB_HOST: ${NOVEL_INIT_DB_HOST:-}
+      NOVEL_INIT_DB_PORT: ${NOVEL_INIT_DB_PORT:-}
+      NOVEL_INIT_DB_DATABASE: ${NOVEL_INIT_DB_DATABASE:-}
+      NOVEL_INIT_DB_USER: ${NOVEL_INIT_DB_USER:-}
+      NOVEL_INIT_DB_PASSWORD: ${NOVEL_INIT_DB_PASSWORD:-}
+      NOVEL_INIT_DB_TLS: ${NOVEL_INIT_DB_TLS:-}
+      NOVEL_INIT_DB_TIMEOUT_MS: ${NOVEL_INIT_DB_TIMEOUT_MS:-}
       NOVEL_TRUSTED_PUBLIC_ORIGIN: ${NOVEL_TRUSTED_PUBLIC_ORIGIN:-}
       MODEL_SECRETS_KEY: ${MODEL_SECRETS_KEY:-}
       PLATFORM_SECRETS_KEY: ${PLATFORM_SECRETS_KEY:-}

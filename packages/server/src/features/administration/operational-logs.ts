@@ -44,6 +44,7 @@ export class OperationalLogsStore {
   private readonly file: string;
   private queue: {id: string; event: OperationalLog; provider: AlertProvider; revision: number}[] = [];
   private runner?: Promise<void>;
+  private activeTransports = 0;
   private readonly blocked = new Set<AlertProvider>();
   private readonly transports: Partial<Record<AlertProvider, AlertTransport>>;
   private readonly now: () => number;
@@ -150,7 +151,10 @@ export class OperationalLogsStore {
         let status: AlertDeliveryStatus = 'unknown';
         try {
           const timeout = new Promise<AlertDeliveryStatus>(resolve => {timer = setTimeout(() => {this.blocked.add(work.provider);controller.abort();resolve('unknown');},this.timeoutMs);});
-          status = await Promise.race([Promise.resolve().then(() => transport.send(Object.freeze(structuredClone(work.event)),controller.signal)),timeout]);
+          this.activeTransports++;
+          const sending = Promise.resolve().then(() => transport.send(Object.freeze(structuredClone(work.event)),controller.signal))
+            .finally(() => { this.activeTransports--; });
+          status = await Promise.race([sending,timeout]);
           if (!['unsupported','sent','failed','unknown'].includes(status)) status = 'unknown';
         } catch { status = 'unknown'; } // A thrown transport may have transmitted. Never infer failure.
         finally { if (timer) clearTimeout(timer); }
@@ -159,7 +163,11 @@ export class OperationalLogsStore {
       }
     }).catch(() => {this.unhealthy = true; this.queue = [];}).finally(() => {this.runner = undefined; if (this.queue.length && !this.unhealthy) this.startRunner();});
   }
-  async waitForIdle(): Promise<void> { while(this.runner) await this.runner; if(this.unhealthy) unavailable(); }
+  async waitForIdle(): Promise<void> {
+    while(this.runner) await this.runner;
+    // Abort is cooperative: a timed-out adapter may still transmit. Never claim quiescence.
+    if(this.unhealthy || this.activeTransports > 0) unavailable();
+  }
   async close(): Promise<void> { await this.waitForIdle(); this.closed = true; }
 }
 const stores = new Map<string, OperationalLogsStore>();

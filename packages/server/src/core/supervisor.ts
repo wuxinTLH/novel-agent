@@ -99,6 +99,8 @@ export function supervise(options: SupervisorOptions): Promise<number> {
       let startupFailed = false;
       let spawnFailed = false;
       emit('starting');
+      // Observers can synchronously request shutdown before this generation exists.
+      if (stopping || finished) return;
       const current = spawn(process.execPath, [...(options.execArgv ?? []), options.entry, ...(options.args ?? [])], {
         cwd: options.cwd,
         env: options.env ?? process.env,

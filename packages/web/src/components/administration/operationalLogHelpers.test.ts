@@ -42,6 +42,14 @@ test('panel retains cancellation, identity, permissions and unsaved edit boundar
   assert.doesNotMatch(panel, /localStorage|sessionStorage|dangerouslySetInnerHTML/);
   for (const fragment of ["logs: 'logs.read'", "logsOpened && allowed('logs.read')", "writable={allowed('alerts.manage')}", 'appearanceDirty || logsDirty']) assert.ok(admin.includes(fragment), fragment);
 });
+test('busy administration tabs retain focus without allowing navigation', () => {
+  const admin = readFileSync(new URL('./Administration.tsx', import.meta.url), 'utf8');
+  const tabButton = admin.slice(admin.indexOf('role="tab"'), admin.indexOf('<Icon size={17}'));
+  assert.ok(tabButton.includes('aria-disabled={busy}'));
+  assert.ok(tabButton.includes('if (!busy) setTab(name)'));
+  assert.doesNotMatch(tabButton, /^\s*disabled=\{busy\}/m);
+  assert.ok(admin.includes('if (next < 0 || busy) return;'));
+});
 test('log styles override inherited checkbox sizing and contain table intrinsic width', () => {
   const styles = readFileSync(new URL('./operational-logs.scss', import.meta.url), 'utf8');
   assert.ok(styles.includes('.administration .operational-logs-panel'));

@@ -35,7 +35,9 @@ test('new defaults share task-specific presets without changing saved prompts or
   assert.equal(draft.characterTemplate, '作者原有模板');
 });
 
-test('optional plot nodes form executable upstream stages without entering the default graph', async () => {
+test('optional plot nodes form executable upstream stages without entering the default graph', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-plot-nodes-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const p = createProject('剧情节点');
   const kinds = ['conflict', 'foreshadow', 'twist', 'climax'] as const;
   assert.ok(!p.steps.some((step) => kinds.includes(step.kind as typeof kinds[number])));
@@ -85,10 +87,11 @@ test('optional plot nodes form executable upstream stages without entering the d
     const settings: RuntimeSettings = { ...demo, mode: 'live', apiKey: 'test-key', hasKey: true,
       model: 'test-model', baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1` };
     for (const kind of kinds) {
-      assert.equal(await generate(p, `plot-${kind}`, settings, '', new AbortController().signal), '可用于后续规划的剧情设计');
+      assert.equal(await generate(p, `plot-${kind}`, settings, dir, new AbortController().signal), '可用于后续规划的剧情设计');
       assert.ok(seen.at(-1)!.includes(`作者保留指令-${kind}`));
     }
     assert.equal(seen.length, kinds.length);
+    assert.ok(fs.existsSync(path.join(dir, 'token-usage.json')));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

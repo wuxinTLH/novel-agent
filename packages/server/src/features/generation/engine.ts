@@ -417,7 +417,11 @@ export function buildContext(
           (matchesContext(s.generationContext, context, p, context.mode) &&
             (context.allowPreviousRun || s.generationContext?.runId === context.runId))),
     )
-    .sort((a, b) => Number(b.id === context.outputWriterNodeId) - Number(a.id === context.outputWriterNodeId))
+    // Preserve the final manuscript first for audit, then creative planning.
+    // Local imports/retrieval can together exceed this section's budget and
+    // must not crowd every downstream creative result out of the prompt.
+    .sort((a, b) => Number(b.id === context.outputWriterNodeId) - Number(a.id === context.outputWriterNodeId)
+      || Number(isLocalWorkflowStep(a)) - Number(isLocalWorkflowStep(b)))
     .map(
       (s) =>
         `【${s.title}${s.id === context.outputWriterNodeId ? ' · 最终正文输出（审校以此为准）' : ''}】\n${s.output}`,

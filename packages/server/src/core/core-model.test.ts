@@ -50,7 +50,7 @@ test('invalid mode and server prerequisites fail before creating a data director
       { CoreModel: 'SERVER', error: 'CORE_MODEL_INVALID' },
       { CoreModel: 'server', SECURITY_PROFILE: 'standard', error: 'SERVER_SECURITY_PROFILE_CONFLICT' },
       { CoreModel: 'server', SECURITY_AUDIT: 'false', error: 'SERVER_SECURITY_AUDIT_CONFLICT' },
-      { CoreModel: 'server', error: 'HARDENED_AUTH_REQUIRED' },
+      { CoreModel: 'server', NOVEL_INIT_TOKEN: 'short', error: 'INIT_TOKEN_INVALID' },
       { CoreModel: 'local', GATEWAY_HOST: '0.0.0.0', error: 'LOCAL_GATEWAY_LOOPBACK_REQUIRED' },
       { CoreModel: 'local', NOVEL_TRUSTED_PUBLIC_ORIGIN: 'https://novel.example', error: 'LOCAL_PUBLIC_ORIGIN_FORBIDDEN' },
     ];
@@ -68,6 +68,15 @@ test('invalid mode and server prerequisites fail before creating a data director
       assert.match(child.stderr, new RegExp(error));
       assert.equal(fs.existsSync(dir), false, `${error} must not create the data directory`);
     }
+    const existing = path.join(root, 'existing'); fs.mkdirSync(existing);
+    fs.writeFileSync(path.join(existing, 'projects.json'), '{}');
+    const child = spawnSync(process.execPath, ['--import', 'tsx', 'packages/server/src/index.ts'], {
+      cwd: appRoot, env: { ...process.env, CoreModel: 'server', DATA_DIR: existing, PORT: '3001',
+        GATEWAY_ENABLED: 'false', NOVEL_TRUSTED_PUBLIC_ORIGIN: '', SECURITY_PROFILE: 'hardened', SECURITY_AUDIT: 'true' },
+      encoding: 'utf8', timeout: 30_000,
+    });
+    assert.ifError(child.error); assert.notEqual(child.status, 0); assert.match(child.stderr, /HARDENED_AUTH_REQUIRED/);
+    assert.deepEqual(fs.readdirSync(existing), ['projects.json']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

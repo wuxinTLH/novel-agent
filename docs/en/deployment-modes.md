@@ -10,7 +10,7 @@ The exact environment variable is `CoreModel`, unrelated to model-provider selec
 | --- | --- | --- |
 | Node HTTP listener | Only `127.0.0.1` | `0.0.0.0` |
 | Access | This machine only; no direct LAN access | Only through a controlled same-origin real HTTPS reverse proxy; block direct backend access |
-| Authentication | Optional, off by default | Must already be enabled offline or startup fails |
+| Authentication | Optional, off by default | Required for business; only a fresh directory may enter isolated Init |
 | Security profile | Defaults to `standard`; optional `hardened` | Forces `hardened`; explicit `SECURITY_PROFILE=standard` fails |
 | Audit | Off by default in standard, optional opt-in | Mandatory; explicit `SECURITY_AUDIT=false` fails |
 | Local gateway | Off by default, optional loopback aliases | Must be disabled |
@@ -37,7 +37,35 @@ Automatic crash restart is supported on Linux/POSIX using an independent process
 
 This is not a health probe, OS service or HA implementation. It never deletes data locks or maintenance journals, or replays model/platform writes. Unknown outcomes still require reconciliation. Replacement waits for core exit and descendant cleanup. Containers retain init and a 30-second stop grace period; Compose uses `restart: "no"` so an outer infinite loop cannot bypass the internal budget. Avoid unbounded outer service restarts. Inspect exit diagnostics, locks and maintenance recovery before manually restarting; never delete a lock to force startup.
 
-## Server: offline bootstrap before startup
+## Temporary initialization test page
+
+Open `/init-test` on the normal Web or frontend development service (for example `http://127.0.0.1:3001/init-test`). It uses fictional configuration and page-memory simulation to exercise loading, missing-field validation and completion. It never calls real initialization APIs, reads Docker environment, saves configuration or creates an administrator. Use dummy input only. Reset to repeat; reload discards all test state and simulated success needs no server restart. The restricted fresh-server Init service does not expose this route: use the normal Web/development entry for testing and `/init` for real initialization.
+
+## Server Core first-start Init
+
+A genuinely fresh `CoreModel=server` directory can start a setup-only page before normal hardened preflight. It does not start tenants or expose auth, administration, uploads or business APIs. Existing data is never reclaimed through Init; local mode remains unchanged.
+
+The page recognizes the process environment injected by Docker/Compose, not the Docker socket. Nonsecret values are prefilled; secrets expose presence only, and missing values remain blank with prompts. Nonempty environment settings take precedence over persisted wizard values. Supply owner-held `NOVEL_INIT_TOKEN` (at least 32 characters), or securely read the generated `.init-token` from the data volume. Never put it in URLs, logs or browser storage. Without a configured HTTPS origin, use only controlled host loopback / an SSH tunnel, never an exposed LAN or public HTTP listener.
+
+Complete the exact HTTPS origin, independent high-entropy encryption keys, selected SMS provider configuration and the first superadministrator credentials. Select a calling code and enter national digits only: +86 validates mainland Chinese mobile numbers; +1 validates ten-digit NANP numbers. Init currently supports these two choices, not every country. Submission combines them into E.164.
+
+The database step explicitly selects local JSON or a deferred MySQL/PostgreSQL/SQL Server connection. JSON remains the active backend. Saving SQL configuration does not connect, create tables, migrate or activate SQL storage; an operator must separately stop, back up and confirm offline initialization/activation, using a pre-created database. The test page simulates this entirely in memory. Validation does not send SMS. After completion, the page requests an operator restart (`docker compose restart`); it neither logs in nor enables business in-process. Normal hardened/auth/audit checks still run after restart. Protect and back up the secret-bearing initialization configuration with the data volume; it is not a static asset or a substitute for real TLS.
+
+Bootstrap-only database environment variables are `NOVEL_INIT_DB_MODE` (`local-json` / `sql-later`), `NOVEL_INIT_DB_DRIVER`, `NOVEL_INIT_DB_HOST`, `NOVEL_INIT_DB_PORT`, `NOVEL_INIT_DB_DATABASE`, `NOVEL_INIT_DB_USER`, `NOVEL_INIT_DB_PASSWORD`, `NOVEL_INIT_DB_TLS` (default `verify`) and `NOVEL_INIT_DB_TIMEOUT_MS`. Nonempty values take precedence and lock the corresponding fields; passwords expose presence only. Deferred SQL is saved as a private v3 `storage-profiles.json` profile, without an activation manifest. These variables do not continually override runtime settings after bootstrap. TLS off is limited to explicit loopback hosts. Follow the [offline activation guidance](../sqlconnect.md#v3-storage-profiles); never remove recovery journals or hand-write activation manifests.
+
+For a fresh container, use a controlled host terminal (never paste token output into tickets or logs):
+
+```bash
+docker compose up -d --build
+# Only if NOVEL_INIT_TOKEN was not injected:
+docker compose exec novel-agent node -e "process.stdout.write(require('node:fs').readFileSync('/app/data/.init-token', 'utf8'))"
+# Open the default loopback entry http://127.0.0.1:3001/init, complete setup, then:
+docker compose restart
+```
+
+With a configured trusted HTTPS origin, use that actual proxy entry instead; plain loopback no longer matches. Nondefault ports must preserve the exact listening authority, or use the configured exact HTTPS proxy origin.
+
+## Server: existing data or offline bootstrap
 
 1. Stop the service and protect data, databases and external keys; the CLI also takes the data-directory lock.
 2. Explicitly set `$env:CoreModel='server'` in the CLI environment (the CLI does not automatically load `.env`), securely inject `NOVEL_BOOTSTRAP_PASSWORD`, then run `npm run admin -- bootstrap-admin --username admin --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm` offline. For existing unbound users, stop the service and migrate each account with `npm run admin -- set-phone --username <USERNAME> --phone <E164_PHONE> --data-dir <DATA_DIRECTORY> --confirm`; this revokes that user's sessions. Phone numbers must be E.164; protect backups containing them.
@@ -60,7 +88,7 @@ Separate Header/Footer and administrator appearance controls do not change deplo
 
 The [Dockerfile](../../Dockerfile) defaults to build argument `ARG CoreModel=server`, validated as local/server during build; image `ENV CoreModel` preserves the selected default. A runtime override is allowed but validated again at startup. For example, `docker build --build-arg CoreModel=local -t novel-agent:local .` changes the image default; it **does not make local accessible through published ports**.
 
-[Compose](../../compose.yaml) uses `${CoreModel:-server}` for both build arg and runtime environment. Its default is server, unlike native execution's local default. Complete offline CLI bootstrap and HTTPS/key configuration before the first server startup: an initial `docker compose up` is not bootstrap. See the [security guide](security-hardening.md#local-docker-commands-and-offline-bootstrap) for compiled CLI commands and non-root/read-only permissions. Keep separate named data and backup volumes; never delete their only copies.
+[Compose](../../compose.yaml) uses `${CoreModel:-server}` for both build arg and runtime environment. Its default is server, unlike native execution's local default. A fresh server data volume can enter isolated Init on its first `docker compose up`; owner-token authorization, complete configuration and a manual restart are required before normal business. Existing data still requires the offline CLI and is never automatically claimed or migrated. See the [security guide](security-hardening.md#local-docker-commands-and-offline-bootstrap) for compiled CLI commands and non-root/read-only permissions. Keep separate named data and backup volumes; never delete their only copies.
 
 **Container local binds only container-internal `127.0.0.1`. Published host ports cannot reach that listener. Do not describe local plus port mapping as a usable local Docker deployment.** Prefer native local for desktop use; a browser outside the container needs server with every prerequisite and a real HTTPS proxy.
 

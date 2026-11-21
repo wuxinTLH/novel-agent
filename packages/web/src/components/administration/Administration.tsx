@@ -1362,9 +1362,9 @@ export default function Administration({ close, mode }: { close: () => void; mod
                     aria-selected={tab === name}
                     aria-controls={`${id}-panel-${name}`}
                     tabIndex={tab === name ? 0 : -1}
-                    disabled={busy}
+                    aria-disabled={busy}
                     onKeyDown={(event) => keydown(event, index)}
-                    onClick={() => setTab(name)}
+                    onClick={() => { if (!busy) setTab(name); }}
                   >
                     <Icon size={17} aria-hidden="true" />
                     {t(label)}

@@ -42,6 +42,7 @@ test('Docker deployment preserves non-root, writable data and fail-closed mode b
     'novel-data:/app/data',
     'novel-backups:/app/.data-managed-backups',
     'read_only: true',
+    'NOVEL_INIT_TOKEN: ${NOVEL_INIT_TOKEN:-}',
     'cap_drop: [ALL]',
     'no-new-privileges:true',
     '/tmp:rw,noexec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=1770',

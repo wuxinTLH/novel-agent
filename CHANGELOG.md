@@ -1,5 +1,25 @@
 # 更新记录
 
+## 未发布 / Unreleased — 首次初始化与回归修复
+
+- Init 手机号改为国家区号与本地号码分开输入，支持中国大陆 +86 与 NANP +1 的对应校验并提交 E.164；新增显式 JSON / SQL 待用连接配置步骤，SQL 配置保存不等于建表或激活，测试页全程仅内存模拟。
+- **English:** Init separates calling codes and national phone digits with +86/+1-specific validation, and adds explicit JSON or deferred SQL connection setup. Saving SQL settings does not initialize schemas or activate SQL storage; the demo remains memory-only.
+
+- 新增 `/init-test` 临时演示页：仅内存模拟初始化配置读取、填写与完成，支持重置，不调用真实初始化 API、不写配置或创建账号。
+- **English:** Add a memory-only `/init-test` demo for initialization loading, validation and completion, with reset and no real API calls, persisted configuration or account creation.
+
+- 新增 Server Core 全新数据目录的独立 Init 向导，识别 Docker 注入的配置，缺失项留空提示；秘密仅显示配置状态。持有者令牌保护首次超管创建，完成后要求人工重启，已有实例与 local 不重新初始化。
+- **English:** Server Core gains an isolated first-start Init wizard for fresh data only, with Docker environment recognition, blank missing-field prompts and secret-presence-only responses. Owner-token authorization protects bootstrap; completion requires manual restart and never reclaims existing instances.
+
+- 修复超级小说工作流大量本地资料挤占创作规划上下文；保留审校最终正文优先与原有预算/连续性边界。
+- 告警适配器超时后仍未停止时，空闲/关闭检查失败关闭，不将未知发送结果视为成功或自动重试。
+- 修复守护启动通知期间同步停止仍创建子进程的竞态，补充真实进程标记回归及可复用隔离核心冒烟脚本。
+- 修复管理页首次加载日志配置时丢失 tab 键盘焦点；忙碌期间仍禁止切换与关闭，补充延迟请求浏览器回归。
+- 源进程 API 集成测试在关闭 tsx 缓存时复现 6 秒监听前超时，启动期限改为引用生产守护的 60 秒策略，保留业务断言并增加安全失败诊断；不宣称生产启动性能已优化。
+- 本轮不推送或替换 Release；实际验证见[验证记录](docs/release-validation-v0.0.5a.md)。
+
+**English:** Unreleased regression fixes preserve creative planning under large local evidence, fail closed while a timed-out alert transport remains active, and prevent spawning a core after synchronous shutdown during its starting notification. Administration tabs retain keyboard focus during initial alert reads while busy navigation and close locks remain enforced. Model-stub tests now isolate their usage ledgers. A reproduced pre-listen cold-tsx timeout now uses the existing production 60-second readiness policy in the source integration fixture, with safe diagnostics and unchanged business assertions; this is not a production startup optimization. No new release publication is performed.
+
 ## v0.0.5a 本轮更新：超级小说工作流、核心守护与运行日志
 
 - 新增可选超级小说模板：世界观导入、上下文获取、大纲、冲突、伏笔、章节规划、正文生成与一致性审校；前两个本地节点不调用模型，原有三阶段默认模板与已保存图不迁移。

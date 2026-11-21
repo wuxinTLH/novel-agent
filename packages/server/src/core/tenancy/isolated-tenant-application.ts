@@ -104,6 +104,11 @@ export function createIsolatedTenantApplication(options: IsolatedTenantApplicati
     }
     next();
   });
+  // Exact read-only discovery, after HTTP protections and before identity resolution.
+  app.use((req, res, next) => {
+    if (req.path === '/api/init/status' && req.method === 'GET') return res.json({ required: false });
+    next();
+  });
   app.use('/api/auth', express.json({ limit: '16mb' }), options.auth.router);
   app.get('/api/services/user', (_req, res) =>
     res.json({

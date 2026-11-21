@@ -1,4 +1,5 @@
 import { appZhCN, appEn } from './app';
+import { serverInitZhCN, serverInitEn } from './server-init';
 import { superNovelZhCN, superNovelEn } from './super-novel';
 import { navigationZhCN, navigationEn } from './navigation';
 import { chapterAnalysisZhCN, chapterAnalysisEn } from './chapter-analysis';
@@ -11,6 +12,7 @@ import { runtimeZhCN, runtimeEn } from './runtime';
 import { accountPlatformZhCN, accountPlatformEn } from './account-platform';
 /** Chinese source phrases are stable keys; keep both dictionaries in exact parity. */
 export const zhCN = {
+  ...serverInitZhCN,
   ...chapterAnalysisZhCN,
   ...appZhCN,
   ...reviewWorkspaceZhCN,
@@ -288,6 +290,7 @@ export type TranslationKey = keyof typeof zhCN;
 export type Dictionary = Record<TranslationKey, string>;
 
 export const en = {
+  ...serverInitEn,
   ...chapterAnalysisEn,
   ...appEn,
   ...reviewWorkspaceEn,

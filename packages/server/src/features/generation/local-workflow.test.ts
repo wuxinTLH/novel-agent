@@ -83,6 +83,33 @@ test('retrieval uses only prior canonical prose and exposes missing predecessor/
   assert.match(executeLocalWorkflowStep(p, retrieved, context), /检索词因 12000 字符预算截断/);
 });
 
+test('large local evidence cannot crowd creative planning out of the writer context', () => {
+  const { p, context, imported, retrieved } = fixture();
+  p.assets = [{ id: 'world', name: '世界', category: 'world', content: '设'.repeat(20000), size: 20000, createdAt: '' }];
+  p.chapters = [
+    { id: 'c1', number: 1, revision: 1, title: '早章', content: '雾海 '.repeat(6000), mode: 'live', updatedAt: '' },
+    { id: 'c2', number: 2, revision: 1, title: '前章', content: '🌊'.repeat(6000), mode: 'live', updatedAt: '' },
+  ];
+  p.knowledgeFacts = [{ id: 'f1', type: 'fact', title: '旧事实', content: '实'.repeat(5000), chapterIds: ['c1'], tags: [], revision: 1, createdAt: '', updatedAt: '' }];
+  for (const step of p.steps.slice(1, 7)) {
+    step.status = 'done';
+    step.generationContext = context;
+    step.output = isLocalWorkflowStep(step) ? executeLocalWorkflowStep(p, step, context) : 'CREATIVE_' + step.id;
+  }
+  assert.ok(imported.output.length + retrieved.output.length > 35000);
+  const writerContext = buildContext(p, 'draft', context);
+  const upstream = writerContext.split('<上游结果>')[1].split('</上游结果>')[0];
+  for (const id of ['outline', 'conflict', 'foreshadow', 'plan']) assert.ok(upstream.includes('CREATIVE_' + id), id);
+  assert.ok(upstream.length < 35010);
+  assert.match(upstream, /截断/);
+  const writer = p.steps.find(step => step.id === 'draft')!;
+  writer.status = 'done'; writer.generationContext = context;
+  writer.output = 'FINAL_MANUSCRIPT_' + '文'.repeat(33000) + '_END';
+  const auditContext = buildContext(p, 'review', { ...context, outputWriterNodeId: writer.id });
+  const auditUpstream = auditContext.split('<上游结果>')[1].split('</上游结果>')[0];
+  assert.ok(auditUpstream.includes(writer.output));
+});
+
 test('local stages bypass provider/model admission, support cancellation and persist through Runner', async () => {
   const { p, context, imported, retrieved } = fixture();
   for (const step of [imported, retrieved]) {

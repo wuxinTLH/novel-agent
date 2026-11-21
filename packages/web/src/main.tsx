@@ -4,6 +4,9 @@ import { useLocale } from './locals/useLocale';
 import { runtimeT } from './locals/runtimeTranslate';
 import App from './app/App';
 import AuthGate from './components/auth/AuthGate';
+import ServerInitGate from './components/initialization/ServerInitGate';
+import InitTestPage from './components/initialization/InitTestPage';
+import { isInitTestPath } from './components/initialization/init-test';
 import { DialogProvider } from './components/common/AppDialog';
 import '@xyflow/react/dist/style.css';
 import './styles/styles.scss';
@@ -49,10 +52,12 @@ function UnknownRoute() {
 const known = ['/workflow', '/assets', '/chapters', '/platforms', '/settings', '/'];
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <DialogProvider>
-      <AuthGate>
-        <App />
-      </AuthGate>
-    </DialogProvider>
+    {isInitTestPath(window.location.pathname) ? <InitTestPage /> : <DialogProvider>
+      <ServerInitGate>
+        <AuthGate>
+          <App />
+        </AuthGate>
+      </ServerInitGate>
+    </DialogProvider>}
   </React.StrictMode>,
 );

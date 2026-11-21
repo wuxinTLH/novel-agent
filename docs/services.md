@@ -38,7 +38,7 @@
 
 ## 认证、管理与不可变租户上下文
 
-local 认证与 Turnstile 默认关闭；server 必须先离线启用认证。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。首次超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建，没有 HTTP 管理员引导；可选邮箱确认注册仅创建普通用户，默认关闭。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
+local 认证与 Turnstile 默认关闭；server 必须先离线启用认证。`GET /api/services/user` 和 `GET /api/auth/session` 报告状态；安装、创建账号、配置数据库或迁移都不会自动开启认证。已有实例的超级管理员仍须停服后通过 `bootstrap-admin` CLI 创建；仅全新 Server Core 目录可使用独立持有者令牌保护的 Init 页面，正常业务路由没有管理员引导接口；可选邮箱确认注册仅创建普通用户，默认关闭。显式 `enable-auth --owner UUID` 才指定旧数据归属并开启认证；没有旧资产的新目录才可选 `--no-legacy`。见 [操作手册](使用手册.md#认证与本地管理-cli)。
 
 管理界面按权限提供“工作台、用户、数据库、备份与维护、系统与安全、Token 统计、站点外观”。认证关闭时，本机管理员权限同时要求真实 socket 回环地址、本机 HTTP Host、存在时的本机 Origin，并拒绝 cross-site；写操作还需 `X-Admin-CSRF`。不信任 forwarded headers，local 无 LAN 直连，server 必须认证。认证开启后按[显式角色权限矩阵](roles-permissions.md)逐接口授权，写入另需认证 CSRF；具备管理权限也不能据此浏览其他租户业务或秘密。
 

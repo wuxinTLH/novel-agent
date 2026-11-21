@@ -52,8 +52,12 @@ npm start
 
 新增[安全加固与等保四级目标差距](../docs/security-hardening.md)（[English](../docs/en/security-hardening.md)）：区分应用可实施控制与 OS / 网络 / 国密和 HSM / 集中防篡改审计 / 双人控制 / 测评前置条件，**不声明已达等保四级或通过认证**。共享 HTTP 边界、有界审计链、`SECURITY_PROFILE=hardened` 有限启动检查不改变单实例、非 HA 的边界；原生 local 默认认证关闭，server 必须先启用认证。
 
-[Dockerfile](../Dockerfile) 与 [Compose](../compose.yaml) 提供非 root、只读根、最小能力及独立数据 / 备份卷示例；build arg 与运行时均使用 `${CoreModel:-server}`，默认 server 强制 hardened / 审计；必须先离线 CLI 启用认证并配置实际 HTTPS origin / 独立密钥，再首次启动到真实 TLS 代理之后，显式 standard 或关闭审计会失败。默认仅发布主机回环端口；容器 local 只监听容器内部回环，无法通过发布端口访问，本机推荐原生 local。镜像不含 Chromium，不支持默认远程容器首次番茄交互登录。本轮 Compose 静态校验通过，但 Docker Engine 不可用，未实际构建 / 运行镜像；GitHub 预发布不等于生产或合规验收。
+[Dockerfile](../Dockerfile) 与 [Compose](../compose.yaml) 提供非 root、只读根、最小能力及独立数据 / 备份卷示例；build arg 与运行时均使用 `${CoreModel:-server}`，默认 server 强制 hardened / 审计；全新数据目录首次启动可进入隔离 Init 页面；业务启动仍必须启用认证并配置实际 HTTPS origin / 独立密钥，部署到真实 TLS 代理之后，显式 standard 或关闭审计会失败。默认仅发布主机回环端口；容器 local 只监听容器内部回环，无法通过发布端口访问，本机推荐原生 local。镜像不含 Chromium，不支持默认远程容器首次番茄交互登录。本轮 Compose 静态校验通过，但 Docker Engine 不可用，未实际构建 / 运行镜像；GitHub 预发布不等于生产或合规验收。
 
+
+## Server 首次启动 Init
+
+全新 Server 数据目录首次启动后访问 `/init`（根路径自动跳转）。通过 `NOVEL_INIT_TOKEN` 注入所有者令牌，或从私有 `DATA_DIR/.init-token` 文件读取。页面自动识别 Docker 环境配置：普通字段预填，秘密仅显示已配置，缺失项留空提示添加；只需补齐所选短信供应商并创建首个超级管理员。保存后需手动重启，再刷新进入正常认证模式；已有实例保留离线 CLI，不会进入向导。Init 不开放业务 API，也不访问 Docker socket。详见[部署模式](../docs/deployment-modes.md)。
 
 ## 超级小说工作流
 
@@ -158,13 +162,13 @@ npm run maintenance -- migrate-all --owner <UUID> --destination <EXTERNAL_BACKUP
 
 ### 可选认证
 
-local 认证及可选注册、邮箱验证、找回密码、OIDC、MFA 默认关闭；server 必须先离线启用认证；首次超级管理员仅能停服后本地创建，不提供 HTTP 管理员引导接口。可选公开注册只能创建经邮箱确认的普通用户，不替代管理员引导。预先通过安全方式注入环境变量 `NOVEL_BOOTSTRAP_PASSWORD`（local 至少 12 个字符；server 至少 15 个 Unicode 字符；最多 1024 字节），然后执行：
+local 认证及可选注册、邮箱验证、找回密码、OIDC、MFA 默认关闭；server 业务启动必须启用认证；全新 Server 数据目录支持隔离 Init 页面，已有实例仍使用停服本地 CLI，不在正常业务路由开放管理员引导接口。可选公开注册只能创建经邮箱确认的普通用户，不替代管理员引导。预先通过安全方式注入环境变量 `NOVEL_BOOTSTRAP_PASSWORD`（local 至少 12 个字符；server 至少 15 个 Unicode 字符；最多 1024 字节），然后执行：
 
 ```powershell
 npm run admin -- bootstrap-admin --username admin --confirm
 ```
 
-不要把密码放进命令参数、文档或 Git。创建身份不会开启认证。管理界面提供用户、数据库、备份与维护、系统与安全；认证关闭时仅真实 socket 回环 + 本机 Host / Origin 可管理，写操作还需管理 CSRF，local 无 LAN 直连，server 必须认证。首次超级管理员仍仅 CLI 引导；之后可创建 / 启停用户、变更角色、重置密码和撤销会话，保护最后一个有效超级管理员。认证开启后普通用户可在账号安全中改密、查看 / 撤销自己的会话；改密、重置、停用及角色变更撤销相关会话。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
+不要把密码放进命令参数、文档或 Git。创建身份不会开启认证。管理界面提供用户、数据库、备份与维护、系统与安全；认证关闭时仅真实 socket 回环 + 本机 Host / Origin 可管理，写操作还需管理 CSRF，local 无 LAN 直连，server 必须认证。已有实例的管理员引导仍使用 CLI；之后可创建 / 启停用户、变更角色、重置密码和撤销会话，保护最后一个有效超级管理员。认证开启后普通用户可在账号安全中改密、查看 / 撤销自己的会话；改密、重置、停用及角色变更撤销相关会话。记录返回的 `ownerId`，再执行 `npm run admin -- enable-auth --owner <UUID> --confirm` 显式将旧数据分配给该身份并启用认证，重启生效。无旧业务数据的新目录才可选 `enable-auth --no-legacy --confirm`；首次登录者不会自动取得旧数据。管理员可管理账号、停用用户及配置默认关闭的 Cloudflare Turnstile；后者需要真实 site key / secret、匹配的 action / hostname 和联网核验，目前不宣称已通过真实 Cloudflare 在线验收。
 
 server 新设密码至少 15 个 Unicode 字符、最多 1024 字节，拒绝有限常见密码清单、低字符多样性和账号名衍生密码，以及重用当前密码；既有凭据不追溯失效。完成身份验证（已配置 MFA 时须通过该验证）后才签发会话，每用户最多 5 个有效会话，超限撤销最早到期的会话（按 expiresAt）。local 保留原策略。
 

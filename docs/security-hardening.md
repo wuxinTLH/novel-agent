@@ -6,7 +6,7 @@
 
 ## 1. 当前边界
 
-- `CoreModel` 只接受 local/server，未设置默认 local，非法值启动失败。local 仅监听 `127.0.0.1`，无 LAN 直连，认证默认关闭；server 监听 `0.0.0.0`，必须先启用认证，强制 hardened / 审计并仅通过同源真实 HTTPS 代理访问，防火墙阻断直连。完整契约见[部署模式](deployment-modes.md)。
+- `CoreModel` 只接受 local/server，未设置默认 local，非法值启动失败。local 仅监听 `127.0.0.1`，无 LAN 直连，认证默认关闭；server 监听 `0.0.0.0`，正常业务必须先启用认证（全新目录仅可进入隔离 Init），强制 hardened / 审计并仅通过同源真实 HTTPS 代理访问，防火墙阻断直连。完整契约见[部署模式](deployment-modes.md)。
 - 同一数据目录只允许运行一个实例；租户 Worker、SQL CAS、平台账号锁不等于跨主机分布式租约。**本方案不是高可用、双活、异地容灾或故障自动切换架构。** 不要通过增加 Compose 副本共享数据目录 / owner。
 - 本轮新增共享 HTTP 应用边界、显式严格启动策略、有界审计链及容器最小权限配置。已核对实现与主实施者参数；最终测试及 Docker 实机验证结果须另行记录，不以本文代替验收证据。
 - 应用测试只能证明对应临时目录 / 模拟环境中的行为，不能代替真实代理、身份提供商、数据库、容器宿主机或测评验收。
@@ -37,6 +37,8 @@
 
 ## 4. 认证启用的安全顺序
 
+全新 Server Core 数据目录另支持[独立 Init 向导](deployment-modes.md#server-core-首次启动-init)：必须持有部署初始化令牌，只识别允许的进程环境配置，不访问 Docker socket，不开放普通认证或业务路由。未配置 HTTPS 时只通过受控宿主回环 / 隧道初始化；不能把明文端口暴露到 LAN / 公网。完成后令牌失效、要求人工重启，仍执行全部正常 hardened / 审计 / 短信检查。已有账号、业务、未知文件或损坏状态不能重新引导；以下离线 CLI 流程继续用于已有实例。初始化配置包含秘密，必须与认证数据一起保护和备份。
+
 1. 隔离网络并停止服务；备份数据、外部密钥及数据库，确认回滚 / 恢复步骤。
 2. 安全注入 `NOVEL_BOOTSTRAP_PASSWORD`，执行本地 CLI；自定义数据目录必须显式传 `--data-dir`，不要假设 CLI 使用 `DATA_DIR`。
 
@@ -66,7 +68,7 @@ Node 服务头部接收时限 15 秒、请求接收时限 120 秒、keep-alive 5
 
 ## 5. 容器运行与验证
 
-[Dockerfile](../Dockerfile) 使用 Node 22.23.4 bookworm-slim 多阶段构建（[安全基线与升级流程](node-security.md)），以非 root `node` 用户（UID 1000）运行；不包含 Chromium。基础镜像标签不是固定摘要，正式流水线应核验并固定 digest、扫描依赖和镜像。[Compose](../compose.yaml) 配置只读根、`/tmp` tmpfs（128 MiB、noexec/nosuid/nodev）、`cap_drop: ALL`、`no-new-privileges`、PID 上限 256、内存 2 GiB、2 CPU。保留运行时默认 seccomp；项目未提供定制 syscall 白名单，宿主机仍须验证实际策略。
+[Dockerfile](../Dockerfile) 使用 Node 24.22.2 bookworm-slim 多阶段构建（[安全基线与升级流程](node-security.md)），以非 root `node` 用户（UID 1000）运行；不包含 Chromium。基础镜像标签不是固定摘要，正式流水线应核验并固定 digest、扫描依赖和镜像。[Compose](../compose.yaml) 配置只读根、`/tmp` tmpfs（128 MiB、noexec/nosuid/nodev）、`cap_drop: ALL`、`no-new-privileges`、PID 上限 256、内存 2 GiB、2 CPU。保留运行时默认 seccomp；项目未提供定制 syscall 白名单，宿主机仍须验证实际策略。
 
 运行环境必须保持非 root、只读根文件系统、能力最小化、no-new-privileges，并使用宿主机实际生效的 seccomp / AppArmor / SELinux 等策略，不能使用 privileged、宿主网络或 Docker socket 挂载来绕过限制。数据、临时目录、浏览器资料及外部备份分别评估必要写权限和容量。不得把 Docker 默认 seccomp 当作项目自带专用白名单。
 

@@ -1,4 +1,6 @@
 import { logger, readLogTimeZone, installOperationalLogSink } from './core/logger.js';
+import { isFreshInitDirectory, loadServerInitEnvironment } from './features/initialization/state.js';
+import { startInitializationServer } from './features/initialization/server.js';
 import { assertSupportedNodeVersion } from '../../../shared/node-runtime.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -38,13 +40,18 @@ const port = Number(process.env.PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT_INVALID');
 const coreModel = readCoreModel(process.env);
 const bindHost = coreModelBindHost(coreModel);
+const dir = path.resolve(appRoot, process.env.DATA_DIR || 'data');
+loadServerInitEnvironment(dir, process.env);
 const securityProfile = readSecurityProfile(process.env);
 const gatewayConfig = readLocalGatewayConfig(process.env, port);
 assertCoreModelGateway(coreModel, gatewayConfig, process.env);
 const publicOrigin = trustedPublicOrigin();
 assertCoreModelOrigin(coreModel, publicOrigin);
 const webHosting = readWebHostingOptions(process.env, appRoot);
-const dir = path.resolve(appRoot, process.env.DATA_DIR || 'data');
+if (coreModel === 'server' && isFreshInitDirectory(dir)) {
+  if (gatewayConfig.enabled) throw new Error('HARDENED_GATEWAY_FORBIDDEN');
+  startInitializationServer({ dir, port, bindHost, ...webHosting });
+} else {
 if (fs.existsSync(path.join(dir, '.maintenance-journal.json')))
   throw new Error('MAINTENANCE_RECOVERY_REQUIRED');
 // Read-only preflight must fail before acquiring the lock or creating audit/data files.
@@ -231,3 +238,4 @@ server.on('error', () => {
   logger.error('本机服务无法启动，请检查端口是否被占用。', 'SERVICE_LISTEN_FAILED');
   void shutdown();
 });
+}
